@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="hand-pan.png">assets/icons/hand-gloves_13387215.png</file>
+    </qresource>
+</RCC>

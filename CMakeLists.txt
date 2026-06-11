@@ -5,6 +5,8 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets LinguistTools)
 
 qt_standard_project_setup()
 
+set(CMAKE_AUTORCC ON)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 qt_add_executable(rcaiman_projects
@@ -14,6 +16,7 @@ qt_add_executable(rcaiman_projects
     mainwindow.h
     mainwindow.ui
     imageviewer.h imageviewer.cpp
+    resources.qrc
 )
 
 qt_add_translations(

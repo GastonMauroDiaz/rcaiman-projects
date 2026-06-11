@@ -1,9 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include <QAction>
 #include <QFileDialog>
-#include <QDebug>
-#include <QGraphicsScene>
-#include <QPixmap>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -15,6 +13,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::openImage);
+
+    connect(ui->actionPan,
+            &QAction::toggled,
+            ui->graphicsView,
+            &ImageViewer::setPanModeEnabled);
 }
 
 MainWindow::~MainWindow()
