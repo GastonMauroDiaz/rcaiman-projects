@@ -7,8 +7,6 @@ qt_standard_project_setup()
 
 set(CMAKE_AUTORCC ON)
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-
 qt_add_executable(rcaiman_projects
     WIN32 MACOSX_BUNDLE
     main.cpp
@@ -16,7 +14,17 @@ qt_add_executable(rcaiman_projects
     mainwindow.h
     mainwindow.ui
     imageviewer.h imageviewer.cpp
+    project.h project.cpp
     resources.qrc
+)
+
+target_compile_definitions(rcaiman_projects PRIVATE
+    TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
+)
+
+target_include_directories(rcaiman_projects
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 qt_add_translations(
@@ -35,6 +43,8 @@ install(TARGETS rcaiman_projects
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+
+install(DIRECTORY templates/ DESTINATION ${CMAKE_INSTALL_BINDIR}/templates)
 
 qt_generate_deploy_app_script(
     TARGET rcaiman_projects

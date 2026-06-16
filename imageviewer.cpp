@@ -1,12 +1,14 @@
 #include "imageviewer.h"
 
+#include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QPixmap>
-#include <QDebug>
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
+    , m_scene(new QGraphicsScene(this))
 {
+    setScene(m_scene);
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -15,18 +17,25 @@ ImageViewer::ImageViewer(QWidget *parent)
 
 void ImageViewer::setImage(const QString &fileName)
 {
-    auto *scene = new QGraphicsScene(this);
-
     QPixmap pixmap(fileName);
+    if (pixmap.isNull()) {
+        return;
+    }
 
-    scene->addPixmap(pixmap);
+    m_scene->clear();
+    m_imageItem = m_scene->addPixmap(pixmap);
+    m_scene->setSceneRect(m_imageItem->boundingRect());
 
-    setScene(scene);
-
+    resetTransform();
     fitInView(
-        scene->itemsBoundingRect(),
+        m_imageItem,
         Qt::KeepAspectRatio
         );
+}
+
+bool ImageViewer::panModeEnabled() const
+{
+    return m_panModeEnabled;
 }
 
 void ImageViewer::setPanModeEnabled(bool enabled)
@@ -61,8 +70,6 @@ void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 
 void ImageViewer::wheelEvent(QWheelEvent *event)
 {
-   qDebug() << "wheelEvent";
-
     constexpr double zoomFactor = 1.15;
 
     if (event->angleDelta().y() > 0) {

@@ -5,6 +5,9 @@
 #include <QKeyEvent>
 #include <QWheelEvent>
 
+class QGraphicsPixmapItem;
+class QGraphicsScene;
+
 class ImageViewer : public QGraphicsView
 {
     Q_OBJECT
@@ -14,6 +17,7 @@ public:
 
     void setImage(const QString &fileName);
     void setPanModeEnabled(bool enabled);
+    bool panModeEnabled() const;
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -25,6 +29,8 @@ private:
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
+    QGraphicsScene *m_scene = nullptr;
+    QGraphicsPixmapItem *m_imageItem = nullptr;
 };
 
 #endif
