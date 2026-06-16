@@ -233,19 +233,13 @@ void MainWindow::openImageAtPath(const QString &filePath)
         return;
     }
 
-    // Verify the file exists and is a readable image
-    QPixmap testPixmap(absolutePath);
-    if (testPixmap.isNull()) {
-        return;
-    }
-
     // Create new ImageViewer in a tab
     auto *viewer = new ImageViewer(this);
-    viewer->setImage(absolutePath);
 
     const QString tabTitle = fi.fileName();
     const int newIndex = ui->workspaceTabs->addTab(viewer, tabTitle);
     ui->workspaceTabs->setCurrentIndex(newIndex);
+    viewer->setImage(absolutePath);
 
     m_openImageTabs.insert(absolutePath, viewer);
 
