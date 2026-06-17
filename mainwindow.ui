@@ -57,14 +57,21 @@
      <addaction name="separator"/>
      <addaction name="actionRegisterCollection"/>
     </widget>
-   <widget class="QMenu" name="menuImage">
-    <property name="title">
-     <string>Image</string>
-    </property>
-    <addaction name="actionOpen_Image"/>
-   </widget>
-   <addaction name="menuProject"/>
-   <addaction name="menuImage"/>
+    <widget class="QMenu" name="menuImage">
+     <property name="title">
+      <string>Image</string>
+     </property>
+     <addaction name="actionOpen_Image"/>
+    </widget>
+    <widget class="QMenu" name="menuView">
+     <property name="title">
+      <string>View</string>
+     </property>
+     <addaction name="actionLoadPoints"/>
+    </widget>
+    <addaction name="menuProject"/>
+    <addaction name="menuImage"/>
+    <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QToolBar" name="toolBar">
@@ -210,6 +217,11 @@
    <action name="actionRegisterCollection">
     <property name="text">
      <string>Register collection...</string>
+    </property>
+   </action>
+   <action name="actionLoadPoints">
+    <property name="text">
+     <string>Load points...</string>
     </property>
    </action>
    <action name="actionPan">

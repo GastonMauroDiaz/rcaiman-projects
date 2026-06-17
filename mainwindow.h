@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include "project.h"
+#include "pointcollection.h"
 
 #include <QMainWindow>
 #include <QMap>
@@ -28,6 +29,7 @@ private slots:
     void openProject();
     void saveProject();
     void openImage();
+    void loadPoints();
     void importRaw();
     void extractRawData();
     void registerCollection();
@@ -46,5 +48,6 @@ private:
     QFileSystemModel *m_projectFileSystemModel = nullptr;
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
+    PointCollection m_pointCollection;
 };
 #endif // MAINWINDOW_H

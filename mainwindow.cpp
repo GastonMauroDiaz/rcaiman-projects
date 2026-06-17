@@ -3,6 +3,7 @@
 #include "imageviewer.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
+#include "pointcollection.h"
 
 #include <QAction>
 #include <QDir>
@@ -51,6 +52,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::openImage);
+
+    connect(ui->actionLoadPoints,
+            &QAction::triggered,
+            this,
+            &MainWindow::loadPoints);
 
     connect(ui->actionImportRaw,
             &QAction::triggered,
@@ -127,6 +133,16 @@ void MainWindow::newProject()
     }
 
     const QString rootPath = QDir(parentPath).filePath(projectName);
+    if (QDir(rootPath).exists()) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Project Folder Exists",
+            "The selected project folder already exists. Continue and initialize it as a project?"
+            );
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
 
     QString errorMessage;
     const Project project = Project::create(rootPath, projectName, &errorMessage);
@@ -181,6 +197,35 @@ void MainWindow::openImage()
     for (const QString &fileName : fileNames) {
         openImageAtPath(fileName);
     }
+}
+
+void MainWindow::loadPoints()
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer) {
+        QMessageBox::information(this, "Load points",
+                                 "No image viewer is active. Please open an image first.");
+        return;
+    }
+
+    const QString filePath = QFileDialog::getOpenFileName(
+        this,
+        "Select CSV points file",
+        m_project.isValid() ? m_project.rootPath() : QString(),
+        "CSV files (*.csv)"
+        );
+    if (filePath.isEmpty())
+        return;
+
+    QString errorMessage;
+    const PointCollection collection = PointCollection::load(filePath, &errorMessage);
+    if (!collection.isValid()) {
+        QMessageBox::warning(this, "Load points", errorMessage);
+        return;
+    }
+
+    m_pointCollection = collection;
+    viewer->setPointCollection(collection);
 }
 
 void MainWindow::importRaw()
@@ -320,6 +365,53 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     const QStringList imageExtensions = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
     if (imageExtensions.contains(fi.suffix().toLower())) {
         openImageAtPath(filePath);
+        return;
+    }
+
+    if (!fi.isDir())
+        return;
+
+    // Check for collection.yaml
+    const QString yamlPath = QDir(filePath).filePath("collection.yaml");
+    const QFileInfo yamlFi(yamlPath);
+    if (!yamlFi.exists())
+        return;
+
+    // Parse minimal YAML to extract type
+    QFile file(yamlPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return;
+
+    QString type;
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (line.startsWith("type:")) {
+            const int sep = line.indexOf(':');
+            if (sep >= 0)
+                type = line.mid(sep + 1).trimmed();
+            break;
+        }
+    }
+
+    if (type != "point_collection")
+        return;
+
+    // Load points from directory
+    QString errorMessage;
+    const PointCollection collection = PointCollection::loadFromDirectory(filePath, &errorMessage);
+    if (!collection.isValid()) {
+        QMessageBox::warning(this, "Load points", errorMessage);
+        return;
+    }
+
+    m_pointCollection = collection;
+    ImageViewer *viewer = currentImageViewer();
+    if (viewer) {
+        viewer->setPointCollection(collection);
+    } else {
+        QMessageBox::information(this, "Load points",
+                                 "Points loaded but no image viewer is active. Open an image first.");
     }
 }
 

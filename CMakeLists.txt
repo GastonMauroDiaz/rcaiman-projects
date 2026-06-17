@@ -47,6 +47,7 @@ qt_add_executable(rcaiman_projects
     mainwindow.h
     mainwindow.ui
     imageviewer.h imageviewer.cpp
+    pointcollection.h pointcollection.cpp
     project.h project.cpp
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp

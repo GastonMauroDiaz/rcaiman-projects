@@ -38,6 +38,7 @@ CollectionDialog::CollectionDialog(const QString &projectRootPath,
 
     m_typeCombo = new QComboBox(this);
     m_typeCombo->addItems({
+        "point_collection",
         "preprocessed_image_collection",
         "processed_image_collection",
         "binary_mask_collection",

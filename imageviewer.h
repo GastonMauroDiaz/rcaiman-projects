@@ -3,12 +3,14 @@
 
 #include "rasterdata.h"
 #include "rasterrenderer.h"
+#include "pointcollection.h"
 
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
+class QGraphicsEllipseItem;
 class QGraphicsPixmapItem;
 class QGraphicsScene;
 
@@ -20,6 +22,8 @@ public:
     explicit ImageViewer(QWidget *parent = nullptr);
 
     void setImage(const QString &fileName);
+    void setPointCollection(const PointCollection &collection);
+    const PointCollection &pointCollection() const { return m_pointCollection; }
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
 
@@ -41,6 +45,8 @@ private:
     bool m_autoFitImage = false;
     QGraphicsScene *m_scene = nullptr;
     QGraphicsPixmapItem *m_imageItem = nullptr;
+    PointCollection m_pointCollection;
+    QVector<QGraphicsEllipseItem*> m_pointItems;
     RasterData m_rasterData;
     RasterRenderer m_renderer;
 };
