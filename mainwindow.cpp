@@ -127,16 +127,6 @@ void MainWindow::newProject()
     }
 
     const QString rootPath = QDir(parentPath).filePath(projectName);
-    if (QDir(rootPath).exists()) {
-        const auto answer = QMessageBox::question(
-            this,
-            "Project Folder Exists",
-            "The selected project folder already exists. Continue and initialize it as a project?"
-            );
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
-    }
 
     QString errorMessage;
     const Project project = Project::create(rootPath, projectName, &errorMessage);

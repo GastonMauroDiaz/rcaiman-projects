@@ -249,5 +249,12 @@ bool Project::createDirectoryStructure(const QString &rootPath, QString *errorMe
         }
     }
 
+    // Copy README.md template if available
+    const QString readmeSrc = QStringLiteral(TEMPLATES_DIR) + "/README.md";
+    const QString readmeDst = root.filePath("README.md");
+    if (QFile::exists(readmeSrc) && !QFile::exists(readmeDst)) {
+        QFile::copy(readmeSrc, readmeDst);
+    }
+
     return true;
 }
