@@ -3,39 +3,39 @@ project(rcaiman_projects LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets LinguistTools)
 
-# Locate libtiff (MSYS2 / MinGW64 on Windows, system-wide on Linux/macOS).
-if(WIN32)
-    # MSYS2 installs to C:/msys64/mingw64
-    find_path(TIFF_INCLUDE_DIR tiff.h
-        PATHS "C:/msys64/mingw64/include"
-        NO_DEFAULT_PATH
-    )
-    find_library(TIFF_LIBRARY tiff
-        PATHS "C:/msys64/mingw64/lib"
-        NO_DEFAULT_PATH
-    )
-    if(NOT TIFF_INCLUDE_DIR OR NOT TIFF_LIBRARY)
-        # Fallback: try system paths
-        find_path(TIFF_INCLUDE_DIR tiff.h)
-        find_library(TIFF_LIBRARY tiff)
+# Locate a library installed via MSYS2 / MinGW64 on Windows.
+macro(find_msys2_library TARGET_NAME HEADER_FILE LIBRARY_FILE)
+    if(WIN32)
+        find_path(${TARGET_NAME}_INCLUDE_DIR ${HEADER_FILE}
+            PATHS "C:/msys64/mingw64/include"
+            NO_DEFAULT_PATH
+        )
+        find_library(${TARGET_NAME}_LIBRARY ${LIBRARY_FILE}
+            PATHS "C:/msys64/mingw64/lib"
+            NO_DEFAULT_PATH
+        )
+        if(NOT ${TARGET_NAME}_INCLUDE_DIR OR NOT ${TARGET_NAME}_LIBRARY)
+            find_path(${TARGET_NAME}_INCLUDE_DIR ${HEADER_FILE})
+            find_library(${TARGET_NAME}_LIBRARY ${LIBRARY_FILE})
+        endif()
+        if(NOT ${TARGET_NAME}_INCLUDE_DIR OR NOT ${TARGET_NAME}_LIBRARY)
+            message(FATAL_ERROR "Cannot find ${TARGET_NAME}.\n"
+                "Install via MSYS2: pacman -S mingw-w64-x86_64-${LIBRARY_FILE}")
+        endif()
+        add_library(${TARGET_NAME} UNKNOWN IMPORTED)
+        set_target_properties(${TARGET_NAME} PROPERTIES
+            IMPORTED_LOCATION "${${TARGET_NAME}_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${${TARGET_NAME}_INCLUDE_DIR}"
+        )
+    else()
+        find_package(${TARGET_NAME} REQUIRED)
     endif()
-else()
-    find_package(TIFF REQUIRED)
-endif()
+endmacro()
 
-if(WIN32)
-    if(NOT TIFF_INCLUDE_DIR OR NOT TIFF_LIBRARY)
-        message(FATAL_ERROR "Cannot find libtiff. Install it via MSYS2:\n"
-            "  pacman -S mingw-w64-x86_64-libtiff\n"
-            "Then reconfigure.")
-    endif()
-    # Create an imported target matching TIFF::TIFF for consistency
-    add_library(TIFF::TIFF UNKNOWN IMPORTED)
-    set_target_properties(TIFF::TIFF PROPERTIES
-        IMPORTED_LOCATION "${TIFF_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${TIFF_INCLUDE_DIR}"
-    )
-endif()
+# TIFF: #include <tiffio.h> → tiffio.h is directly in mingw64/include/
+find_msys2_library(TIFF tiffio.h tiff)
+# LibRaw: #include <libraw/libraw.h> → search for libraw/libraw.h in mingw64/include/
+find_msys2_library(LibRaw libraw/libraw.h raw_r)
 
 qt_standard_project_setup()
 set(CMAKE_AUTORCC ON)
@@ -51,6 +51,8 @@ qt_add_executable(rcaiman_projects
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp
     tiffreader.h tiffreader.cpp
+    rawreader.h rawreader.cpp
+    collectiondialog.h collectiondialog.cpp
     resources.qrc
 )
 
@@ -72,7 +74,8 @@ target_link_libraries(rcaiman_projects
     PRIVATE
         Qt::Core
         Qt::Widgets
-        TIFF::TIFF
+        TIFF
+        LibRaw
 )
 
 install(TARGETS rcaiman_projects

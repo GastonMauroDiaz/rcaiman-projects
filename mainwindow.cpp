@@ -1,9 +1,12 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "imageviewer.h"
+#include "rawreader.h"
+#include "collectiondialog.h"
 
 #include <QAction>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemModel>
@@ -48,6 +51,21 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::openImage);
+
+    connect(ui->actionImportRaw,
+            &QAction::triggered,
+            this,
+            &MainWindow::importRaw);
+
+    connect(ui->actionExtractRawData,
+            &QAction::triggered,
+            this,
+            &MainWindow::extractRawData);
+
+    connect(ui->actionRegisterCollection,
+            &QAction::triggered,
+            this,
+            &MainWindow::registerCollection);
 
     connect(ui->actionPan,
             &QAction::toggled,
@@ -175,6 +193,135 @@ void MainWindow::openImage()
     }
 }
 
+void MainWindow::importRaw()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Import raw",
+                                 "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    const QStringList fileNames = QFileDialog::getOpenFileNames(
+        this,
+        "Select RAW files to import",
+        QString(),
+        "RAW files (*.CR2 *.CR3 *.NEF *.ARW *.DNG *.RAF *.ORF *.RW2 *.PEF *.SRW *.RAW *.DCR *.KDC)"
+        );
+
+    if (fileNames.isEmpty())
+        return;
+
+    // Ensure raw_files/ exists
+    const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
+    QDir().mkpath(rawDir);
+
+    int copiedCount = 0;
+    for (const QString &srcPath : fileNames) {
+        const QFileInfo fi(srcPath);
+        const QString destPath = QDir(rawDir).filePath(fi.fileName());
+        if (QFile::exists(destPath))
+            continue; // skip duplicates
+        if (QFile::copy(srcPath, destPath))
+            ++copiedCount;
+    }
+
+    if (copiedCount > 0) {
+        statusBar()->showMessage(
+            QStringLiteral("Imported %1 RAW file(s)").arg(copiedCount), 5000);
+        updateProjectActions();
+    } else {
+        statusBar()->showMessage("No new RAW files were imported.", 3000);
+    }
+}
+
+void MainWindow::extractRawData()
+{
+    if (!m_project.isValid())
+        return;
+
+    const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
+    const QString sensorDir = QDir(m_project.rootPath()).filePath("sensor_data");
+    QDir().mkpath(sensorDir);
+
+    // Collect raw files recursively
+    QStringList rawFiles;
+    QDirIterator it(rawDir, QDir::Files, QDirIterator::Subdirectories);
+    const QStringList rawExtensions = {"cr2", "cr3", "nef", "arw", "dng", "raf",
+                                       "orf", "rw2", "pef", "srw", "raw", "dcr", "kdc"};
+    while (it.hasNext()) {
+        const QString path = it.next();
+        const QString ext = QFileInfo(path).suffix().toLower();
+        if (rawExtensions.contains(ext))
+            rawFiles.append(path);
+    }
+
+    if (rawFiles.isEmpty()) {
+        QMessageBox::information(this, "Extract raw data",
+                                 "No raw files found in raw_files folder.");
+        return;
+    }
+
+    int successCount = 0;
+    int failCount = 0;
+
+    for (const QString &rawPath : rawFiles) {
+        const QFileInfo fi(rawPath);
+        const QString baseName = fi.completeBaseName();
+        const QString tiffPath = QDir(sensorDir).filePath(baseName + ".tif");
+
+        if (QFile::exists(tiffPath))
+            continue; // skip already extracted
+
+        statusBar()->showMessage(
+            QStringLiteral("Extracting: %1").arg(fi.fileName()), 0);
+
+        QString errorMsg;
+        if (RawReader::extractSensorData(rawPath, tiffPath, &errorMsg)) {
+            ++successCount;
+        } else {
+            ++failCount;
+            qWarning() << "Failed to extract" << rawPath << ":" << errorMsg;
+        }
+    }
+
+    statusBar()->showMessage(
+        QStringLiteral("Extraction complete: %1 succeeded, %2 failed")
+            .arg(successCount).arg(failCount), 8000);
+
+    updateProjectActions();
+}
+
+void MainWindow::registerCollection()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Register collection",
+                                 "No project is open.");
+        return;
+    }
+
+    CollectionDialog dialog(m_project.rootPath(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString dirPath = dialog.selectedDirectory();
+    if (dirPath.isEmpty())
+        return;
+
+    QString errorMsg;
+    if (Project::registerCollection(dirPath,
+                                     dialog.collectionType(),
+                                     dialog.registry(),
+                                     dialog.script(),
+                                     &errorMsg))
+    {
+        statusBar()->showMessage(
+            QStringLiteral("Collection registered: %1").arg(
+                QDir(dirPath).dirName()), 5000);
+    } else {
+        QMessageBox::warning(this, "Register collection", errorMsg);
+    }
+}
+
 void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
 {
     const QString filePath = m_projectFileSystemModel->filePath(index);
@@ -190,7 +337,6 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
 {
     QWidget *tabWidget = ui->workspaceTabs->widget(index);
 
-    // Remove from the open-tabs map
     const QString key = m_openImageTabs.key(tabWidget);
     if (!key.isEmpty()) {
         m_openImageTabs.remove(key);
@@ -222,10 +368,8 @@ void MainWindow::openImageAtPath(const QString &filePath)
     const QFileInfo fi(filePath);
     const QString absolutePath = fi.absoluteFilePath();
 
-    // Check if already open
     auto it = m_openImageTabs.constFind(absolutePath);
     if (it != m_openImageTabs.constEnd()) {
-        // Switch to the existing tab
         const int tabIndex = ui->workspaceTabs->indexOf(it.value());
         if (tabIndex >= 0) {
             ui->workspaceTabs->setCurrentIndex(tabIndex);
@@ -233,7 +377,6 @@ void MainWindow::openImageAtPath(const QString &filePath)
         return;
     }
 
-    // Create new ImageViewer in a tab
     auto *viewer = new ImageViewer(this);
 
     const QString tabTitle = fi.fileName();
@@ -248,7 +391,6 @@ void MainWindow::openImageAtPath(const QString &filePath)
 
 void MainWindow::loadProject(const Project &project)
 {
-    // Close all open image tabs
     while (ui->workspaceTabs->count() > 0) {
         QWidget *w = ui->workspaceTabs->widget(0);
         ui->workspaceTabs->removeTab(0);
@@ -276,8 +418,19 @@ void MainWindow::updateProjectExplorer()
 
 void MainWindow::updateProjectActions()
 {
-    ui->actionSaveProject->setEnabled(m_project.isValid());
+    const bool hasProject = m_project.isValid();
+    ui->actionSaveProject->setEnabled(hasProject);
     ui->actionPan->setEnabled(currentImageViewer() != nullptr);
+    ui->actionImportRaw->setEnabled(hasProject);
+
+    // Enable "Extract raw data" if there are raw files in the RAW folder
+    bool hasRawFiles = false;
+    if (hasProject) {
+        const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
+        QDirIterator it(rawDir, QDir::Files);
+        hasRawFiles = it.hasNext();
+    }
+    ui->actionExtractRawData->setEnabled(hasRawFiles);
 }
 
 ImageViewer *MainWindow::currentImageViewer() const

@@ -50,8 +50,13 @@
     </property>
     <addaction name="actionNewProject"/>
     <addaction name="actionOpenProject"/>
-    <addaction name="actionSaveProject"/>
-   </widget>
+     <addaction name="actionSaveProject"/>
+     <addaction name="separator"/>
+     <addaction name="actionImportRaw"/>
+     <addaction name="actionExtractRawData"/>
+     <addaction name="separator"/>
+     <addaction name="actionRegisterCollection"/>
+    </widget>
    <widget class="QMenu" name="menuImage">
     <property name="title">
      <string>Image</string>
@@ -189,7 +194,25 @@
     <string>Save</string>
    </property>
   </action>
-  <action name="actionPan">
+   <action name="actionImportRaw">
+    <property name="text">
+     <string>Import raw...</string>
+    </property>
+   </action>
+   <action name="actionExtractRawData">
+    <property name="text">
+     <string>Extract raw data</string>
+    </property>
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
+   </action>
+   <action name="actionRegisterCollection">
+    <property name="text">
+     <string>Register collection...</string>
+    </property>
+   </action>
+   <action name="actionPan">
    <property name="checkable">
     <bool>true</bool>
    </property>

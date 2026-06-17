@@ -2,6 +2,16 @@
 #define PROJECT_H
 
 #include <QString>
+#include <QStringList>
+#include <QVector>
+
+struct Collection {
+    QString dirPath;   // absolute path to the folder
+    QString dirName;   // folder name (basename of dirPath)
+    QString type;
+    QString registry;
+    QString script;
+};
 
 class Project
 {
@@ -10,6 +20,17 @@ public:
 
     static Project create(const QString &rootPath, const QString &projectName, QString *errorMessage = nullptr);
     static Project open(const QString &rootPath, QString *errorMessage = nullptr);
+
+    // Register a collection: creates collection.yaml inside dirPath.
+    static bool registerCollection(const QString &dirPath,
+                                   const QString &type,
+                                   const QString &registry,
+                                   const QString &script,
+                                   QString *errorMessage = nullptr);
+
+    // Discover collections: scan first-level subdirectories of rootPath
+    // looking for collection.yaml files.
+    static QVector<Collection> discoverCollections(const QString &rootPath);
 
     bool isValid() const;
     bool save(QString *errorMessage = nullptr) const;
@@ -29,4 +50,4 @@ private:
     QString m_created;
 };
 
-#endif
+#endif // PROJECT_H

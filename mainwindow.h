@@ -28,6 +28,9 @@ private slots:
     void openProject();
     void saveProject();
     void openImage();
+    void importRaw();
+    void extractRawData();
+    void registerCollection();
     void onProjectTreeDoubleClicked(const QModelIndex &index);
     void onWorkspaceTabCloseRequested(int index);
     void onWorkspaceTabChanged(int index);
