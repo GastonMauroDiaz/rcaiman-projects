@@ -17,6 +17,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMenu>
+#include <QSettings>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -34,6 +36,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->projectTree->hideColumn(1);
     ui->projectTree->hideColumn(2);
     ui->projectTree->hideColumn(3);
+
+    // Load recent projects
+    QSettings settings;
+    m_recentProjects = settings.value("recentProjects").toStringList();
 
     connect(ui->actionNewProject,
             &QAction::triggered,
@@ -98,23 +104,84 @@ MainWindow::MainWindow(QWidget *parent)
     ui->workspaceTabs->setTabsClosable(true);
     ui->workspaceTabs->setElideMode(Qt::ElideMiddle);
 
-    // Replace old layers dock with new LayersDock
-    m_layersDock = new LayersDock(this);
-    addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
-    // Remove the old dock if present
-    if (QDockWidget *oldDock = findChild<QDockWidget *>("dockLayers")) {
-        removeDockWidget(oldDock);
-        oldDock->deleteLater();
+    // Obtain LayersDock from the UI instead of creating it again
+    if (QDockWidget *dockLayers = findChild<QDockWidget *>("dockLayers")) {
+        m_layersDock = dockLayers->findChild<LayersDock *>("layersDock");
+    } else {
+        m_layersDock = new LayersDock(this);
+        addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
     }
+    if (m_project.isValid())
+        m_layersDock->setProjectPath(m_project.rootPath());
+
+    // Ensure 3-column layout: Explorer (left), Viewer (center), Layers+Properties (right)
+    setDockNestingEnabled(true);
+    addDockWidget(Qt::LeftDockWidgetArea, ui->dockProjectExplorer);
+    addDockWidget(Qt::RightDockWidgetArea, ui->dockViewer);
+    addDockWidget(Qt::RightDockWidgetArea, ui->dockLayers);
+    addDockWidget(Qt::RightDockWidgetArea, ui->dockProperties);
+
+    // Split into 3 areas: Explorer | Viewer | (Layers ⊓ Properties)
+    splitDockWidget(ui->dockViewer, ui->dockLayers, Qt::Horizontal);
+    splitDockWidget(ui->dockLayers, ui->dockProperties, Qt::Vertical);
+
+    // Resize proportions: Viewer takes more space
+    resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
+                {300, 600, 300}, Qt::Horizontal);
 
     // Remove old actionLoadPoints (moved to LayersDock)
     // No longer needed; the UI has been cleaned up.
     updateProjectActions();
+    updateRecentProjectsMenu();
 }
 
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::addToRecentProjects(const QString &path)
+{
+    m_recentProjects.removeAll(path);
+    m_recentProjects.push_front(path);
+    if (m_recentProjects.size() > 5)
+        m_recentProjects.erase(m_recentProjects.end() - 1, m_recentProjects.end());
+    QSettings settings;
+    settings.setValue("recentProjects", m_recentProjects);
+    updateRecentProjectsMenu();
+}
+
+void MainWindow::updateRecentProjectsMenu()
+{
+    // Remove old actions from recent menu
+    QMenu *recentMenu = findChild<QMenu *>("menuRecentProjects");
+    if (!recentMenu)
+        return;
+    qDeleteAll(recentMenu->actions());
+    recentMenu->clear();
+
+    bool hasRecent = false;
+    for (const QString &path : std::as_const(m_recentProjects)) {
+        if (path.isEmpty())
+            continue;
+        hasRecent = true;
+        QAction *act = recentMenu->addAction(QDir(path).dirName());
+        act->setToolTip(path);
+        connect(act, &QAction::triggered, this, [this, path]() {
+            // Try to open project
+            QString errorMessage;
+            const Project project = Project::open(path, &errorMessage);
+            if (!project.isValid()) {
+                QMessageBox::warning(this, "Open Recent Project", errorMessage);
+                return;
+            }
+            loadProject(project);
+        });
+    }
+    if (!hasRecent) {
+        auto *emptyAct = recentMenu->addAction("(empty)");
+        emptyAct->setEnabled(false);
+    }
 }
 
 void MainWindow::newProject()
@@ -491,6 +558,9 @@ void MainWindow::loadProject(const Project &project)
     updateProjectExplorer();
     updateProjectActions();
     setWindowTitle(QString("%1 - rcaiman_projects").arg(m_project.name()));
+    if (m_layersDock)
+        m_layersDock->setProjectPath(m_project.rootPath());
+    addToRecentProjects(m_project.rootPath());
 }
 
 void MainWindow::updateProjectExplorer()

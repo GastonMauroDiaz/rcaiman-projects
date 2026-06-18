@@ -6,6 +6,8 @@
 
 int main(int argc, char *argv[])
 {
+    QCoreApplication::setOrganizationName("rcaiman");
+    QCoreApplication::setApplicationName("rcaiman_projects");
     QApplication a(argc, argv);
 
     QTranslator translator;

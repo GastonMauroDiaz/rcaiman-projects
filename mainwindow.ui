@@ -13,28 +13,7 @@
   <property name="windowTitle">
    <string>MainWindow</string>
   </property>
-  <widget class="QWidget" name="centralwidget">
-   <layout class="QVBoxLayout" name="centralLayout">
-    <property name="spacing">
-     <number>0</number>
-    </property>
-    <property name="leftMargin">
-     <number>0</number>
-    </property>
-    <property name="topMargin">
-     <number>0</number>
-    </property>
-    <property name="rightMargin">
-     <number>0</number>
-    </property>
-    <property name="bottomMargin">
-     <number>0</number>
-    </property>
-     <item>
-      <widget class="QTabWidget" name="workspaceTabs"/>
-     </item>
-   </layout>
-  </widget>
+  <widget class="QWidget" name="centralwidget"/>
   <widget class="QMenuBar" name="menubar">
    <property name="geometry">
     <rect>
@@ -50,23 +29,31 @@
     </property>
     <addaction name="actionNewProject"/>
     <addaction name="actionOpenProject"/>
-     <addaction name="actionSaveProject"/>
-     <addaction name="separator"/>
-     <addaction name="actionImportRaw"/>
-     <addaction name="actionExtractRawData"/>
-     <addaction name="separator"/>
-     <addaction name="actionRegisterCollection"/>
-    </widget>
-    <widget class="QMenu" name="menuImage">
-     <property name="title">
-      <string>Image</string>
-     </property>
-     <addaction name="actionOpen_Image"/>
-    </widget>
-    <addaction name="menuProject"/>
-    <addaction name="menuImage"/>
+    <addaction name="actionSaveProject"/>
+    <addaction name="separator"/>
+    <addaction name="actionImportRaw"/>
+    <addaction name="actionExtractRawData"/>
+    <addaction name="separator"/>
+    <addaction name="actionRegisterCollection"/>
+    <addaction name="separator"/>
+    <addaction name="menuRecentProjects"/>
+   </widget>
+   <widget class="QMenu" name="menuImage">
+    <property name="title">
+     <string>Image</string>
+    </property>
+    <addaction name="actionOpen_Image"/>
+   </widget>
+   <addaction name="menuProject"/>
+   <addaction name="menuImage"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QMenu" name="menuRecentProjects">
+   <property name="title">
+    <string>Recent Projects</string>
+   </property>
+   <addaction name="actionRecentDummy"/>
+  </widget>
   <widget class="QToolBar" name="toolBar">
    <property name="windowTitle">
     <string>toolBar</string>
@@ -102,6 +89,48 @@
      </property>
      <item>
       <widget class="QTreeView" name="projectTree"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QDockWidget" name="dockViewer">
+   <property name="windowTitle">
+    <string>Viewer</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="QWidget" name="dockViewerContents">
+    <layout class="QVBoxLayout" name="dockViewerLayout">
+     <property name="leftMargin">
+      <number>0</number>
+     </property>
+     <property name="topMargin">
+      <number>0</number>
+     </property>
+     <property name="rightMargin">
+      <number>0</number>
+     </property>
+     <property name="bottomMargin">
+      <number>0</number>
+     </property>
+     <item>
+      <widget class="QTabWidget" name="workspaceTabs"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QDockWidget" name="dockLayers">
+   <property name="windowTitle">
+    <string>Layers</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="QWidget" name="dockLayersContents">
+    <layout class="QVBoxLayout" name="dockLayersLayout">
+     <item>
+      <widget class="LayersDock" name="layersDock" native="true"/>
      </item>
     </layout>
    </widget>
@@ -185,6 +214,11 @@
      <string>Register collection...</string>
     </property>
    </action>
+   <action name="actionRecentDummy">
+    <property name="text">
+     <string>(empty)</string>
+    </property>
+   </action>
    <action name="actionPan">
    <property name="checkable">
     <bool>true</bool>
@@ -196,9 +230,6 @@
    <property name="text">
     <string>Pan</string>
    </property>
-   <property name="menuRole">
-    <enum>QAction::MenuRole::NoRole</enum>
-   </property>
   </action>
  </widget>
  <customwidgets>
@@ -206,6 +237,11 @@
    <class>ImageViewer</class>
    <extends>QGraphicsView</extends>
    <header>imageviewer.h</header>
+  </customwidget>
+  <customwidget>
+   <class>LayersDock</class>
+   <extends>QDockWidget</extends>
+   <header>layersdock.h</header>
   </customwidget>
  </customwidgets>
  <resources>

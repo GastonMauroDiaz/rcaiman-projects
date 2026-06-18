@@ -15,6 +15,7 @@ public:
     explicit LayersDock(QWidget *parent = nullptr);
 
     void setLayerManager(LayerManager *manager);
+    void setProjectPath(const QString &path);
     LayerManager *layerManager() const { return m_manager; }
 
 private slots:
@@ -29,6 +30,7 @@ private:
     LayerManager *m_manager = nullptr;
     QListWidget *m_listWidget = nullptr;
     bool m_updatingList = false;
+    QString m_projectPath;
 };
 
 #endif // LAYERSDOCK_H

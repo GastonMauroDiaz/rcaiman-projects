@@ -36,7 +36,7 @@ void LayerManager::addLayer(Layer *layer)
     if (!layer)
         return;
 
-    m_layers.append(layer);
+    m_layers.insert(0, layer);
     layer->setParent(this);
 
     if (m_scene) {
@@ -123,10 +123,12 @@ void LayerManager::rebuildZOrder()
     if (!m_scene)
         return;
 
-    for (int i = 0; i < m_layers.size(); ++i) {
+    const int count = m_layers.size();
+    for (int i = 0; i < count; ++i) {
         Layer *layer = m_layers[i];
+        const double zValue = static_cast<double>(count - 1 - i);
         for (QGraphicsItem *item : std::as_const(layer->m_items)) {
-            item->setZValue(static_cast<double>(i));
+            item->setZValue(zValue);
         }
     }
 }

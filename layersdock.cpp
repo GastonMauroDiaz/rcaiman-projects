@@ -48,7 +48,7 @@ LayersDock::LayersDock(QWidget *parent)
         if (!m_manager) return;
         const QString filePath = QFileDialog::getOpenFileName(
             this, "Open Image",
-            QString(),
+            m_projectPath,
             "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)");
         if (filePath.isEmpty()) return;
         auto *layer = new ImageLayer(filePath);
@@ -60,13 +60,20 @@ LayersDock::LayersDock(QWidget *parent)
         m_manager->addLayer(layer);
     });
 
-    connect(addPointsBtn, &QPushButton::clicked, this, &LayersDock::addPointLayer);
+    connect(addPointsBtn, &QPushButton::clicked, this, [this]() {
+        addPointLayer();
+    });
     connect(removeBtn, &QPushButton::clicked, this, &LayersDock::removeLayer);
     connect(upBtn, &QPushButton::clicked, this, &LayersDock::moveUp);
     connect(downBtn, &QPushButton::clicked, this, &LayersDock::moveDown);
 
     connect(m_listWidget, &QListWidget::itemChanged,
             this, &LayersDock::onItemChanged);
+}
+
+void LayersDock::setProjectPath(const QString &path)
+{
+    m_projectPath = path;
 }
 
 void LayersDock::setLayerManager(LayerManager *manager)
@@ -128,7 +135,7 @@ void LayersDock::addPointLayer()
 
     const QString filePath = QFileDialog::getOpenFileName(
         this, "Select CSV points file",
-        QString(),
+        m_projectPath,
         "CSV files (*.csv)");
     if (filePath.isEmpty())
         return;

@@ -5,6 +5,7 @@
 
 #include <QMainWindow>
 #include <QMap>
+#include <QSettings>
 
 class QFileSystemModel;
 class ImageViewer;
@@ -49,5 +50,9 @@ private:
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
+    QStringList m_recentProjects;
+    void addToRecentProjects(const QString &path);
+    void updateRecentProjectsMenu();
 };
+
 #endif // MAINWINDOW_H
