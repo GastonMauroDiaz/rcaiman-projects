@@ -133,16 +133,6 @@ void MainWindow::newProject()
     }
 
     const QString rootPath = QDir(parentPath).filePath(projectName);
-    if (QDir(rootPath).exists()) {
-        const auto answer = QMessageBox::question(
-            this,
-            "Project Folder Exists",
-            "The selected project folder already exists. Continue and initialize it as a project?"
-            );
-        if (answer != QMessageBox::Yes) {
-            return;
-        }
-    }
 
     QString errorMessage;
     const Project project = Project::create(rootPath, projectName, &errorMessage);
@@ -334,7 +324,8 @@ void MainWindow::registerCollection()
         return;
     }
 
-    CollectionDialog dialog(m_project.rootPath(), this);
+    const QVector<Collection> existingCollections = Project::discoverCollections(m_project.rootPath());
+    CollectionDialog dialog(m_project.rootPath(), existingCollections, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
 
@@ -345,6 +336,8 @@ void MainWindow::registerCollection()
     QString errorMsg;
     if (Project::registerCollection(dirPath,
                                      dialog.collectionType(),
+                                     dialog.parent(),
+                                     dialog.related(),
                                      dialog.registry(),
                                      dialog.script(),
                                      &errorMsg))

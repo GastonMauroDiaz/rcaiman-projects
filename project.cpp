@@ -111,6 +111,8 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
 
 bool Project::registerCollection(const QString &dirPath,
                                  const QString &type,
+                                 const QString &parent,
+                                 const QString &related,
                                  const QString &registry,
                                  const QString &script,
                                  QString *errorMessage)
@@ -132,7 +134,11 @@ bool Project::registerCollection(const QString &dirPath,
 
     QTextStream stream(&file);
     stream << "schema_version: 1\n";
-    stream << "type: " << type << "\n";
+    stream << "class: " << type << "\n";
+    if (!parent.isEmpty())
+        stream << "parent: " << parent << "\n";
+    if (!related.isEmpty())
+        stream << "related: " << related << "\n";
     if (!registry.isEmpty())
         stream << "registry: " << registry << "\n";
     if (!script.isEmpty())
@@ -167,8 +173,12 @@ QVector<Collection> Project::discoverCollections(const QString &rootPath)
         QTextStream stream(&file);
         while (!stream.atEnd()) {
             const QString line = stream.readLine();
-            if (line.startsWith("type:"))
+            if (line.startsWith("class:"))
                 col.type = valueAfterColon(line);
+            else if (line.startsWith("parent:"))
+                col.parent = valueAfterColon(line);
+            else if (line.startsWith("related:"))
+                col.related = valueAfterColon(line);
             else if (line.startsWith("registry:"))
                 col.registry = valueAfterColon(line);
             else if (line.startsWith("script:"))

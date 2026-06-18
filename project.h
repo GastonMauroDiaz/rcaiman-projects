@@ -9,6 +9,8 @@ struct Collection {
     QString dirPath;   // absolute path to the folder
     QString dirName;   // folder name (basename of dirPath)
     QString type;
+    QString parent;
+    QString related;
     QString registry;
     QString script;
 };
@@ -24,6 +26,8 @@ public:
     // Register a collection: creates collection.yaml inside dirPath.
     static bool registerCollection(const QString &dirPath,
                                    const QString &type,
+                                   const QString &parent,
+                                   const QString &related,
                                    const QString &registry,
                                    const QString &script,
                                    QString *errorMessage = nullptr);
