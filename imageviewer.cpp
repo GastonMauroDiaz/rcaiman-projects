@@ -1,76 +1,50 @@
 #include "imageviewer.h"
-#include "tiffreader.h"
+#include "imagelayer.h"
+#include "layermanager.h"
+#include "layer.h"
 
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
-#include <QImage>
 #include <QMessageBox>
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
     , m_scene(new QGraphicsScene(this))
+    , m_layerManager(new LayerManager(this))
 {
     setScene(m_scene);
+    m_layerManager->attachToScene(m_scene);
+
+    connect(m_layerManager, &LayerManager::layersChanged, this, [this]() {
+        m_imageLayer = nullptr;
+        for (int i = 0; i < m_layerManager->layerCount(); ++i) {
+            if (auto *img = qobject_cast<ImageLayer*>(m_layerManager->layerAt(i))) {
+                m_imageLayer = img;
+                break;
+            }
+        }
+    });
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
 }
 
-void ImageViewer::setPointCollection(const PointCollection &collection)
-{
-    clearOverlays();
-    m_pointCollection = collection;
-    if (collection.isValid())
-        addOverlay(collection);
-}
-
-void ImageViewer::addOverlay(const Overlay &overlay)
-{
-    overlay.addToScene(m_scene);
-}
-
-void ImageViewer::clearOverlays()
-{
-    for (QGraphicsItem *item : std::as_const(m_overlayItems)) {
-        delete item;
-    }
-    m_overlayItems.clear();
-    m_pointCollection = PointCollection();
-}
-
 void ImageViewer::setImage(const QString &fileName)
 {
-    QString errorMessage;
-    RasterData data = TiffReader::load(fileName, &errorMessage);
+    m_layerManager->clearAll();
 
-    if (data.isNull()) {
+    auto *imageLayer = new ImageLayer(fileName);
+    if (imageLayer->rasterData().isNull()) {
+        delete imageLayer;
         QMessageBox::warning(this, "Open Image",
-                             QStringLiteral("Could not load image:\n%1\n\n%2")
-                                 .arg(fileName, errorMessage));
+                             QStringLiteral("Could not load image:\n%1").arg(fileName));
         return;
     }
 
-    m_rasterData = std::move(data);
-    updateDisplay();
-}
+    m_imageLayer = imageLayer;
+    m_layerManager->addLayer(imageLayer);
 
-void ImageViewer::updateDisplay()
-{
-    if (m_rasterData.isNull())
-        return;
-
-    const QImage image = m_renderer.renderAuto(m_rasterData);
-    if (image.isNull()) {
-        QMessageBox::warning(this, "Render Error", "Could not render image.");
-        return;
-    }
-
-    QPixmap pixmap = QPixmap::fromImage(image);
-    m_scene->clear();
-    clearOverlays();
-    m_imageItem = m_scene->addPixmap(pixmap);
-    m_scene->setSceneRect(m_imageItem->boundingRect());
     m_autoFitImage = true;
     fitImageToView();
 }
@@ -128,10 +102,10 @@ void ImageViewer::wheelEvent(QWheelEvent *event)
 
 void ImageViewer::fitImageToView()
 {
-    if (!m_imageItem)
+    if (!m_imageLayer || !m_imageLayer->pixmapItem())
         return;
     resetTransform();
-    fitInView(m_imageItem, Qt::KeepAspectRatio);
+    fitInView(m_imageLayer->pixmapItem(), Qt::KeepAspectRatio);
 }
 
 void ImageViewer::updateDragMode()

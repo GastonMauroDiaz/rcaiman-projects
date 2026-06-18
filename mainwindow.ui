@@ -63,15 +63,8 @@
      </property>
      <addaction name="actionOpen_Image"/>
     </widget>
-    <widget class="QMenu" name="menuView">
-     <property name="title">
-      <string>View</string>
-     </property>
-     <addaction name="actionLoadPoints"/>
-    </widget>
     <addaction name="menuProject"/>
     <addaction name="menuImage"/>
-    <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QToolBar" name="toolBar">
@@ -109,33 +102,6 @@
      </property>
      <item>
       <widget class="QTreeView" name="projectTree"/>
-     </item>
-    </layout>
-   </widget>
-  </widget>
-  <widget class="QDockWidget" name="dockLayers">
-   <property name="windowTitle">
-    <string>Layers</string>
-   </property>
-   <attribute name="dockWidgetArea">
-    <number>2</number>
-   </attribute>
-   <widget class="QWidget" name="dockLayersContents">
-    <layout class="QVBoxLayout" name="dockLayersLayout">
-     <property name="leftMargin">
-      <number>0</number>
-     </property>
-     <property name="topMargin">
-      <number>0</number>
-     </property>
-     <property name="rightMargin">
-      <number>0</number>
-     </property>
-     <property name="bottomMargin">
-      <number>0</number>
-     </property>
-     <item>
-      <widget class="QListWidget" name="layersList"/>
      </item>
     </layout>
    </widget>
@@ -217,11 +183,6 @@
    <action name="actionRegisterCollection">
     <property name="text">
      <string>Register collection...</string>
-    </property>
-   </action>
-   <action name="actionLoadPoints">
-    <property name="text">
-     <string>Load points...</string>
     </property>
    </action>
    <action name="actionPan">

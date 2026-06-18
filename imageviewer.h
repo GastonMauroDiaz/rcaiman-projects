@@ -1,18 +1,14 @@
 #ifndef IMAGEVIEWER_H
 #define IMAGEVIEWER_H
 
-#include "rasterdata.h"
-#include "rasterrenderer.h"
-#include "overlay.h"
-#include "pointcollection.h"
-
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
-class QGraphicsPixmapItem;
 class QGraphicsScene;
+class LayerManager;
+class ImageLayer;
 
 class ImageViewer : public QGraphicsView
 {
@@ -22,14 +18,11 @@ public:
     explicit ImageViewer(QWidget *parent = nullptr);
 
     void setImage(const QString &fileName);
-    void setPointCollection(const PointCollection &collection);
-    const PointCollection &pointCollection() const { return m_pointCollection; }
-    void addOverlay(const Overlay &overlay);
-    void clearOverlays();
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
 
-    const RasterData &rasterData() const { return m_rasterData; }
+    LayerManager *layerManager() const { return m_layerManager; }
+    ImageLayer *imageLayer() const { return m_imageLayer; }
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -38,7 +31,6 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
 
 private:
-    void updateDisplay();
     void fitImageToView();
     void updateDragMode();
 
@@ -46,11 +38,8 @@ private:
     bool m_spacePanActive = false;
     bool m_autoFitImage = false;
     QGraphicsScene *m_scene = nullptr;
-    QGraphicsPixmapItem *m_imageItem = nullptr;
-    PointCollection m_pointCollection;
-    QVector<QGraphicsItem*> m_overlayItems;
-    RasterData m_rasterData;
-    RasterRenderer m_renderer;
+    LayerManager *m_layerManager = nullptr;
+    ImageLayer *m_imageLayer = nullptr;
 };
 
 #endif // IMAGEVIEWER_H

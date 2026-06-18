@@ -4,10 +4,6 @@
 #include <QFile>
 #include <QTextStream>
 #include <QStringList>
-#include <QGraphicsScene>
-#include <QGraphicsEllipseItem>
-#include <QPen>
-#include <QColor>
 
 PointCollection PointCollection::load(const QString &filePath, QString *errorMessage)
 {
@@ -67,24 +63,6 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
     }
 
     return collection;
-}
-
-void PointCollection::addToScene(QGraphicsScene *scene) const
-{
-    if (!scene || m_points.isEmpty())
-        return;
-
-    const double width = 3.0;
-    const double height = 3.0;
-    const QPointF offset(-width / 2.0, -height / 2.0);
-
-    for (const PointRecord &rec : m_points) {
-        auto *ellipse = new QGraphicsEllipseItem(offset.x(), offset.y(), width, height);
-        ellipse->setPen(QPen(Qt::red));
-        ellipse->setBrush(QBrush(Qt::red));
-        ellipse->setPos(rec.col, rec.row);
-        scene->addItem(ellipse);
-    }
 }
 
 PointCollection PointCollection::loadFromDirectory(const QString &dirPath, QString *errorMessage)

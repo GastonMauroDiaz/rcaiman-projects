@@ -1,0 +1,132 @@
+#include "layermanager.h"
+#include "layer.h"
+
+#include <QGraphicsScene>
+
+LayerManager::LayerManager(QObject *parent)
+    : QObject(parent)
+{
+}
+
+LayerManager::~LayerManager()
+{
+    qDeleteAll(m_layers);
+    m_layers.clear();
+}
+
+int LayerManager::layerCount() const
+{
+    return m_layers.size();
+}
+
+Layer *LayerManager::layerAt(int index) const
+{
+    if (index < 0 || index >= m_layers.size())
+        return nullptr;
+    return m_layers.at(index);
+}
+
+int LayerManager::indexOf(Layer *layer) const
+{
+    return m_layers.indexOf(layer);
+}
+
+void LayerManager::addLayer(Layer *layer)
+{
+    if (!layer)
+        return;
+
+    m_layers.append(layer);
+    layer->setParent(this);
+
+    if (m_scene) {
+        layer->buildItems(m_scene);
+        rebuildZOrder();
+        layer->addToScene(m_scene);
+    }
+
+    emit layersChanged();
+}
+
+void LayerManager::removeLayer(int index)
+{
+    if (index < 0 || index >= m_layers.size())
+        return;
+
+    Layer *layer = m_layers.takeAt(index);
+
+    if (m_scene)
+        layer->removeFromScene(m_scene);
+
+    delete layer;
+    rebuildZOrder();
+    emit layersChanged();
+}
+
+void LayerManager::clearAll()
+{
+    if (m_scene) {
+        for (Layer *layer : std::as_const(m_layers)) {
+            layer->removeFromScene(m_scene);
+        }
+        m_scene->clear();  // destroys all QGraphicsItems
+    }
+
+    qDeleteAll(m_layers);
+    m_layers.clear();
+    emit layersChanged();
+}
+
+void LayerManager::moveUp(int index)
+{
+    if (index <= 0 || index >= m_layers.size())
+        return;
+
+    m_layers.swapItemsAt(index, index - 1);
+    rebuildZOrder();
+    emit layersChanged();
+}
+
+void LayerManager::moveDown(int index)
+{
+    if (index < 0 || index >= m_layers.size() - 1)
+        return;
+
+    m_layers.swapItemsAt(index, index + 1);
+    rebuildZOrder();
+    emit layersChanged();
+}
+
+void LayerManager::setVisibility(int index, bool visible)
+{
+    Layer *layer = layerAt(index);
+    if (!layer || layer->isVisible() == visible)
+        return;
+
+    layer->setVisible(visible);
+    emit layersChanged();
+}
+
+void LayerManager::attachToScene(QGraphicsScene *scene)
+{
+    m_scene = scene;
+    for (Layer *layer : m_layers) {
+        layer->buildItems(m_scene);
+        rebuildZOrder();
+        layer->addToScene(m_scene);
+    }
+    emit layersChanged();
+}
+
+void LayerManager::rebuildZOrder()
+{
+    if (!m_scene)
+        return;
+
+    for (int i = 0; i < m_layers.size(); ++i) {
+        Layer *layer = m_layers[i];
+        for (QGraphicsItem *item : std::as_const(layer->m_items)) {
+            item->setZValue(static_cast<double>(i));
+        }
+    }
+}

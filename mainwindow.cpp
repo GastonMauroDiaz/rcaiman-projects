@@ -1,9 +1,11 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "imageviewer.h"
+#include "layersdock.h"
+#include "layermanager.h"
+#include "pointlayer.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
-#include "pointcollection.h"
 
 #include <QAction>
 #include <QDir>
@@ -53,11 +55,6 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::openImage);
 
-    connect(ui->actionLoadPoints,
-            &QAction::triggered,
-            this,
-            &MainWindow::loadPoints);
-
     connect(ui->actionImportRaw,
             &QAction::triggered,
             this,
@@ -101,6 +98,17 @@ MainWindow::MainWindow(QWidget *parent)
     ui->workspaceTabs->setTabsClosable(true);
     ui->workspaceTabs->setElideMode(Qt::ElideMiddle);
 
+    // Replace old layers dock with new LayersDock
+    m_layersDock = new LayersDock(this);
+    addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
+    // Remove the old dock if present
+    if (QDockWidget *oldDock = findChild<QDockWidget *>("dockLayers")) {
+        removeDockWidget(oldDock);
+        oldDock->deleteLater();
+    }
+
+    // Remove old actionLoadPoints (moved to LayersDock)
+    // No longer needed; the UI has been cleaned up.
     updateProjectActions();
 }
 
@@ -187,35 +195,6 @@ void MainWindow::openImage()
     for (const QString &fileName : fileNames) {
         openImageAtPath(fileName);
     }
-}
-
-void MainWindow::loadPoints()
-{
-    ImageViewer *viewer = currentImageViewer();
-    if (!viewer) {
-        QMessageBox::information(this, "Load points",
-                                 "No image viewer is active. Please open an image first.");
-        return;
-    }
-
-    const QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "Select CSV points file",
-        m_project.isValid() ? m_project.rootPath() : QString(),
-        "CSV files (*.csv)"
-        );
-    if (filePath.isEmpty())
-        return;
-
-    QString errorMessage;
-    const PointCollection collection = PointCollection::load(filePath, &errorMessage);
-    if (!collection.isValid()) {
-        QMessageBox::warning(this, "Load points", errorMessage);
-        return;
-    }
-
-    m_pointCollection = collection;
-    viewer->setPointCollection(collection);
 }
 
 void MainWindow::importRaw()
@@ -370,7 +349,7 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     if (!yamlFi.exists())
         return;
 
-    // Parse minimal YAML to extract type
+    // Parse minimal YAML to extract class
     QFile file(yamlPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
         return;
@@ -379,7 +358,7 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     QTextStream stream(&file);
     while (!stream.atEnd()) {
         const QString line = stream.readLine();
-        if (line.startsWith("type:")) {
+        if (line.startsWith("class:")) {
             const int sep = line.indexOf(':');
             if (sep >= 0)
                 type = line.mid(sep + 1).trimmed();
@@ -387,24 +366,17 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
         }
     }
 
-    if (type != "point_collection")
-        return;
+    if (type == "point_collection") {
+        // Add as a PointLayer to the current viewer
+        ImageViewer *viewer = currentImageViewer();
+        if (!viewer) {
+            QMessageBox::information(this, "Add layer",
+                                     "No image viewer is active. Open an image first.");
+            return;
+        }
 
-    // Load points from directory
-    QString errorMessage;
-    const PointCollection collection = PointCollection::loadFromDirectory(filePath, &errorMessage);
-    if (!collection.isValid()) {
-        QMessageBox::warning(this, "Load points", errorMessage);
-        return;
-    }
-
-    m_pointCollection = collection;
-    ImageViewer *viewer = currentImageViewer();
-    if (viewer) {
-        viewer->setPointCollection(collection);
-    } else {
-        QMessageBox::information(this, "Load points",
-                                 "Points loaded but no image viewer is active. Open an image first.");
+        auto *layer = new PointLayer(filePath);
+        viewer->layerManager()->addLayer(layer);
     }
 }
 
@@ -428,6 +400,8 @@ void MainWindow::onWorkspaceTabChanged(int index)
     if (index < 0) {
         ui->actionPan->setChecked(false);
         ui->actionPan->setEnabled(false);
+        if (m_layersDock)
+            m_layersDock->setLayerManager(nullptr);
         return;
     }
 
@@ -435,6 +409,8 @@ void MainWindow::onWorkspaceTabChanged(int index)
     if (viewer) {
         ui->actionPan->setChecked(viewer->panModeEnabled());
         ui->actionPan->setEnabled(true);
+        if (m_layersDock)
+            m_layersDock->setLayerManager(viewer->layerManager());
     }
 }
 
@@ -443,8 +419,8 @@ void MainWindow::openImageAtPath(const QString &filePath)
     const QFileInfo fi(filePath);
     const QString absolutePath = fi.absoluteFilePath();
 
-    auto it = m_openImageTabs.constFind(absolutePath);
-    if (it != m_openImageTabs.constEnd()) {
+    auto it = m_openImageTabs.find(absolutePath);
+    if (it != m_openImageTabs.end()) {
         const int tabIndex = ui->workspaceTabs->indexOf(it.value());
         if (tabIndex >= 0) {
             ui->workspaceTabs->setCurrentIndex(tabIndex);
@@ -460,13 +436,12 @@ void MainWindow::openImageAtPath(const QString &filePath)
     viewer->setImage(absolutePath);
 
     // Autoload PointCollection si aplica
-    if (m_project.isValid()) {
+    if (viewer->layerManager()) {
         const QString baseName = fi.completeBaseName();
         const QString imgDir = fi.absolutePath();
 
         const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
 
-        // Buscar colecciones cuyo dirPath coincide con el directorio de la imagen
         QStringList matchingParents;
         for (const Collection &col : collections) {
             if (col.dirPath == imgDir) {
@@ -475,7 +450,6 @@ void MainWindow::openImageAtPath(const QString &filePath)
         }
 
         if (matchingParents.size() == 1) {
-            // Buscar point_collection cuyo parent sea esta colección
             QStringList pointCollections;
             for (const Collection &col : collections) {
                 if (col.type == "point_collection" && col.parent == matchingParents.first()) {
@@ -486,13 +460,8 @@ void MainWindow::openImageAtPath(const QString &filePath)
             if (pointCollections.size() == 1) {
                 const QString csvPath = QDir(pointCollections.first()).filePath(baseName + ".csv");
                 if (QFile::exists(csvPath)) {
-                    QString err;
-                    const PointCollection pc = PointCollection::load(csvPath, &err);
-                    if (pc.isValid()) {
-                        viewer->setPointCollection(pc);
-                    } else {
-                        qWarning() << "Failed to autoload points:" << err;
-                    }
+                    auto *layer = new PointLayer(csvPath);
+                    viewer->layerManager()->addLayer(layer);
                 }
             } else if (pointCollections.size() > 1) {
                 qWarning() << "Multiple point_collections found for" << imgDir << "; autoload skipped.";
@@ -501,6 +470,10 @@ void MainWindow::openImageAtPath(const QString &filePath)
     }
 
     m_openImageTabs.insert(absolutePath, viewer);
+
+    // Update layers dock
+    if (m_layersDock)
+        m_layersDock->setLayerManager(viewer->layerManager());
 
     updateProjectActions();
 }

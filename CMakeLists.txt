@@ -46,9 +46,13 @@ qt_add_executable(rcaiman_projects
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
-    overlay.h
     imageviewer.h imageviewer.cpp
+    imagelayer.h imagelayer.cpp
+    layer.h layer.cpp
+    layermanager.h layermanager.cpp
+    layersdock.h layersdock.cpp
     pointcollection.h pointcollection.cpp
+    pointlayer.h pointlayer.cpp
     project.h project.cpp
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp
