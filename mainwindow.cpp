@@ -459,6 +459,47 @@ void MainWindow::openImageAtPath(const QString &filePath)
     ui->workspaceTabs->setCurrentIndex(newIndex);
     viewer->setImage(absolutePath);
 
+    // Autoload PointCollection si aplica
+    if (m_project.isValid()) {
+        const QString baseName = fi.completeBaseName();
+        const QString imgDir = fi.absolutePath();
+
+        const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
+
+        // Buscar colecciones cuyo dirPath coincide con el directorio de la imagen
+        QStringList matchingParents;
+        for (const Collection &col : collections) {
+            if (col.dirPath == imgDir) {
+                matchingParents.append(col.dirPath);
+            }
+        }
+
+        if (matchingParents.size() == 1) {
+            // Buscar point_collection cuyo parent sea esta colección
+            QStringList pointCollections;
+            for (const Collection &col : collections) {
+                if (col.type == "point_collection" && col.parent == matchingParents.first()) {
+                    pointCollections.append(col.dirPath);
+                }
+            }
+
+            if (pointCollections.size() == 1) {
+                const QString csvPath = QDir(pointCollections.first()).filePath(baseName + ".csv");
+                if (QFile::exists(csvPath)) {
+                    QString err;
+                    const PointCollection pc = PointCollection::load(csvPath, &err);
+                    if (pc.isValid()) {
+                        viewer->setPointCollection(pc);
+                    } else {
+                        qWarning() << "Failed to autoload points:" << err;
+                    }
+                }
+            } else if (pointCollections.size() > 1) {
+                qWarning() << "Multiple point_collections found for" << imgDir << "; autoload skipped.";
+            }
+        }
+    }
+
     m_openImageTabs.insert(absolutePath, viewer);
 
     updateProjectActions();

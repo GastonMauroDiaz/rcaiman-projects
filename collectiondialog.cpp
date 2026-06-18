@@ -97,8 +97,9 @@ void CollectionDialog::setupUI()
     m_typeCombo = new QComboBox(this);
     m_typeCombo->addItems({
         "preprocessed_image_collection",
+        "processed_image_collection",
         "point_collection",
-        "binary_mask_collection",
+        "segmentation_collection",
         "other"
     });
     formLayout->addRow("Collection class:", m_typeCombo);
@@ -183,7 +184,7 @@ void CollectionDialog::updateFieldVisibility()
 {
     const QString type = m_typeCombo->currentText();
 
-    if (type == "preprocessed_image_collection") {
+    if (type == "preprocessed_image_collection" || type == "processed_image_collection") {
         m_parentWidget->setVisible(false);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(true);
@@ -193,7 +194,7 @@ void CollectionDialog::updateFieldVisibility()
         m_relatedWidget->setVisible(true);
         m_registryWidget->setVisible(false);
         m_scriptWidget->setVisible(true);
-    } else if (type == "binary_mask_collection") {
+    } else if (type == "segmentation_collection") {
         m_parentWidget->setVisible(true);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(false);
@@ -254,13 +255,13 @@ QStringList CollectionDialog::compatibleTypes(const QString &targetType, bool as
         if (asParent)
             return {"preprocessed_image_collection", "processed_image_collection"};
         else
-            return {"binary_mask_collection"};
+            return {"segmentation_collection"};
     }
-    if (targetType == "binary_mask_collection") {
+    if (targetType == "segmentation_collection") {
         if (asParent)
             return {"preprocessed_image_collection", "processed_image_collection"};
     }
-    if (targetType == "preprocessed_image_collection") {
+    if (targetType == "preprocessed_image_collection" || targetType == "processed_image_collection") {
         Q_UNUSED(asParent);
     }
     return {};
@@ -274,9 +275,9 @@ void CollectionDialog::updateOkButton()
     const QString type = m_typeCombo->currentText();
     bool enableOk = false;
 
-    if (type == "preprocessed_image_collection" || type == "other") {
+    if (type == "preprocessed_image_collection" || type == "processed_image_collection" || type == "other") {
         enableOk = !m_registryEdit->text().isEmpty();
-    } else if (type == "point_collection" || type == "binary_mask_collection") {
+    } else if (type == "point_collection" || type == "segmentation_collection") {
         enableOk = !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
     }
 

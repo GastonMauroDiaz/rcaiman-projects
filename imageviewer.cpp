@@ -1,13 +1,10 @@
 #include "imageviewer.h"
 #include "tiffreader.h"
 
-#include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QImage>
 #include <QMessageBox>
-#include <QPen>
-#include <QColor>
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
@@ -22,28 +19,24 @@ ImageViewer::ImageViewer(QWidget *parent)
 
 void ImageViewer::setPointCollection(const PointCollection &collection)
 {
-    // Remove existing point items
-    for (QGraphicsEllipseItem *item : std::as_const(m_pointItems)) {
+    clearOverlays();
+    m_pointCollection = collection;
+    if (collection.isValid())
+        addOverlay(collection);
+}
+
+void ImageViewer::addOverlay(const Overlay &overlay)
+{
+    overlay.addToScene(m_scene);
+}
+
+void ImageViewer::clearOverlays()
+{
+    for (QGraphicsItem *item : std::as_const(m_overlayItems)) {
         delete item;
     }
-    m_pointItems.clear();
-
-    if (!collection.isValid())
-        return;
-
-    const double width = 3.0;
-    const double height = 3.0;
-    const QPointF offset(-width / 2.0, -height / 2.0);
-
-    for (const PointRecord &rec : collection.points()) {
-        auto *ellipse = new QGraphicsEllipseItem(offset.x(), offset.y(), width, height);
-        ellipse->setPen(QPen(Qt::red));
-        ellipse->setBrush(QBrush(Qt::red));
-        // scene_x = col, scene_y = row
-        ellipse->setPos(rec.col, rec.row);
-        m_scene->addItem(ellipse);
-        m_pointItems.append(ellipse);
-    }
+    m_overlayItems.clear();
+    m_pointCollection = PointCollection();
 }
 
 void ImageViewer::setImage(const QString &fileName)
@@ -75,10 +68,7 @@ void ImageViewer::updateDisplay()
 
     QPixmap pixmap = QPixmap::fromImage(image);
     m_scene->clear();
-    for (QGraphicsEllipseItem *item : std::as_const(m_pointItems)) {
-        delete item;
-    }
-    m_pointItems.clear();
+    clearOverlays();
     m_imageItem = m_scene->addPixmap(pixmap);
     m_scene->setSceneRect(m_imageItem->boundingRect());
     m_autoFitImage = true;

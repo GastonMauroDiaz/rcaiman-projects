@@ -46,6 +46,7 @@ qt_add_executable(rcaiman_projects
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
+    overlay.h
     imageviewer.h imageviewer.cpp
     pointcollection.h pointcollection.cpp
     project.h project.cpp

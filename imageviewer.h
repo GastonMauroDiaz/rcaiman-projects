@@ -3,6 +3,7 @@
 
 #include "rasterdata.h"
 #include "rasterrenderer.h"
+#include "overlay.h"
 #include "pointcollection.h"
 
 #include <QGraphicsView>
@@ -10,7 +11,6 @@
 #include <QResizeEvent>
 #include <QWheelEvent>
 
-class QGraphicsEllipseItem;
 class QGraphicsPixmapItem;
 class QGraphicsScene;
 
@@ -24,6 +24,8 @@ public:
     void setImage(const QString &fileName);
     void setPointCollection(const PointCollection &collection);
     const PointCollection &pointCollection() const { return m_pointCollection; }
+    void addOverlay(const Overlay &overlay);
+    void clearOverlays();
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
 
@@ -46,7 +48,7 @@ private:
     QGraphicsScene *m_scene = nullptr;
     QGraphicsPixmapItem *m_imageItem = nullptr;
     PointCollection m_pointCollection;
-    QVector<QGraphicsEllipseItem*> m_pointItems;
+    QVector<QGraphicsItem*> m_overlayItems;
     RasterData m_rasterData;
     RasterRenderer m_renderer;
 };

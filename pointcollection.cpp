@@ -4,6 +4,10 @@
 #include <QFile>
 #include <QTextStream>
 #include <QStringList>
+#include <QGraphicsScene>
+#include <QGraphicsEllipseItem>
+#include <QPen>
+#include <QColor>
 
 PointCollection PointCollection::load(const QString &filePath, QString *errorMessage)
 {
@@ -24,7 +28,6 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
     }
 
     QStringList cols = header.split(',', Qt::SkipEmptyParts);
-    // Strip quotes from each column name
     for (QString &col : cols) {
         col = col.trimmed();
         if (col.startsWith('"') && col.endsWith('"') && col.size() > 1)
@@ -66,14 +69,22 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
     return collection;
 }
 
-bool PointCollection::isValid() const
+void PointCollection::addToScene(QGraphicsScene *scene) const
 {
-    return !m_points.isEmpty();
-}
+    if (!scene || m_points.isEmpty())
+        return;
 
-const QVector<PointRecord> &PointCollection::points() const
-{
-    return m_points;
+    const double width = 3.0;
+    const double height = 3.0;
+    const QPointF offset(-width / 2.0, -height / 2.0);
+
+    for (const PointRecord &rec : m_points) {
+        auto *ellipse = new QGraphicsEllipseItem(offset.x(), offset.y(), width, height);
+        ellipse->setPen(QPen(Qt::red));
+        ellipse->setBrush(QBrush(Qt::red));
+        ellipse->setPos(rec.col, rec.row);
+        scene->addItem(ellipse);
+    }
 }
 
 PointCollection PointCollection::loadFromDirectory(const QString &dirPath, QString *errorMessage)
@@ -113,4 +124,14 @@ PointCollection PointCollection::loadFromDirectory(const QString &dirPath, QStri
     }
 
     return result;
+}
+
+bool PointCollection::isValid() const
+{
+    return !m_points.isEmpty();
+}
+
+const QVector<PointRecord> &PointCollection::points() const
+{
+    return m_points;
 }
