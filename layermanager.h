@@ -20,6 +20,9 @@ public:
     Layer *layerAt(int index) const;
     int indexOf(Layer *layer) const;
 
+    Layer *activeLayer() const;
+    void setActiveLayer(Layer *layer);
+
     void addLayer(Layer *layer);   // toma ownership
     void removeLayer(int index);   // elimina y borra
     void clearAll();                // remueve todas las capas
@@ -32,12 +35,14 @@ public:
 
 signals:
     void layersChanged();    // lista o visibilidad cambió
+    void activeLayerChanged(Layer *layer);
 
 private:
     void rebuildZOrder();
 
     QGraphicsScene *m_scene = nullptr;
     QVector<Layer*> m_layers;  // propietario
+    Layer *m_activeLayer = nullptr;
 };
 
 #endif // LAYERMANAGER_H

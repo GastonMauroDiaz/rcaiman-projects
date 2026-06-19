@@ -31,6 +31,19 @@ int LayerManager::indexOf(Layer *layer) const
     return m_layers.indexOf(layer);
 }
 
+Layer *LayerManager::activeLayer() const
+{
+    return m_activeLayer;
+}
+
+void LayerManager::setActiveLayer(Layer *layer)
+{
+    if (m_activeLayer == layer)
+        return;
+    m_activeLayer = layer;
+    emit activeLayerChanged(m_activeLayer);
+}
+
 void LayerManager::addLayer(Layer *layer)
 {
     if (!layer)
@@ -55,6 +68,9 @@ void LayerManager::removeLayer(int index)
 
     Layer *layer = m_layers.takeAt(index);
 
+    if (m_activeLayer == layer)
+        m_activeLayer = nullptr;
+
     if (m_scene)
         layer->removeFromScene(m_scene);
 
@@ -72,6 +88,7 @@ void LayerManager::clearAll()
         m_scene->clear();  // destroys all QGraphicsItems
     }
 
+    m_activeLayer = nullptr;
     qDeleteAll(m_layers);
     m_layers.clear();
     emit layersChanged();

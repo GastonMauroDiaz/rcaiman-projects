@@ -46,6 +46,8 @@ public:
     // Allocates width * height * sampleSize bytes per band.
     void allocate(int width, int height, int bands, DataType type);
 
+    QVariant sample(int band, int row, int col) const;
+
 private:
     qsizetype bandByteOffset(int band) const;
 

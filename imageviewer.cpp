@@ -114,3 +114,35 @@ void ImageViewer::updateDragMode()
     setDragMode(shouldPan ? QGraphicsView::ScrollHandDrag : QGraphicsView::NoDrag);
     viewport()->setCursor(shouldPan ? Qt::OpenHandCursor : Qt::ArrowCursor);
 }
+
+void ImageViewer::mouseMoveEvent(QMouseEvent *event)
+{
+    PixelInfo info;
+    info.row = -1;
+    info.col = -1;
+    info.bandCount = 0;
+
+    Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
+    if (auto *img = qobject_cast<ImageLayer*>(active)) {
+        if (img->pixmapItem()) {
+            const QPointF scenePos = mapToScene(event->pos());
+            const QRectF bounds = img->pixmapItem()->boundingRect();
+            if (bounds.contains(scenePos)) {
+                const int col = static_cast<int>(scenePos.x() - bounds.left());
+                const int row = static_cast<int>(scenePos.y() - bounds.top());
+                const RasterData &data = img->rasterData();
+                if (row >= 0 && row < data.height() && col >= 0 && col < data.width()) {
+                    info.row = row;
+                    info.col = col;
+                    info.bandCount = data.bands();
+                    info.bandValues.reserve(data.bands());
+                    for (int b = 0; b < data.bands(); ++b)
+                        info.bandValues.append(data.sample(b, row, col));
+                }
+            }
+        }
+    }
+
+    emit pixelInfoChanged(info);
+    QGraphicsView::mouseMoveEvent(event);
+}

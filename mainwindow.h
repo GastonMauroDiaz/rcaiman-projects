@@ -11,6 +11,9 @@ class QFileSystemModel;
 class ImageViewer;
 class LayerManager;
 class LayersDock;
+class QTableWidget;
+
+struct PixelInfo;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -37,6 +40,7 @@ private slots:
     void onProjectTreeDoubleClicked(const QModelIndex &index);
     void onWorkspaceTabCloseRequested(int index);
     void onWorkspaceTabChanged(int index);
+    void onLayerSelectionChanged(int index);
 
 private:
     void openImageAtPath(const QString &filePath);
@@ -45,6 +49,7 @@ private:
     void updateProjectActions();
     ImageViewer *currentImageViewer() const;
     QString selectedProjectPath() const;
+    void updatePropertiesTable(const PixelInfo &info);
 
     Ui::MainWindow *ui;
     QFileSystemModel *m_projectFileSystemModel = nullptr;

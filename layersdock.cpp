@@ -67,6 +67,8 @@ LayersDock::LayersDock(QWidget *parent)
     connect(upBtn, &QPushButton::clicked, this, &LayersDock::moveUp);
     connect(downBtn, &QPushButton::clicked, this, &LayersDock::moveDown);
 
+    connect(m_listWidget, &QListWidget::currentRowChanged,
+            this, &LayersDock::updateActiveLayerFromUi);
     connect(m_listWidget, &QListWidget::itemChanged,
             this, &LayersDock::onItemChanged);
 }
@@ -96,10 +98,12 @@ void LayersDock::updateList()
 {
     m_updatingList = true;
     m_listWidget->clear();
+    m_listWidget->blockSignals(true);
 
     if (!m_manager)
     {
         m_updatingList = false;
+        m_listWidget->blockSignals(false);
         return;
     }
 
@@ -112,7 +116,28 @@ void LayersDock::updateList()
         m_listWidget->addItem(item);
     }
 
+    if (m_manager->activeLayer()) {
+        const int idx = m_manager->indexOf(m_manager->activeLayer());
+        if (idx >= 0)
+            m_listWidget->setCurrentRow(idx);
+    }
+
     m_updatingList = false;
+    m_listWidget->blockSignals(false);
+}
+
+void LayersDock::updateActiveLayerFromUi(int row)
+{
+    if (!m_manager)
+        return;
+
+    const int count = m_manager->layerCount();
+    if (row < 0 || row >= count) {
+        emit activeLayerChanged(-1);
+        return;
+    }
+
+    emit activeLayerChanged(row);
 }
 
 void LayersDock::onItemChanged(QListWidgetItem *item)

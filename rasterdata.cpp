@@ -1,5 +1,7 @@
 #include "rasterdata.h"
 
+#include <QVariant>
+
 int RasterData::sampleSize() const
 {
     switch (m_dataType) {
@@ -55,6 +57,32 @@ void RasterData::allocate(int width, int height, int bands, DataType type)
     m_bandNames.reserve(bands);
     for (int i = 0; i < bands; ++i)
         m_bandNames.append(QString());
+}
+
+QVariant RasterData::sample(int band, int row, int col) const
+{
+    if (band < 0 || band >= m_bands || row < 0 || row >= m_height || col < 0 || col >= m_width || m_data.isEmpty())
+        return {}; 
+
+    const qsizetype offset = static_cast<qsizetype>(row) * m_width + col;
+    switch (m_dataType) {
+    case DataType::UInt8:
+        return QVariant(static_cast<uint>(bandPointer<quint8>(band)[offset]));
+    case DataType::UInt16:
+        return QVariant(static_cast<uint>(bandPointer<quint16>(band)[offset]));
+    case DataType::Int16:
+        return QVariant(static_cast<int>(bandPointer<qint16>(band)[offset]));
+    case DataType::UInt32:
+        return QVariant(static_cast<uint>(bandPointer<quint32>(band)[offset]));
+    case DataType::Int32:
+        return QVariant(static_cast<int>(bandPointer<qint32>(band)[offset]));
+    case DataType::Float32:
+        return QVariant(bandPointer<float>(band)[offset]);
+    case DataType::Float64:
+        return QVariant(bandPointer<double>(band)[offset]);
+    default:
+        return {};
+    }
 }
 
 qsizetype RasterData::bandByteOffset(int band) const

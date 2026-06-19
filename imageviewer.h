@@ -3,12 +3,20 @@
 
 #include <QGraphicsView>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
 class QGraphicsScene;
 class LayerManager;
 class ImageLayer;
+
+struct PixelInfo {
+    int row = -1;
+    int col = -1;
+    int bandCount = 0;
+    QVector<QVariant> bandValues;
+};
 
 class ImageViewer : public QGraphicsView
 {
@@ -24,11 +32,15 @@ public:
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
 
+signals:
+    void pixelInfoChanged(const PixelInfo &info);
+
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
 
 private:
     void fitImageToView();

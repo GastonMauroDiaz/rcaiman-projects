@@ -18,9 +18,13 @@ public:
     void setProjectPath(const QString &path);
     LayerManager *layerManager() const { return m_manager; }
 
+signals:
+    void activeLayerChanged(int index);
+
 private slots:
     void updateList();
     void onItemChanged(QListWidgetItem *item);
+    void updateActiveLayerFromUi(int row);
     void addPointLayer();
     void removeLayer();
     void moveUp();

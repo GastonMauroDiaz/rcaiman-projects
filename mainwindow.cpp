@@ -114,6 +114,11 @@ MainWindow::MainWindow(QWidget *parent)
     if (m_project.isValid())
         m_layersDock->setProjectPath(m_project.rootPath());
 
+    if (m_layersDock) {
+        connect(m_layersDock, &LayersDock::activeLayerChanged,
+                this, &MainWindow::onLayerSelectionChanged);
+    }
+
     // Ensure 3-column layout: Explorer (left), Viewer (center), Layers+Properties (right)
     setDockNestingEnabled(true);
     addDockWidget(Qt::LeftDockWidgetArea, ui->dockProjectExplorer);
@@ -480,6 +485,23 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
     updateProjectActions();
 }
 
+void MainWindow::onLayerSelectionChanged(int index)
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer)
+        return;
+
+    LayerManager *mgr = viewer->layerManager();
+    if (!mgr)
+        return;
+
+    if (index < 0 || index >= mgr->layerCount())
+        return;
+
+    Layer *layer = mgr->layerAt(index);
+    mgr->setActiveLayer(layer);
+}
+
 void MainWindow::onWorkspaceTabChanged(int index)
 {
     if (index < 0) {
@@ -560,6 +582,8 @@ void MainWindow::openImageAtPath(const QString &filePath)
     if (m_layersDock)
         m_layersDock->setLayerManager(viewer->layerManager());
 
+    connect(viewer, &ImageViewer::pixelInfoChanged, this, &MainWindow::updatePropertiesTable);
+
     updateProjectActions();
 }
 
@@ -617,6 +641,29 @@ ImageViewer *MainWindow::currentImageViewer() const
         return nullptr;
     }
     return qobject_cast<ImageViewer *>(ui->workspaceTabs->widget(index));
+}
+
+void MainWindow::updatePropertiesTable(const PixelInfo &info)
+{
+    if (!ui->propertiesTable)
+        return;
+
+    ui->propertiesTable->setRowCount(0);
+    if (info.row < 0 || info.bandCount <= 0)
+        return;
+
+    ui->propertiesTable->setRowCount(2 + info.bandCount);
+
+    ui->propertiesTable->setItem(0, 0, new QTableWidgetItem("Row"));
+    ui->propertiesTable->setItem(0, 1, new QTableWidgetItem(QString::number(info.row)));
+
+    ui->propertiesTable->setItem(1, 0, new QTableWidgetItem("Column"));
+    ui->propertiesTable->setItem(1, 1, new QTableWidgetItem(QString::number(info.col)));
+
+    for (int b = 0; b < info.bandCount; ++b) {
+        ui->propertiesTable->setItem(2 + b, 0, new QTableWidgetItem(QStringLiteral("Band %1").arg(b)));
+        ui->propertiesTable->setItem(2 + b, 1, new QTableWidgetItem(info.bandValues.value(b).toString()));
+    }
 }
 
 QString MainWindow::selectedProjectPath() const
