@@ -5,6 +5,7 @@
 #include "layermanager.h"
 #include "layer.h"
 #include "pointlayer.h"
+#include "previewdock.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
 
@@ -19,6 +20,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMenu>
+#include <QPixmap>
 #include <QSettings>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -98,6 +100,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::onProjectTreeDoubleClicked);
 
+    connect(ui->projectTree,
+            &QTreeView::clicked,
+            this,
+            &MainWindow::onProjectTreeItemClicked);
+
     connect(ui->workspaceTabs,
             &QTabWidget::tabCloseRequested,
             this,
@@ -136,6 +143,12 @@ MainWindow::MainWindow(QWidget *parent)
     // Split into 3 areas: Explorer | Viewer | (Layers ⊓ Properties)
     splitDockWidget(ui->dockViewer, ui->dockLayers, Qt::Horizontal);
     splitDockWidget(ui->dockLayers, ui->dockProperties, Qt::Vertical);
+
+    // Preview Dock: below Project Explorer
+    m_previewDock = new PreviewDock(this);
+    addDockWidget(Qt::LeftDockWidgetArea, m_previewDock);
+    splitDockWidget(ui->dockProjectExplorer, m_previewDock, Qt::Vertical);
+    m_previewDock->hide(); // hidden until a project is loaded
 
     // Resize proportions: Viewer takes more space
     resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
@@ -468,6 +481,42 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     }
 }
 
+void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
+{
+    if (!m_previewDock || !m_project.isValid())
+        return;
+
+    const QString filePath = m_projectFileSystemModel->filePath(index);
+    const QFileInfo fi(filePath);
+
+    if (!fi.isFile()) {
+        m_previewDock->clear();
+        return;
+    }
+
+    const QString suffix = fi.suffix().toLower();
+    const QStringList textExts = {"yaml", "yml", "json", "csv", "txt", "log", "md"};
+    const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
+
+    if (textExts.contains(suffix)) {
+        QFile file(filePath);
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            m_previewDock->showText(QString::fromUtf8(file.readAll()));
+        } else {
+            m_previewDock->clear();
+        }
+    } else if (imgExts.contains(suffix)) {
+        QPixmap pix(filePath);
+        if (!pix.isNull()) {
+            m_previewDock->showImage(pix);
+        } else {
+            m_previewDock->clear();
+        }
+    } else {
+        m_previewDock->clear();
+    }
+}
+
 void MainWindow::onWorkspaceTabCloseRequested(int index)
 {
     QWidget *tabWidget = ui->workspaceTabs->widget(index);
@@ -709,6 +758,8 @@ void MainWindow::loadProject(const Project &project)
     setWindowTitle(QString("%1 - rcaiman_projects").arg(m_project.name()));
     if (m_layersDock)
         m_layersDock->setProjectPath(m_project.rootPath());
+    if (m_previewDock)
+        m_previewDock->show();
     addToRecentProjects(m_project.rootPath());
 }
 

@@ -14,6 +14,7 @@ class LayerManager;
 class LayersDock;
 class QTableWidget;
 class PointLayer;
+class PreviewDock;
 
 struct PixelInfo;
 
@@ -45,6 +46,7 @@ private slots:
     void onLayerSelectionChanged(int index);
     void onEditPointsToggled(bool enabled);
     void onPointSelectionChanged(int index);
+    void onProjectTreeItemClicked(const QModelIndex &index);
 
 private:
     void openImageAtPath(const QString &filePath);
@@ -62,6 +64,7 @@ private:
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
+    PreviewDock *m_previewDock = nullptr;
     QStringList m_recentProjects;
     PointLayer *m_currentPointLayer = nullptr;
     QMetaObject::Connection m_pointLayerConnection;
