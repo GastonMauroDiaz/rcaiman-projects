@@ -4,6 +4,8 @@
 #include "layer.h"
 #include "pointcollection.h"
 
+class PointItem;
+
 class PointLayer : public Layer
 {
     Q_OBJECT
@@ -15,8 +17,37 @@ public:
 
     const PointCollection &collection() const { return m_collection; }
 
+    void setEditMode(bool enabled);
+    bool editMode() const { return m_editMode; }
+
+    bool saveCsv(QString *errorMessage = nullptr);
+
+    void addPoint(double row, double col);
+
+    // Selection
+    int selectedPointIndex() const { return m_selectedPointIndex; }
+    const PointRecord *selectedPoint() const;
+    void selectPoint(int index);
+    void clearSelection();
+
+signals:
+    void selectedPointChanged(int index);  // -1 = deseleccionado
+
+private slots:
+    void onPointClicked(int index);
+    void onPointMoved(int index, QPointF pos);
+    void onPointDeleted(int index);
+
 private:
+    void rebuildItems(QGraphicsScene *scene);
+    void clearPointItems();
+    bool ensureBackup();
+    void removeBackup();
+
     PointCollection m_collection;
+    bool m_editMode = false;
+    QString m_backupPath;
+    int m_selectedPointIndex = -1;
 };
 
 #endif // POINTLAYER_H

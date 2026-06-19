@@ -2,7 +2,10 @@
 #include "imagelayer.h"
 #include "layermanager.h"
 #include "layer.h"
+#include "pointitem.h"
+#include "pointlayer.h"
 
+#include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QMessageBox>
@@ -60,6 +63,19 @@ void ImageViewer::setPanModeEnabled(bool enabled)
     updateDragMode();
 }
 
+void ImageViewer::setPointEditEnabled(bool enabled)
+{
+    m_pointEditEnabled = enabled;
+
+    if (!m_layerManager)
+        return;
+
+    Layer *active = m_layerManager->activeLayer();
+    if (auto *pointLayer = qobject_cast<PointLayer*>(active)) {
+        pointLayer->setEditMode(enabled);
+    }
+}
+
 void ImageViewer::keyPressEvent(QKeyEvent *event)
 {
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
@@ -115,6 +131,28 @@ void ImageViewer::updateDragMode()
     viewport()->setCursor(shouldPan ? Qt::OpenHandCursor : Qt::ArrowCursor);
 }
 
+void ImageViewer::mousePressEvent(QMouseEvent *event)
+{
+    if (m_pointEditEnabled && event->button() == Qt::LeftButton) {
+        // Check if there's a PointItem under the cursor (to allow drag/delete)
+        const QPointF scenePos = mapToScene(event->pos());
+        QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
+        const bool isPointItem = itemUnder && (itemUnder->type() == QGraphicsEllipseItem::Type);
+        // Only add a new point if we didn't click on an existing point
+        // (QGraphicsEllipseItem::Type is used because PointItem inherits from it)
+        if (!isPointItem) {
+            Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
+            if (auto *pointLayer = qobject_cast<PointLayer*>(active)) {
+                pointLayer->addPoint(scenePos.y(), scenePos.x());  // row=y, col=x
+                event->accept();
+                return;
+            }
+        }
+    }
+
+    QGraphicsView::mousePressEvent(event);
+}
+
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     PixelInfo info;
@@ -123,22 +161,28 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
     info.bandCount = 0;
 
     Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
-    if (auto *img = qobject_cast<ImageLayer*>(active)) {
-        if (img->pixmapItem()) {
-            const QPointF scenePos = mapToScene(event->pos());
-            const QRectF bounds = img->pixmapItem()->boundingRect();
-            if (bounds.contains(scenePos)) {
-                const int col = static_cast<int>(scenePos.x() - bounds.left());
-                const int row = static_cast<int>(scenePos.y() - bounds.top());
-                const RasterData &data = img->rasterData();
-                if (row >= 0 && row < data.height() && col >= 0 && col < data.width()) {
-                    info.row = row;
-                    info.col = col;
-                    info.bandCount = data.bands();
-                    info.bandValues.reserve(data.bands());
-                    for (int b = 0; b < data.bands(); ++b)
-                        info.bandValues.append(data.sample(b, row, col));
-                }
+    // Only emit pixel info when an ImageLayer is active.
+    // Other layer types (e.g. PointLayer) have their own properties display.
+    auto *img = qobject_cast<ImageLayer*>(active);
+    if (!img) {
+        QGraphicsView::mouseMoveEvent(event);
+        return;
+    }
+
+    if (img->pixmapItem()) {
+        const QPointF scenePos = mapToScene(event->pos());
+        const QRectF bounds = img->pixmapItem()->boundingRect();
+        if (bounds.contains(scenePos)) {
+            const int col = static_cast<int>(scenePos.x() - bounds.left());
+            const int row = static_cast<int>(scenePos.y() - bounds.top());
+            const RasterData &data = img->rasterData();
+            if (row >= 0 && row < data.height() && col >= 0 && col < data.width()) {
+                info.row = row;
+                info.col = col;
+                info.bandCount = data.bands();
+                info.bandValues.reserve(data.bands());
+                for (int b = 0; b < data.bands(); ++b)
+                    info.bandValues.append(data.sample(b, row, col));
             }
         }
     }

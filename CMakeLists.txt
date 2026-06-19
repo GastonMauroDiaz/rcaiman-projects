@@ -52,6 +52,7 @@ qt_add_executable(rcaiman_projects
     layermanager.h layermanager.cpp
     layersdock.h layersdock.cpp
     pointcollection.h pointcollection.cpp
+    pointitem.h pointitem.cpp
     pointlayer.h pointlayer.cpp
     project.h project.cpp
     rasterdata.h rasterdata.cpp

@@ -6,12 +6,14 @@
 #include <QMainWindow>
 #include <QMap>
 #include <QSettings>
+#include <QMetaObject>
 
 class QFileSystemModel;
 class ImageViewer;
 class LayerManager;
 class LayersDock;
 class QTableWidget;
+class PointLayer;
 
 struct PixelInfo;
 
@@ -41,6 +43,8 @@ private slots:
     void onWorkspaceTabCloseRequested(int index);
     void onWorkspaceTabChanged(int index);
     void onLayerSelectionChanged(int index);
+    void onEditPointsToggled(bool enabled);
+    void onPointSelectionChanged(int index);
 
 private:
     void openImageAtPath(const QString &filePath);
@@ -50,6 +54,8 @@ private:
     ImageViewer *currentImageViewer() const;
     QString selectedProjectPath() const;
     void updatePropertiesTable(const PixelInfo &info);
+    void updatePropertiesForPointLayer(PointLayer *layer);
+    void clearPropertiesTable();
 
     Ui::MainWindow *ui;
     QFileSystemModel *m_projectFileSystemModel = nullptr;
@@ -57,6 +63,8 @@ private:
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
     QStringList m_recentProjects;
+    PointLayer *m_currentPointLayer = nullptr;
+    QMetaObject::Connection m_pointLayerConnection;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

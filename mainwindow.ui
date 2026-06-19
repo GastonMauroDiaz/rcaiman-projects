@@ -64,8 +64,9 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionPan"/>
-  </widget>
+    <addaction name="actionPan"/>
+    <addaction name="actionEditPoints"/>
+   </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">
     <string>Project Explorer</string>
@@ -229,6 +230,17 @@
    </property>
    <property name="text">
     <string>Pan</string>
+   </property>
+  </action>
+  <action name="actionEditPoints">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Edit Points</string>
+   </property>
+   <property name="toolTip">
+    <string>Edit points on the active point layer</string>
    </property>
   </action>
  </widget>

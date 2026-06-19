@@ -3,6 +3,7 @@
 #include "imageviewer.h"
 #include "layersdock.h"
 #include "layermanager.h"
+#include "layer.h"
 #include "pointlayer.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
@@ -19,6 +20,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QSettings>
+#include <QTableWidget>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -86,6 +88,11 @@ MainWindow::MainWindow(QWidget *parent)
                 }
             });
 
+    connect(ui->actionEditPoints,
+            &QAction::toggled,
+            this,
+            &MainWindow::onEditPointsToggled);
+
     connect(ui->projectTree,
             &QTreeView::doubleClicked,
             this,
@@ -134,8 +141,6 @@ MainWindow::MainWindow(QWidget *parent)
     resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
                 {300, 600, 300}, Qt::Horizontal);
 
-    // Remove old actionLoadPoints (moved to LayersDock)
-    // No longer needed; the UI has been cleaned up.
     updateProjectActions();
     updateRecentProjectsMenu();
 }
@@ -158,7 +163,6 @@ void MainWindow::addToRecentProjects(const QString &path)
 
 void MainWindow::updateRecentProjectsMenu()
 {
-    // Remove old actions from recent menu
     QMenu *recentMenu = findChild<QMenu *>("menuRecentProjects");
     if (!recentMenu)
         return;
@@ -173,7 +177,6 @@ void MainWindow::updateRecentProjectsMenu()
         QAction *act = recentMenu->addAction(QDir(path).dirName());
         act->setToolTip(path);
         connect(act, &QAction::triggered, this, [this, path]() {
-            // Try to open project
             QString errorMessage;
             const Project project = Project::open(path, &errorMessage);
             if (!project.isValid()) {
@@ -287,7 +290,6 @@ void MainWindow::importRaw()
     if (fileNames.isEmpty())
         return;
 
-    // Ensure raw_files/ exists
     const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
     QDir().mkpath(rawDir);
 
@@ -296,7 +298,7 @@ void MainWindow::importRaw()
         const QFileInfo fi(srcPath);
         const QString destPath = QDir(rawDir).filePath(fi.fileName());
         if (QFile::exists(destPath))
-            continue; // skip duplicates
+            continue;
         if (QFile::copy(srcPath, destPath))
             ++copiedCount;
     }
@@ -319,7 +321,6 @@ void MainWindow::extractRawData()
     const QString sensorDir = QDir(m_project.rootPath()).filePath("sensor_data");
     QDir().mkpath(sensorDir);
 
-    // Collect raw files recursively
     QStringList rawFiles;
     QDirIterator it(rawDir, QDir::Files, QDirIterator::Subdirectories);
     const QStringList rawExtensions = {"cr2", "cr3", "nef", "arw", "dng", "raf",
@@ -346,7 +347,7 @@ void MainWindow::extractRawData()
         const QString tiffPath = QDir(sensorDir).filePath(baseName + ".tif");
 
         if (QFile::exists(tiffPath))
-            continue; // skip already extracted
+            continue;
 
         statusBar()->showMessage(
             QStringLiteral("Extracting: %1").arg(fi.fileName()), 0);
@@ -433,13 +434,11 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     if (!fi.isDir())
         return;
 
-    // Check for collection.yaml
     const QString yamlPath = QDir(filePath).filePath("collection.yaml");
     const QFileInfo yamlFi(yamlPath);
     if (!yamlFi.exists())
         return;
 
-    // Parse minimal YAML to extract class
     QFile file(yamlPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
         return;
@@ -457,7 +456,6 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
     }
 
     if (type == "point_collection") {
-        // Add as a PointLayer to the current viewer
         ImageViewer *viewer = currentImageViewer();
         if (!viewer) {
             QMessageBox::information(this, "Add layer",
@@ -500,15 +498,117 @@ void MainWindow::onLayerSelectionChanged(int index)
 
     Layer *layer = mgr->layerAt(index);
     mgr->setActiveLayer(layer);
+
+    // Disconnect previous point layer connection
+    if (m_currentPointLayer) {
+        disconnect(m_pointLayerConnection);
+        m_currentPointLayer = nullptr;
+    }
+
+    if (auto *pointLayer = qobject_cast<PointLayer*>(layer)) {
+        m_currentPointLayer = pointLayer;
+        m_pointLayerConnection = connect(pointLayer, &PointLayer::selectedPointChanged,
+                                         this, &MainWindow::onPointSelectionChanged);
+        // Show Section A (info general)
+        updatePropertiesForPointLayer(pointLayer);
+        // Also show Section B if there's already a selection
+        if (pointLayer->selectedPointIndex() >= 0)
+            onPointSelectionChanged(pointLayer->selectedPointIndex());
+        ui->actionEditPoints->setEnabled(true);
+    } else {
+        // Restore pixel info behaviour for ImageLayer
+        m_currentPointLayer = nullptr;
+        ui->actionEditPoints->setChecked(false);
+        ui->actionEditPoints->setEnabled(false);
+    }
+}
+
+void MainWindow::onPointSelectionChanged(int index)
+{
+    if (!m_currentPointLayer || !ui->propertiesTable)
+        return;
+
+    // Rebuild table: Section A + Section B
+    const PointCollection &col = m_currentPointLayer->collection();
+    const int sectionARows = 4;
+    const int sectionBRows = (index >= 0) ? (3 + col.points()[index].attributes.size()) : 0;
+
+    ui->propertiesTable->setRowCount(sectionARows + sectionBRows);
+
+    // Section A — File info
+    ui->propertiesTable->setItem(0, 0, new QTableWidgetItem("Type"));
+    ui->propertiesTable->setItem(0, 1, new QTableWidgetItem("Point Layer"));
+
+    ui->propertiesTable->setItem(1, 0, new QTableWidgetItem("Source"));
+    ui->propertiesTable->setItem(1, 1, new QTableWidgetItem(m_currentPointLayer->sourcePath()));
+
+    ui->propertiesTable->setItem(2, 0, new QTableWidgetItem("Records"));
+    ui->propertiesTable->setItem(2, 1, new QTableWidgetItem(QString::number(col.recordCount())));
+
+    ui->propertiesTable->setItem(3, 0, new QTableWidgetItem("Columns"));
+    ui->propertiesTable->setItem(3, 1, new QTableWidgetItem(col.columnNames().join(", ")));
+
+    // Section B — Selected point detail
+    if (index >= 0 && index < col.points().size()) {
+        const PointRecord &rec = col.points()[index];
+        int row = sectionARows;
+
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Index"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(index)));
+        ++row;
+
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Row"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.row)));
+        ++row;
+
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Col"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.col)));
+        ++row;
+
+        // Extra attributes
+        const QStringList colNames = col.columnNames();
+        for (int i = 0; i < rec.attributes.size(); ++i) {
+            const int csvColIndex = i + 2; // skip row, col
+            const QString attrName = (csvColIndex < colNames.size())
+                ? colNames[csvColIndex] : QStringLiteral("Attr %1").arg(i);
+
+            QString valueStr;
+            if (rec.attributes[i].isValid()) {
+                valueStr = rec.attributes[i].toString();
+            } else {
+                valueStr = "NA";
+            }
+
+            ui->propertiesTable->setItem(row, 0, new QTableWidgetItem(attrName));
+            ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(valueStr));
+            ++row;
+        }
+    }
+}
+
+void MainWindow::onEditPointsToggled(bool enabled)
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer)
+        return;
+
+    viewer->setPointEditEnabled(enabled);
 }
 
 void MainWindow::onWorkspaceTabChanged(int index)
 {
+    // Clean up previous point layer connection
+    if (m_currentPointLayer) {
+        disconnect(m_pointLayerConnection);
+        m_currentPointLayer = nullptr;
+    }
+
     if (index < 0) {
         ui->actionPan->setChecked(false);
         ui->actionPan->setEnabled(false);
         if (m_layersDock)
             m_layersDock->setLayerManager(nullptr);
+        clearPropertiesTable();
         return;
     }
 
@@ -516,6 +616,13 @@ void MainWindow::onWorkspaceTabChanged(int index)
     if (viewer) {
         ui->actionPan->setChecked(viewer->panModeEnabled());
         ui->actionPan->setEnabled(true);
+
+        LayerManager *mgr = viewer->layerManager();
+        Layer *active = mgr ? mgr->activeLayer() : nullptr;
+        const bool isPointLayer = (qobject_cast<PointLayer*>(active) != nullptr);
+        ui->actionEditPoints->setEnabled(isPointLayer);
+        ui->actionEditPoints->setChecked(isPointLayer && viewer->pointEditEnabled());
+
         if (m_layersDock)
             m_layersDock->setLayerManager(viewer->layerManager());
     }
@@ -624,7 +731,6 @@ void MainWindow::updateProjectActions()
     ui->actionPan->setEnabled(currentImageViewer() != nullptr);
     ui->actionImportRaw->setEnabled(hasProject);
 
-    // Enable "Extract raw data" if there are raw files in the RAW folder
     bool hasRawFiles = false;
     if (hasProject) {
         const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
@@ -661,9 +767,23 @@ void MainWindow::updatePropertiesTable(const PixelInfo &info)
     ui->propertiesTable->setItem(1, 1, new QTableWidgetItem(QString::number(info.col)));
 
     for (int b = 0; b < info.bandCount; ++b) {
-        ui->propertiesTable->setItem(2 + b, 0, new QTableWidgetItem(QStringLiteral("Band %1").arg(b)));
+        ui->propertiesTable->setItem(2 + b, 0, new QTableWidgetItem(QStringLiteral("Band %1").arg(b + 1)));
         ui->propertiesTable->setItem(2 + b, 1, new QTableWidgetItem(info.bandValues.value(b).toString()));
     }
+}
+
+void MainWindow::updatePropertiesForPointLayer(PointLayer *layer)
+{
+    // Show Section A (file info) — called when layer is selected
+    // This is now handled by onPointSelectionChanged which will be called
+    // after connection, but we call it directly if there's no selection yet.
+    onPointSelectionChanged(layer ? layer->selectedPointIndex() : -1);
+}
+
+void MainWindow::clearPropertiesTable()
+{
+    if (ui->propertiesTable)
+        ui->propertiesTable->setRowCount(0);
 }
 
 QString MainWindow::selectedProjectPath() const

@@ -10,6 +10,7 @@
 class QGraphicsScene;
 class LayerManager;
 class ImageLayer;
+class PointLayer;
 
 struct PixelInfo {
     int row = -1;
@@ -29,6 +30,9 @@ public:
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
 
+    void setPointEditEnabled(bool enabled);
+    bool pointEditEnabled() const { return m_pointEditEnabled; }
+
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
 
@@ -41,6 +45,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
 
 private:
     void fitImageToView();
@@ -49,6 +54,7 @@ private:
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
     bool m_autoFitImage = false;
+    bool m_pointEditEnabled = false;
     QGraphicsScene *m_scene = nullptr;
     LayerManager *m_layerManager = nullptr;
     ImageLayer *m_imageLayer = nullptr;
