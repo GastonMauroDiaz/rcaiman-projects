@@ -44,6 +44,7 @@ private:
     void updateProjectExplorer();
     void updateProjectActions();
     ImageViewer *currentImageViewer() const;
+    QString selectedProjectPath() const;
 
     Ui::MainWindow *ui;
     QFileSystemModel *m_projectFileSystemModel = nullptr;

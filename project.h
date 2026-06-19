@@ -6,9 +6,9 @@
 #include <QVector>
 
 struct Collection {
-    QString dirPath;   // absolute path to the folder
-    QString dirName;   // folder name (basename of dirPath)
-    QString type;
+    QString dirPath;        // absolute path to the folder
+    QString dirName;        // folder name (basename of dirPath)
+    QString collectionClass;
     QString parent;
     QString related;
     QString registry;
@@ -25,7 +25,7 @@ public:
 
     // Register a collection: creates collection.yaml inside dirPath.
     static bool registerCollection(const QString &dirPath,
-                                   const QString &type,
+                                   const QString &collectionClass,
                                    const QString &parent,
                                    const QString &related,
                                    const QString &registry,
@@ -42,6 +42,8 @@ public:
     QString rootPath() const;
     QString name() const;
     QString created() const;
+
+    static QStringList reservedDirectories();
 
 private:
     Project(QString rootPath, QString name, QString created);

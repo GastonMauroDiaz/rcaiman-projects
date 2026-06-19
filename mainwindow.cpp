@@ -371,7 +371,7 @@ void MainWindow::registerCollection()
     }
 
     const QVector<Collection> existingCollections = Project::discoverCollections(m_project.rootPath());
-    CollectionDialog dialog(m_project.rootPath(), existingCollections, this);
+    CollectionDialog dialog(m_project.rootPath(), existingCollections, selectedProjectPath(), this);
     if (dialog.exec() != QDialog::Accepted)
         return;
 
@@ -379,9 +379,27 @@ void MainWindow::registerCollection()
     if (dirPath.isEmpty())
         return;
 
+    const QString selectedDirName = QDir(dirPath).dirName();
+
+    if (Project::reservedDirectories().contains(selectedDirName, Qt::CaseInsensitive)) {
+        QMessageBox::warning(this, "Register collection",
+                             QStringLiteral("Cannot register collection: \"%1\" is a reserved directory.").arg(selectedDirName));
+        return;
+    }
+
+    const QString yamlPath = QDir(dirPath).filePath("collection.yaml");
+    if (QFileInfo::exists(yamlPath)) {
+        const QMessageBox::StandardButton reply = QMessageBox::question(
+            this,
+            "Register collection",
+            QStringLiteral("Collection configuration for this folder already exists. Overwrite it?"));
+        if (reply != QMessageBox::Yes)
+            return;
+    }
+
     QString errorMsg;
     if (Project::registerCollection(dirPath,
-                                     dialog.collectionType(),
+                                     dialog.collectionClass(),
                                      dialog.parent(),
                                      dialog.related(),
                                      dialog.registry(),
@@ -519,7 +537,7 @@ void MainWindow::openImageAtPath(const QString &filePath)
         if (matchingParents.size() == 1) {
             QStringList pointCollections;
             for (const Collection &col : collections) {
-                if (col.type == "point_collection" && col.parent == matchingParents.first()) {
+                if (col.collectionClass == "point_collection" && col.parent == matchingParents.first()) {
                     pointCollections.append(col.dirPath);
                 }
             }
@@ -599,4 +617,17 @@ ImageViewer *MainWindow::currentImageViewer() const
         return nullptr;
     }
     return qobject_cast<ImageViewer *>(ui->workspaceTabs->widget(index));
+}
+
+QString MainWindow::selectedProjectPath() const
+{
+    const QModelIndex index = ui->projectTree->currentIndex();
+    if (!index.isValid())
+        return {};
+
+    const QFileInfo fi(m_projectFileSystemModel->filePath(index));
+    if (!fi.isDir())
+        return {};
+
+    return fi.absoluteFilePath();
 }

@@ -16,17 +16,18 @@ class CollectionDialog : public QDialog
 public:
     explicit CollectionDialog(const QString &projectRootPath,
                               const QVector<Collection> &existingCollections,
+                              const QString &preselectedDirectory = QString(),
                               QWidget *parent = nullptr);
 
     QString selectedDirectory() const;
-    QString collectionType() const;
+    QString collectionClass() const;
     QString parent() const;
     QString related() const;
     QString registry() const;
     QString script() const;
 
 private slots:
-    void onTypeChanged(int index);
+    void onClassChanged(int index);
     void updateOkButton();
     void browseRegistry();
     void browseScript();
@@ -36,7 +37,7 @@ private:
     void updateFieldVisibility();
     void populateParentCombo();
     void populateRelatedCombo();
-    QStringList compatibleTypes(const QString &targetType, bool asParent) const;
+    QStringList compatibleClasses(const QString &targetClass, bool asParent) const;
 
     QString m_projectRootPath;
     QVector<Collection> m_existingCollections;

@@ -110,7 +110,7 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
 }
 
 bool Project::registerCollection(const QString &dirPath,
-                                 const QString &type,
+                                 const QString &collectionClass,
                                  const QString &parent,
                                  const QString &related,
                                  const QString &registry,
@@ -134,7 +134,7 @@ bool Project::registerCollection(const QString &dirPath,
 
     QTextStream stream(&file);
     stream << "schema_version: 1\n";
-    stream << "class: " << type << "\n";
+    stream << "class: " << collectionClass << "\n";
     if (!parent.isEmpty())
         stream << "parent: " << parent << "\n";
     if (!related.isEmpty())
@@ -161,7 +161,7 @@ QVector<Collection> Project::discoverCollections(const QString &rootPath)
         if (!fi.exists())
             continue;
 
-        // Parse minimal YAML to extract type, registry, script
+        // Parse minimal YAML to extract class, registry, script
         QFile file(yamlPath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
             continue;
@@ -174,7 +174,7 @@ QVector<Collection> Project::discoverCollections(const QString &rootPath)
         while (!stream.atEnd()) {
             const QString line = stream.readLine();
             if (line.startsWith("class:"))
-                col.type = valueAfterColon(line);
+                col.collectionClass = valueAfterColon(line);
             else if (line.startsWith("parent:"))
                 col.parent = valueAfterColon(line);
             else if (line.startsWith("related:"))
@@ -242,13 +242,15 @@ QString Project::metadataFilePath(const QString &rootPath)
     return QDir(rootPath).filePath("project.yaml");
 }
 
+QStringList Project::reservedDirectories()
+{
+    return {"raw_files", "sensor_data"};
+}
+
 bool Project::createDirectoryStructure(const QString &rootPath, QString *errorMessage)
 {
     QDir root(rootPath);
-    const QStringList directories = {
-        "raw_files",
-        "sensor_data",
-    };
+    const QStringList directories = Project::reservedDirectories();
 
     for (const QString &directory : directories) {
         if (!root.mkpath(directory)) {

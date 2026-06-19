@@ -13,6 +13,7 @@
 
 CollectionDialog::CollectionDialog(const QString &projectRootPath,
                                    const QVector<Collection> &existingCollections,
+                                   const QString &preselectedDirectory,
                                    QWidget *parent)
     : QDialog(parent)
     , m_projectRootPath(projectRootPath)
@@ -23,18 +24,27 @@ CollectionDialog::CollectionDialog(const QString &projectRootPath,
 
     setupUI();
 
+    if (!preselectedDirectory.isEmpty()) {
+        m_directoryEdit->setText(preselectedDirectory);
+        const bool ok = preselectedDirectory.startsWith(m_projectRootPath) && preselectedDirectory != m_projectRootPath;
+        if (m_buttonBox) {
+            if (auto *okBtn = m_buttonBox->button(QDialogButtonBox::Ok))
+                okBtn->setEnabled(ok);
+        }
+    }
+
     connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &CollectionDialog::onTypeChanged);
+            this, &CollectionDialog::onClassChanged);
 
     connect(m_registryEdit, &QLineEdit::textChanged, this, [this](const QString &) {
         Q_UNUSED(this);
-        onTypeChanged(m_typeCombo->currentIndex());
+        onClassChanged(m_typeCombo->currentIndex());
     });
     connect(m_parentCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &CollectionDialog::updateOkButton);
 
     updateFieldVisibility();
-    onTypeChanged(m_typeCombo->currentIndex());
+    onClassChanged(m_typeCombo->currentIndex());
 }
 
 QString CollectionDialog::selectedDirectory() const
@@ -42,7 +52,7 @@ QString CollectionDialog::selectedDirectory() const
     return m_directoryEdit->text();
 }
 
-QString CollectionDialog::collectionType() const
+QString CollectionDialog::collectionClass() const
 {
     return m_typeCombo->currentText();
 }
@@ -171,7 +181,7 @@ void CollectionDialog::setupUI()
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
 
-void CollectionDialog::onTypeChanged(int index)
+void CollectionDialog::onClassChanged(int index)
 {
     Q_UNUSED(index);
     updateFieldVisibility();
@@ -182,19 +192,19 @@ void CollectionDialog::onTypeChanged(int index)
 
 void CollectionDialog::updateFieldVisibility()
 {
-    const QString type = m_typeCombo->currentText();
+    const QString collectionClass = m_typeCombo->currentText();
 
-    if (type == "preprocessed_image_collection" || type == "processed_image_collection") {
+    if (collectionClass == "preprocessed_image_collection" || collectionClass == "processed_image_collection") {
         m_parentWidget->setVisible(false);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(true);
         m_scriptWidget->setVisible(true);
-    } else if (type == "point_collection") {
+    } else if (collectionClass == "point_collection") {
         m_parentWidget->setVisible(true);
         m_relatedWidget->setVisible(true);
         m_registryWidget->setVisible(false);
         m_scriptWidget->setVisible(true);
-    } else if (type == "segmentation_collection") {
+    } else if (collectionClass == "segmentation_collection") {
         m_parentWidget->setVisible(true);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(false);
@@ -211,12 +221,12 @@ void CollectionDialog::populateParentCombo()
 {
     m_parentCombo->blockSignals(true);
     m_parentCombo->clear();
-    const QString type = m_typeCombo->currentText();
-    const QStringList allowed = compatibleTypes(type, true);
+    const QString collectionClass = m_typeCombo->currentText();
+    const QStringList allowed = compatibleClasses(collectionClass, true);
 
     bool hasValid = false;
     for (const Collection &col : m_existingCollections) {
-        if (allowed.contains(col.type, Qt::CaseInsensitive)) {
+        if (allowed.contains(col.collectionClass, Qt::CaseInsensitive)) {
             m_parentCombo->addItem(col.dirName, col.dirPath);
             hasValid = true;
         }
@@ -232,12 +242,12 @@ void CollectionDialog::populateRelatedCombo()
 {
     m_relatedCombo->blockSignals(true);
     m_relatedCombo->clear();
-    const QString type = m_typeCombo->currentText();
-    const QStringList allowed = compatibleTypes(type, false);
+    const QString collectionClass = m_typeCombo->currentText();
+    const QStringList allowed = compatibleClasses(collectionClass, false);
 
     bool hasValid = false;
     for (const Collection &col : m_existingCollections) {
-        if (allowed.contains(col.type, Qt::CaseInsensitive)) {
+        if (allowed.contains(col.collectionClass, Qt::CaseInsensitive)) {
             m_relatedCombo->addItem(col.dirName, col.dirPath);
             hasValid = true;
         }
@@ -249,19 +259,19 @@ void CollectionDialog::populateRelatedCombo()
     m_relatedCombo->blockSignals(false);
 }
 
-QStringList CollectionDialog::compatibleTypes(const QString &targetType, bool asParent) const
+QStringList CollectionDialog::compatibleClasses(const QString &targetClass, bool asParent) const
 {
-    if (targetType == "point_collection") {
+    if (targetClass == "point_collection") {
         if (asParent)
             return {"preprocessed_image_collection", "processed_image_collection"};
         else
             return {"segmentation_collection"};
     }
-    if (targetType == "segmentation_collection") {
+    if (targetClass == "segmentation_collection") {
         if (asParent)
             return {"preprocessed_image_collection", "processed_image_collection"};
     }
-    if (targetType == "preprocessed_image_collection" || targetType == "processed_image_collection") {
+    if (targetClass == "preprocessed_image_collection" || targetClass == "processed_image_collection") {
         Q_UNUSED(asParent);
     }
     return {};
@@ -272,12 +282,12 @@ void CollectionDialog::updateOkButton()
     if (!m_buttonBox)
         return;
 
-    const QString type = m_typeCombo->currentText();
+    const QString collectionClass = m_typeCombo->currentText();
     bool enableOk = false;
 
-    if (type == "preprocessed_image_collection" || type == "processed_image_collection" || type == "other") {
+    if (collectionClass == "preprocessed_image_collection" || collectionClass == "processed_image_collection" || collectionClass == "other") {
         enableOk = !m_registryEdit->text().isEmpty();
-    } else if (type == "point_collection" || type == "segmentation_collection") {
+    } else if (collectionClass == "point_collection" || collectionClass == "segmentation_collection") {
         enableOk = !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
     }
 
