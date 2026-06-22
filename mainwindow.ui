@@ -44,6 +44,14 @@
      </property>
      <addaction name="actionOpen_Image"/>
     </widget>
+    <widget class="QMenu" name="menuPoint">
+     <property name="title">
+      <string>Point</string>
+     </property>
+     <addaction name="actionCreatePoints"/>
+     <addaction name="actionEditPoints"/>
+     <addaction name="actionCancelEdit"/>
+    </widget>
     <widget class="QMenu" name="menuView">
      <property name="title">
       <string>View</string>
@@ -53,6 +61,7 @@
     </widget>
     <addaction name="menuProject"/>
     <addaction name="menuImage"/>
+    <addaction name="menuPoint"/>
     <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
@@ -240,15 +249,28 @@
     <string>Pan</string>
    </property>
   </action>
+  <action name="actionCreatePoints">
+   <property name="text">
+    <string>Create...</string>
+   </property>
+  </action>
   <action name="actionEditPoints">
    <property name="checkable">
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Edit Points</string>
+    <string>Edit</string>
    </property>
    <property name="toolTip">
     <string>Edit points on the active point layer</string>
+   </property>
+  </action>
+  <action name="actionCancelEdit">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Cancel edit</string>
    </property>
   </action>
   <action name="actionSplitViewer">

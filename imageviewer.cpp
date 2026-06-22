@@ -323,8 +323,16 @@ void ImageViewer::syncToSiblings(int dx, int dy)
 
 void ImageViewer::onActiveLayerChanged(Layer *layer)
 {
-    // Use the actually active layer directly
-    m_imageLayer = qobject_cast<ImageLayer*>(layer);
+    if (auto *activeImageLayer = qobject_cast<ImageLayer*>(layer)) {
+        m_imageLayer = activeImageLayer;
+    } else if (!m_imageLayer && m_layerManager) {
+        for (int i = 0; i < m_layerManager->layerCount(); ++i) {
+            if (auto *img = qobject_cast<ImageLayer*>(m_layerManager->layerAt(i))) {
+                m_imageLayer = img;
+                break;
+            }
+        }
+    }
 
     PixelInfo info;
     info.row = m_lastPixelInfo.row;
@@ -379,7 +387,7 @@ void ImageViewer::dropEvent(QDropEvent *event)
                     "Load an image first before adding a point layer.");
                 continue;
             }
-            auto *layer = new PointLayer(path);
+            auto *layer = new PointLayer(path, m_scene);
             m_layerManager->addLayer(layer);
         }
     }

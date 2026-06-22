@@ -32,6 +32,8 @@ public:
 
     // Call after scene is ready or changes
     void attachToScene(QGraphicsScene *scene);
+    
+    QGraphicsScene *scene() const { return m_scene; }
 
 signals:
     void layersChanged();    // lista o visibilidad cambió

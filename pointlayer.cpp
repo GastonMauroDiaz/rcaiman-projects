@@ -10,8 +10,9 @@
 #include <QBrush>
 #include <QColor>
 
-PointLayer::PointLayer(const QString &path, QObject *parent)
+PointLayer::PointLayer(const QString &path, QGraphicsScene *scene, QObject *parent)
     : Layer(QFileInfo(path).fileName(), path, parent)
+    , m_scene(scene)
 {
     QFileInfo fi(path);
     if (fi.isFile() && fi.suffix().toLower() == "csv") {
@@ -98,10 +99,9 @@ void PointLayer::setEditMode(bool enabled)
     }
 
     // Rebuild items with new mode (rebuildItems calls clearPointItems internally)
-    QGraphicsScene *scene = m_items.isEmpty() ? nullptr : m_items.first()->scene();
-    if (scene) {
+    if (m_scene) {
         m_itemsBuilt = false;
-        rebuildItems(scene);
+        rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
 }
@@ -134,6 +134,32 @@ void PointLayer::removeBackup()
     if (!m_backupPath.isEmpty() && QFile::exists(m_backupPath))
         QFile::remove(m_backupPath);
     m_backupPath.clear();
+}
+
+void PointLayer::cancelEdit()
+{
+    if (m_backupPath.isEmpty() || !QFile::exists(m_backupPath))
+        return;
+
+    // Restore collection from backup
+    m_collection = PointCollection::load(m_backupPath);
+
+    // Overwrite original CSV with backup
+    const QString src = sourcePath();
+    QFile::remove(src);
+    QFile::rename(m_backupPath, src);
+
+    // Clean backup and deactivate edit mode
+    m_backupPath.clear();
+    m_editMode = false;
+    clearSelection();
+
+    // Rebuild items
+    if (m_scene) {
+        m_itemsBuilt = false;
+        rebuildItems(m_scene);
+        m_itemsBuilt = true;
+    }
 }
 
 bool PointLayer::saveCsv(QString *errorMessage)
@@ -200,10 +226,9 @@ void PointLayer::addPoint(double row, double col)
     }
 
     // Rebuild items
-    QGraphicsScene *scene = m_items.isEmpty() ? nullptr : m_items.first()->scene();
-    if (scene) {
+    if (m_scene) {
         m_itemsBuilt = false;
-        rebuildItems(scene);
+        rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
 }
@@ -227,10 +252,9 @@ void PointLayer::onPointMoved(int index, QPointF pos)
     }
 
     // Rebuild items (indices may be fine, but position in collection changed)
-    QGraphicsScene *scene = m_items.isEmpty() ? nullptr : m_items.first()->scene();
-    if (scene) {
+    if (m_scene) {
         m_itemsBuilt = false;
-        rebuildItems(scene);
+        rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
 }
@@ -270,10 +294,9 @@ void PointLayer::onPointDeleted(int index)
     }
 
     // Rebuild items (indices changed after removal)
-    QGraphicsScene *scene = m_items.isEmpty() ? nullptr : m_items.first()->scene();
-    if (scene) {
+    if (m_scene) {
         m_itemsBuilt = false;
-        rebuildItems(scene);
+        rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
 

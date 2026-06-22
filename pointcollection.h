@@ -26,6 +26,7 @@ public:
 
     static PointCollection load(const QString &filePath, QString *errorMessage = nullptr);
     static PointCollection loadFromDirectory(const QString &dirPath, QString *errorMessage = nullptr);
+    static PointCollection createEmpty(const QStringList &columnNames = {"row", "col"});
 
     bool isValid() const;
     const QVector<PointRecord> &points() const;

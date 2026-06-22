@@ -5,13 +5,14 @@
 #include "pointcollection.h"
 
 class PointItem;
+class QGraphicsScene;
 
 class PointLayer : public Layer
 {
     Q_OBJECT
 
 public:
-    explicit PointLayer(const QString &path, QObject *parent = nullptr);
+    explicit PointLayer(const QString &path, QGraphicsScene *scene, QObject *parent = nullptr);
 
     const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) override;
 
@@ -19,6 +20,8 @@ public:
 
     void setEditMode(bool enabled);
     bool editMode() const { return m_editMode; }
+
+    void cancelEdit();
 
     bool saveCsv(QString *errorMessage = nullptr);
 
@@ -45,6 +48,7 @@ private:
     void removeBackup();
 
     PointCollection m_collection;
+    QGraphicsScene *m_scene = nullptr;
     bool m_editMode = false;
     QString m_backupPath;
     int m_selectedPointIndex = -1;

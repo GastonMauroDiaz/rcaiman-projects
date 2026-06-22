@@ -7,6 +7,8 @@
 #include <QMap>
 #include <QSettings>
 #include <QMetaObject>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 
 class QFileSystemModel;
 class ImageViewer;
@@ -46,16 +48,20 @@ private slots:
     void onWorkspaceTabChanged(int index);
     void onLayerSelectionChanged(int index);
     void onEditPointsToggled(bool enabled);
+    void onCancelEditTriggered();
     void onPointSelectionChanged(int index);
     void onProjectTreeItemClicked(const QModelIndex &index);
     void splitViewer();
     void onSyncSplitViewsToggled(bool checked);
     void onFocusChanged(QWidget *old, QWidget *now);
     void onActiveViewerChanged(ImageViewer *viewer);
+    void createPointsCsv();
 
 private:
     void openImageAtPath(const QString &filePath);
     void loadProject(const Project &project);
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void updateProjectExplorer();
     void updateProjectActions();
     ImageViewer *currentImageViewer() const;

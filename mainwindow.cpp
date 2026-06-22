@@ -22,12 +22,34 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMimeData>
 #include <QPixmap>
 #include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QVBoxLayout>
+
+namespace {
+QString normalizedPathForCompare(const QString &path)
+{
+    QFileInfo info(path);
+    QString normalized = info.canonicalFilePath();
+    if (normalized.isEmpty())
+        normalized = info.absoluteFilePath();
+
+    normalized = QDir::cleanPath(QDir::fromNativeSeparators(normalized));
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
+bool samePath(const QString &left, const QString &right)
+{
+    return normalizedPathForCompare(left) == normalizedPathForCompare(right);
+}
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -39,6 +61,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     ui->projectTree->setModel(m_projectFileSystemModel);
     ui->projectTree->setDragEnabled(true);
+    setAcceptDrops(true);
     ui->projectTree->setHeaderHidden(true);
     ui->projectTree->hideColumn(1);
     ui->projectTree->hideColumn(2);
@@ -83,6 +106,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::registerCollection);
 
+    connect(ui->actionCreatePoints,
+            &QAction::triggered,
+            this,
+            &MainWindow::createPointsCsv);
+
     connect(ui->actionPan,
             &QAction::toggled,
             this,
@@ -96,6 +124,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::toggled,
             this,
             &MainWindow::onEditPointsToggled);
+
+    connect(ui->actionCancelEdit,
+            &QAction::triggered,
+            this,
+            &MainWindow::onCancelEditTriggered);
 
     connect(ui->actionSplitViewer,
             &QAction::triggered,
@@ -465,7 +498,7 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
                                      "No image viewer is active. Open an image first.");
             return;
         }
-        auto *layer = new PointLayer(filePath);
+                auto *layer = new PointLayer(filePath, viewer->scene());
         viewer->layerManager()->addLayer(layer);
     }
 }
@@ -621,6 +654,28 @@ void MainWindow::onEditPointsToggled(bool enabled)
     if (!viewer)
         return;
     viewer->setPointEditEnabled(enabled);
+
+    // Update Cancel edit button state
+    Layer *active = viewer->layerManager() ? viewer->layerManager()->activeLayer() : nullptr;
+    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    ui->actionCancelEdit->setEnabled(pointLayer && pointLayer->editMode());
+}
+
+void MainWindow::onCancelEditTriggered()
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer)
+        return;
+
+    Layer *active = viewer->layerManager() ? viewer->layerManager()->activeLayer() : nullptr;
+    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    if (!pointLayer || !pointLayer->editMode())
+        return;
+
+    pointLayer->cancelEdit();
+    viewer->setPointEditEnabled(false);
+    ui->actionEditPoints->setChecked(false);
+    ui->actionCancelEdit->setEnabled(false);
 }
 
 void MainWindow::onWorkspaceTabChanged(int index)
@@ -670,9 +725,11 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 
     LayerManager *mgr = viewer->layerManager();
     Layer *active = mgr ? mgr->activeLayer() : nullptr;
-    const bool isPointLayer = (qobject_cast<PointLayer*>(active) != nullptr);
+    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    const bool isPointLayer = (pointLayer != nullptr);
     ui->actionEditPoints->setEnabled(isPointLayer);
     ui->actionEditPoints->setChecked(isPointLayer && viewer->pointEditEnabled());
+    ui->actionCancelEdit->setEnabled(isPointLayer && pointLayer->editMode());
 
     if (m_layersDock)
         m_layersDock->setLayerManager(mgr);
@@ -742,7 +799,14 @@ void MainWindow::openImageAtPath(const QString &filePath)
     const int newIndex = ui->workspaceTabs->addTab(splitter, tabTitle);
     ui->workspaceTabs->setCurrentIndex(newIndex);
 
-    // Autoload PointCollection if applicable
+    // Store mapping from absolutePath to the splitter widget
+    m_openImageTabs.insert(absolutePath, splitter);
+
+    // Update layers dock
+    if (m_layersDock)
+        m_layersDock->setLayerManager(viewer->layerManager());
+
+    // Autoload PointCollection if applicable (after setLayerManager so scene is set)
     if (viewer->layerManager()) {
         const QString baseName = fi.completeBaseName();
         const QString imgDir = fi.absolutePath();
@@ -750,35 +814,63 @@ void MainWindow::openImageAtPath(const QString &filePath)
 
         QStringList matchingParents;
         for (const Collection &col : collections) {
-            if (col.dirPath == imgDir)
+            if (samePath(col.dirPath, imgDir))
                 matchingParents.append(col.dirPath);
         }
 
+        QStringList pointCsvPaths;
         if (matchingParents.size() == 1) {
-            QStringList pointCollections;
             for (const Collection &col : collections) {
-                if (col.collectionClass == "point_collection" && col.parent == matchingParents.first())
-                    pointCollections.append(col.dirPath);
+                if (col.collectionClass != "point_collection" || !samePath(col.parent, matchingParents.first()))
+                    continue;
+
+                const QString csvPath = QDir(col.dirPath).filePath(baseName + ".csv");
+                if (QFile::exists(csvPath))
+                    pointCsvPaths.append(csvPath);
+                else
+                    qWarning() << "Autoload: parented point_collection has no matching CSV" << csvPath;
             }
 
-            if (pointCollections.size() == 1) {
-                const QString csvPath = QDir(pointCollections.first()).filePath(baseName + ".csv");
-                if (QFile::exists(csvPath)) {
-                    auto *layer = new PointLayer(csvPath);
-                    viewer->layerManager()->addLayer(layer);
-                }
-            } else if (pointCollections.size() > 1) {
-                qWarning() << "Multiple point_collections found for" << imgDir << "; autoload skipped.";
+            if (pointCsvPaths.isEmpty())
+                qWarning() << "Autoload skipped: no point_collection parented to" << matchingParents.first();
+        } else if (matchingParents.size() > 1) {
+            qWarning() << "Autoload skipped: multiple image collections match" << imgDir;
+        } else {
+            qWarning() << "Autoload skipped: no image collection matches" << imgDir;
+        }
+
+        if (pointCsvPaths.isEmpty()) {
+            for (const Collection &col : collections) {
+                if (col.collectionClass != "point_collection")
+                    continue;
+
+                const QString csvPath = QDir(col.dirPath).filePath(baseName + ".csv");
+                if (QFile::exists(csvPath))
+                    pointCsvPaths.append(csvPath);
             }
+
+            pointCsvPaths.removeDuplicates();
+
+            if (pointCsvPaths.size() == 1)
+                qWarning() << "Autoload fallback: using matching CSV" << pointCsvPaths.first();
+        }
+
+        pointCsvPaths.removeDuplicates();
+
+        if (!pointCsvPaths.isEmpty()) {
+            for (const QString &csvPath : std::as_const(pointCsvPaths)) {
+                auto *layer = new PointLayer(csvPath, viewer->scene());
+                if (pointCsvPaths.size() > 1) {
+                    const QString collectionName = QFileInfo(QFileInfo(csvPath).absolutePath()).fileName();
+                    layer->rename(QStringLiteral("%1/%2").arg(collectionName, QFileInfo(csvPath).fileName()));
+                }
+                viewer->layerManager()->addLayer(layer);
+            }
+            qInfo() << "Autoload loaded" << pointCsvPaths.size() << "point layer(s) for" << baseName;
+        } else {
+            qWarning() << "Autoload skipped: no point CSV found for" << baseName;
         }
     }
-
-    // Store mapping from absolutePath to the splitter widget
-    m_openImageTabs.insert(absolutePath, splitter);
-
-    // Update layers dock
-    if (m_layersDock)
-        m_layersDock->setLayerManager(viewer->layerManager());
 
     connect(viewer, &ImageViewer::pixelInfoChanged, this, &MainWindow::updatePropertiesTable);
     connect(viewer, &ImageViewer::closeRequested, this, [this]() {
@@ -907,6 +999,46 @@ void MainWindow::onSyncSplitViewsToggled(bool checked)
     ImageViewer::setSyncEnabled(checked);
 }
 
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
+    }
+
+    const QString suffix = QFileInfo(event->mimeData()->urls().first().toLocalFile()).suffix().toLower();
+    const QStringList ok = {"tif", "tiff", "png", "jpg", "jpeg", "bmp", "csv"};
+    if (ok.contains(suffix))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    const QUrl url = event->mimeData()->urls().first();
+    const QString path = url.toLocalFile();
+    if (path.isEmpty()) {
+        event->ignore();
+        return;
+    }
+
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix == "csv") {
+        ImageViewer *v = currentImageViewer();
+        if (!v) {
+            QMessageBox::information(this, "Add Points",
+                "Open an image first before adding a point layer.");
+            event->acceptProposedAction();
+            return;
+        }
+        v->layerManager()->addLayer(new PointLayer(path, v->scene()));
+    } else {
+        openImageAtPath(path);
+    }
+    event->acceptProposedAction();
+}
+
 void MainWindow::clearPropertiesTable()
 {
     if (ui->propertiesTable)
@@ -924,4 +1056,64 @@ QString MainWindow::selectedProjectPath() const
         return {};
 
     return fi.absoluteFilePath();
+}
+
+void MainWindow::createPointsCsv()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Create points",
+                                 "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
+    QStringList pointCollectionDirs;
+    for (const Collection &col : collections) {
+        if (col.collectionClass == "point_collection")
+            pointCollectionDirs.append(col.dirPath);
+    }
+
+    if (pointCollectionDirs.isEmpty()) {
+        QMessageBox::information(this, "Create points",
+                                 "No point collection is registered in this project.\n"
+                                 "Register a point collection first using Project > Register collection...");
+        return;
+    }
+
+    QString selectedDir;
+    if (pointCollectionDirs.size() == 1) {
+        selectedDir = pointCollectionDirs.first();
+    } else {
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(this, "Select point collection",
+                                                     "Point collection:", pointCollectionDirs, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        selectedDir = choice;
+    }
+
+    const QString defaultName = QDir(selectedDir).dirName() + ".csv";
+    const QString savePath = QFileDialog::getSaveFileName(this, "Create points CSV",
+                                                          QDir(selectedDir).filePath(defaultName),
+                                                          "CSV files (*.csv)");
+    if (savePath.isEmpty())
+        return;
+
+    const PointCollection collection = PointCollection::createEmpty({"row", "col"});
+    QString errorMsg;
+    if (!collection.save(savePath, &errorMsg)) {
+        QMessageBox::warning(this, "Create points", errorMsg);
+        return;
+    }
+
+    statusBar()->showMessage(QStringLiteral("Created points file: %1").arg(QFileInfo(savePath).fileName()), 5000);
+
+    // If an image viewer is active, offer to add the new layer
+    ImageViewer *viewer = currentImageViewer();
+    if (viewer && viewer->layerManager()) {
+        const auto reply = QMessageBox::question(this, "Add layer",
+                                                 "Add the new points file as a layer to the current viewer?");
+        if (reply == QMessageBox::Yes)
+            viewer->layerManager()->addLayer(new PointLayer(savePath, viewer->scene()));
+    }
 }

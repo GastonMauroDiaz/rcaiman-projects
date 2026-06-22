@@ -151,9 +151,9 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
         rawRows.append(row);
     }
 
+    // If no data rows, return collection with headers only (valid for empty CSVs)
     if (rawRows.isEmpty()) {
-        if (errorMessage)
-            *errorMessage = QStringLiteral("No data rows in: %1").arg(filePath);
+        // Headers are already loaded in m_columnMeta, collection is valid
         return collection;
     }
 
@@ -239,9 +239,22 @@ PointCollection PointCollection::loadFromDirectory(const QString &dirPath, QStri
     return result;
 }
 
+PointCollection PointCollection::createEmpty(const QStringList &columnNames)
+{
+    PointCollection collection;
+    for (const QString &name : columnNames) {
+        ColumnMeta meta;
+        meta.name = name;
+        if (name.compare("row", Qt::CaseInsensitive) == 0 || name.compare("col", Qt::CaseInsensitive) == 0)
+            meta.type = QMetaType::Double;
+        collection.m_columnMeta.append(meta);
+    }
+    return collection;
+}
+
 bool PointCollection::isValid() const
 {
-    return !m_points.isEmpty();
+    return !m_columnMeta.isEmpty();
 }
 
 const QVector<PointRecord> &PointCollection::points() const

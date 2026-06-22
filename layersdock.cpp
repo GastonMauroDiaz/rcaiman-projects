@@ -160,7 +160,10 @@ void LayersDock::updateList()
     m_listWidget->blockSignals(false);
 
     // Update flicker controls for the active layer
-    onCurrentRowChanged(m_listWidget->currentRow());
+    const int currentRow = m_listWidget->currentRow();
+    onCurrentRowChanged(currentRow);
+    if (currentRow >= 0)
+        emit activeLayerChanged(currentRow);
 }
 
 void LayersDock::updateActiveLayerFromUi(int row)
@@ -211,7 +214,7 @@ void LayersDock::addPointLayer()
         return;
     }
 
-    auto *layer = new PointLayer(filePath);
+    auto *layer = new PointLayer(filePath, m_manager->scene());
     m_manager->addLayer(layer);
 }
 
@@ -354,7 +357,7 @@ void LayersDock::dropEvent(QDropEvent *event)
 
         if (fileNameIsAcceptable(suffix)) {
             if (suffix == "csv") {
-                auto *layer = new PointLayer(path);
+                auto *layer = new PointLayer(path, m_manager->scene());
                 m_manager->addLayer(layer);
             } else {
                 auto *imgLayer = new ImageLayer(path);

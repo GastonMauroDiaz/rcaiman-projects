@@ -58,7 +58,9 @@ void LayerManager::addLayer(Layer *layer)
         layer->addToScene(m_scene);
     }
 
+    m_activeLayer = layer;
     emit layersChanged();
+    emit activeLayerChanged(m_activeLayer);
 }
 
 void LayerManager::removeLayer(int index)
