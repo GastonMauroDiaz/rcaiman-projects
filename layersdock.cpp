@@ -8,12 +8,18 @@
 #include <QHBoxLayout>
 #include <QListWidget>
 #include <QPushButton>
+#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QFileInfo>
+#include <QDir>
+#include <QMimeData>
+#include <QUrl>
 
 LayersDock::LayersDock(QWidget *parent)
     : QDockWidget("Layers", parent)
 {
+    setAcceptDrops(true);
     setObjectName("LayersDock");
     setWindowTitle("Layers");
 
@@ -37,9 +43,24 @@ LayersDock::LayersDock(QWidget *parent)
     auto *removeBtn = new QPushButton("Remove", this);
     auto *upBtn = new QPushButton("Up", this);
     auto *downBtn = new QPushButton("Down", this);
+
+    // Flicker controls
+    m_flickerBtn = new QPushButton("Flicker", this);
+    m_flickerBtn->setCheckable(true);
+    m_flickerBtn->setEnabled(false);
+
+    m_flickerSpeed = new QDoubleSpinBox(this);
+    m_flickerSpeed->setRange(0.1, 10.0);
+    m_flickerSpeed->setSingleStep(0.1);
+    m_flickerSpeed->setValue(0.5);
+    m_flickerSpeed->setSuffix(" s");
+    m_flickerSpeed->setEnabled(false);
+
     orderLayout->addWidget(removeBtn);
     orderLayout->addWidget(upBtn);
     orderLayout->addWidget(downBtn);
+    orderLayout->addWidget(m_flickerBtn);
+    orderLayout->addWidget(m_flickerSpeed);
     mainLayout->addLayout(orderLayout);
 
     setWidget(container);
@@ -69,8 +90,15 @@ LayersDock::LayersDock(QWidget *parent)
 
     connect(m_listWidget, &QListWidget::currentRowChanged,
             this, &LayersDock::updateActiveLayerFromUi);
+    connect(m_listWidget, &QListWidget::currentRowChanged,
+            this, &LayersDock::onCurrentRowChanged);
     connect(m_listWidget, &QListWidget::itemChanged,
             this, &LayersDock::onItemChanged);
+
+    connect(m_flickerBtn, &QPushButton::toggled,
+            this, &LayersDock::onFlickerToggled);
+    connect(m_flickerSpeed, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &LayersDock::onFlickerSpeedChanged);
 }
 
 void LayersDock::setProjectPath(const QString &path)
@@ -82,6 +110,12 @@ void LayersDock::setLayerManager(LayerManager *manager)
 {
     if (m_manager) {
         disconnect(m_manager, nullptr, this, nullptr);
+    }
+
+    // Disconnect tracked layer
+    if (m_trackedLayer) {
+        disconnect(m_trackedLayer, nullptr, this, nullptr);
+        m_trackedLayer = nullptr;
     }
 
     m_manager = manager;
@@ -124,6 +158,9 @@ void LayersDock::updateList()
 
     m_updatingList = false;
     m_listWidget->blockSignals(false);
+
+    // Update flicker controls for the active layer
+    onCurrentRowChanged(m_listWidget->currentRow());
 }
 
 void LayersDock::updateActiveLayerFromUi(int row)
@@ -165,7 +202,6 @@ void LayersDock::addPointLayer()
     if (filePath.isEmpty())
         return;
 
-    // Use the CSV's parent directory as the point collection source
     const QString dirPath = QFileInfo(filePath).absolutePath();
     QDir dir(dirPath);
     const QStringList csvFiles = dir.entryList({"*.csv"}, QDir::Files);
@@ -187,6 +223,11 @@ void LayersDock::removeLayer()
     const int currentRow = m_listWidget->currentRow();
     if (currentRow < 0 || currentRow >= m_manager->layerCount())
         return;
+
+    // Disable flicker on the layer being removed
+    Layer *layer = m_manager->layerAt(currentRow);
+    if (layer && layer->flickerEnabled())
+        layer->setFlickerEnabled(false);
 
     m_manager->removeLayer(currentRow);
 }
@@ -213,4 +254,117 @@ void LayersDock::moveDown()
         m_manager->moveDown(currentRow);
         m_listWidget->setCurrentRow(currentRow + 1);
     }
+}
+
+// --- Flicker ---
+
+void LayersDock::onCurrentRowChanged(int row)
+{
+    // Disconnect previous tracked layer
+    if (m_trackedLayer) {
+        disconnect(m_trackedLayer, nullptr, this, nullptr);
+        m_trackedLayer = nullptr;
+    }
+
+    if (!m_manager || row < 0 || row >= m_manager->layerCount()) {
+        m_flickerBtn->setEnabled(false);
+        m_flickerSpeed->setEnabled(false);
+        m_flickerBtn->setChecked(false);
+        return;
+    }
+
+    Layer *layer = m_manager->layerAt(row);
+    m_trackedLayer = layer;
+
+    // Connect to flickerChanged to sync button state
+    connect(layer, &Layer::flickerChanged, this, [this](bool enabled) {
+        m_flickerBtn->blockSignals(true);
+        m_flickerBtn->setChecked(enabled);
+        m_flickerBtn->blockSignals(false);
+    });
+
+    // Update controls to match current layer state
+    m_flickerBtn->blockSignals(true);
+    m_flickerBtn->setChecked(layer->flickerEnabled());
+    m_flickerBtn->setEnabled(true);
+    m_flickerBtn->blockSignals(false);
+
+    m_flickerSpeed->blockSignals(true);
+    m_flickerSpeed->setEnabled(true);
+    // Read current interval from layer (stored in seconds by default 0.5)
+    // We don't have a getter for the interval value, but defaults are fine
+    m_flickerSpeed->blockSignals(false);
+}
+
+void LayersDock::onFlickerToggled(bool checked)
+{
+    if (!m_trackedLayer)
+        return;
+
+    m_trackedLayer->setFlickerEnabled(checked);
+}
+
+void LayersDock::onFlickerSpeedChanged(double seconds)
+{
+    if (!m_trackedLayer)
+        return;
+
+    m_trackedLayer->setFlickerInterval(seconds);
+}
+
+// --- Drag & Drop ---
+
+static bool fileNameIsAcceptable(const QString &suffix)
+{
+    const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
+    const QStringList csvExts = {"csv"};
+    return imgExts.contains(suffix) || csvExts.contains(suffix);
+}
+
+void LayersDock::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!m_manager || !event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
+    }
+
+    for (const QUrl &url : event->mimeData()->urls()) {
+        const QString suffix = QFileInfo(url.toLocalFile()).suffix().toLower();
+        if (fileNameIsAcceptable(suffix)) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
+    event->ignore();
+}
+
+void LayersDock::dropEvent(QDropEvent *event)
+{
+    if (!m_manager || !event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
+    }
+
+    for (const QUrl &url : event->mimeData()->urls()) {
+        const QString path = url.toLocalFile();
+        if (path.isEmpty())
+            continue;
+
+        const QString suffix = QFileInfo(path).suffix().toLower();
+
+        if (fileNameIsAcceptable(suffix)) {
+            if (suffix == "csv") {
+                auto *layer = new PointLayer(path);
+                m_manager->addLayer(layer);
+            } else {
+                auto *imgLayer = new ImageLayer(path);
+                if (imgLayer->rasterData().isNull()) {
+                    delete imgLayer;
+                    continue;
+                }
+                m_manager->addLayer(imgLayer);
+            }
+        }
+    }
+    event->acceptProposedAction();
 }

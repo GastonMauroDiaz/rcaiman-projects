@@ -6,12 +6,13 @@ Layer::Layer(const QString &name, const QString &sourcePath, QObject *parent)
     : QObject(parent)
     , m_name(name)
     , m_sourcePath(sourcePath)
+    , m_flickerTimer(new QTimer(this))
 {
+    connect(m_flickerTimer, &QTimer::timeout, this, &Layer::onFlickerTick);
 }
 
 Layer::~Layer()
 {
-    // m_items son propiedad de QGraphicsScene, no se borran aquí
     m_items.clear();
 }
 
@@ -75,8 +76,49 @@ void Layer::removeFromScene(QGraphicsScene *scene)
 
 void Layer::clearCachedItems()
 {
-    // NO borramos los items porque QGraphicsScene es propietario.
-    // Simplemente olvidamos las referencias.
     m_items.clear();
     m_itemsBuilt = false;
+}
+
+// --- Flicker ---
+
+void Layer::setFlickerEnabled(bool enabled)
+{
+    if (m_flickerEnabled == enabled)
+        return;
+
+    m_flickerEnabled = enabled;
+
+    if (enabled) {
+        // Save current visibility before starting flicker
+        m_visibleBeforeFlicker = m_visible;
+        const int intervalMs = qMax(50, static_cast<int>(m_flickerIntervalSec * 1000.0));
+        m_flickerTimer->start(intervalMs);
+    } else {
+        m_flickerTimer->stop();
+        // Restore visibility to what it was before flicker started
+        setVisible(m_visibleBeforeFlicker);
+    }
+
+    emit flickerChanged(m_flickerEnabled);
+}
+
+bool Layer::flickerEnabled() const
+{
+    return m_flickerEnabled;
+}
+
+void Layer::setFlickerInterval(double seconds)
+{
+    m_flickerIntervalSec = qBound(0.1, seconds, 10.0);
+    if (m_flickerEnabled) {
+        const int intervalMs = qMax(50, static_cast<int>(m_flickerIntervalSec * 1000.0));
+        m_flickerTimer->setInterval(intervalMs);
+    }
+}
+
+void Layer::onFlickerTick()
+{
+    // Toggle visibility while preserving m_visibleBeforeFlicker
+    setVisible(!m_visible);
 }

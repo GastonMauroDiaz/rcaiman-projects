@@ -5,16 +5,28 @@
 #include "pointitem.h"
 #include "pointlayer.h"
 
+#include <QAction>
+#include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QFileInfo>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
+#include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QUrl>
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
     , m_scene(new QGraphicsScene(this))
     , m_layerManager(new LayerManager(this))
 {
+    setAcceptDrops(true);
+    viewport()->setAcceptDrops(true);
+    viewport()->installEventFilter(this);
     setScene(m_scene);
     m_layerManager->attachToScene(m_scene);
 
@@ -134,16 +146,13 @@ void ImageViewer::updateDragMode()
 void ImageViewer::mousePressEvent(QMouseEvent *event)
 {
     if (m_pointEditEnabled && event->button() == Qt::LeftButton) {
-        // Check if there's a PointItem under the cursor (to allow drag/delete)
         const QPointF scenePos = mapToScene(event->pos());
         QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
         const bool isPointItem = itemUnder && (itemUnder->type() == QGraphicsEllipseItem::Type);
-        // Only add a new point if we didn't click on an existing point
-        // (QGraphicsEllipseItem::Type is used because PointItem inherits from it)
         if (!isPointItem) {
             Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
             if (auto *pointLayer = qobject_cast<PointLayer*>(active)) {
-                pointLayer->addPoint(scenePos.y(), scenePos.x());  // row=y, col=x
+                pointLayer->addPoint(scenePos.y(), scenePos.x());
                 event->accept();
                 return;
             }
@@ -161,8 +170,6 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
     info.bandCount = 0;
 
     Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
-    // Only emit pixel info when an ImageLayer is active.
-    // Other layer types (e.g. PointLayer) have their own properties display.
     auto *img = qobject_cast<ImageLayer*>(active);
     if (!img) {
         QGraphicsView::mouseMoveEvent(event);
@@ -189,4 +196,89 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 
     emit pixelInfoChanged(info);
     QGraphicsView::mouseMoveEvent(event);
+}
+
+// --- Drag & Drop ---
+// QGraphicsView's viewport() receives drop events first.
+// We use an event filter on the viewport to intercept them,
+// because setAcceptDrops(true) on QGraphicsView alone is not
+// sufficient: the viewport widget overrides drop behavior.
+
+bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == viewport()) {
+        if (event->type() == QEvent::DragEnter) {
+            auto *de = static_cast<QDragEnterEvent*>(event);
+            dragEnterEvent(de);
+            return de->isAccepted();
+        }
+        if (event->type() == QEvent::DragMove) {
+            // Must accept DragMove for Drop to complete after DragEnter
+            auto *dm = static_cast<QDragMoveEvent*>(event);
+            dm->acceptProposedAction();
+            return true;
+        }
+        if (event->type() == QEvent::Drop) {
+            auto *de = static_cast<QDropEvent*>(event);
+            dropEvent(de);
+            return true;
+        }
+    }
+    return QGraphicsView::eventFilter(obj, event);
+}
+
+void ImageViewer::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
+    }
+
+    const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
+    const QStringList csvExts = {"csv"};
+
+    for (const QUrl &url : event->mimeData()->urls()) {
+        const QString suffix = QFileInfo(url.toLocalFile()).suffix().toLower();
+        if (imgExts.contains(suffix) || csvExts.contains(suffix)) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
+    event->ignore();
+}
+
+void ImageViewer::contextMenuEvent(QContextMenuEvent *event)
+{
+    QMenu menu(this);
+    QAction *closeAct = menu.addAction("Close panel");
+    if (menu.exec(event->globalPos()) == closeAct)
+        emit closeRequested();
+}
+
+void ImageViewer::dropEvent(QDropEvent *event)
+{
+    const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
+    const QStringList csvExts = {"csv"};
+
+    for (const QUrl &url : event->mimeData()->urls()) {
+        const QString path = url.toLocalFile();
+        if (path.isEmpty())
+            continue;
+
+        const QString suffix = QFileInfo(path).suffix().toLower();
+
+        if (imgExts.contains(suffix)) {
+            // Replace content of this viewer
+            setImage(path);
+        } else if (csvExts.contains(suffix)) {
+            if (!m_imageLayer) {
+                QMessageBox::information(this, "Add Points",
+                    "Load an image first before adding a point layer.");
+                continue;
+            }
+            auto *layer = new PointLayer(path);
+            m_layerManager->addLayer(layer);
+        }
+    }
+    event->acceptProposedAction();
 }

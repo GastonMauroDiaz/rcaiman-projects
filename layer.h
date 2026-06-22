@@ -5,6 +5,7 @@
 #include <QString>
 #include <QVector>
 #include <QGraphicsItem>
+#include <QTimer>
 
 class QGraphicsScene;
 
@@ -37,17 +38,30 @@ public:
     // Libera items cacheados (para recarga completa)
     void clearCachedItems();
 
+    // Flicker
+    void setFlickerEnabled(bool enabled);
+    bool flickerEnabled() const;
+    void setFlickerInterval(double seconds);
+
     QVector<QGraphicsItem*> m_items;  // cacheados; no se recrean en cada cambio
     bool m_itemsBuilt = false;
 
 signals:
     void visibilityChanged(bool visible);
     void nameChanged(const QString &name);
+    void flickerChanged(bool enabled);
+
+private slots:
+    void onFlickerTick();
 
 private:
     QString m_name;
     QString m_sourcePath;
     bool m_visible = true;
+    bool m_flickerEnabled = false;
+    bool m_visibleBeforeFlicker = true;
+    QTimer *m_flickerTimer = nullptr;
+    double m_flickerIntervalSec = 0.5;
 };
 
 #endif // LAYER_H

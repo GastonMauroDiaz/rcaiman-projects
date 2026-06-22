@@ -13,6 +13,7 @@ class ImageViewer;
 class LayerManager;
 class LayersDock;
 class QTableWidget;
+class QSplitter;
 class PointLayer;
 class PreviewDock;
 
@@ -47,6 +48,9 @@ private slots:
     void onEditPointsToggled(bool enabled);
     void onPointSelectionChanged(int index);
     void onProjectTreeItemClicked(const QModelIndex &index);
+    void splitViewer();
+    void onFocusChanged(QWidget *old, QWidget *now);
+    void onActiveViewerChanged(ImageViewer *viewer);
 
 private:
     void openImageAtPath(const QString &filePath);
@@ -68,6 +72,7 @@ private:
     QStringList m_recentProjects;
     PointLayer *m_currentPointLayer = nullptr;
     QMetaObject::Connection m_pointLayerConnection;
+    ImageViewer *m_activeViewer = nullptr;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

@@ -1,6 +1,8 @@
 #ifndef IMAGEVIEWER_H
 #define IMAGEVIEWER_H
 
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -38,6 +40,7 @@ public:
 
 signals:
     void pixelInfoChanged(const PixelInfo &info);
+    void closeRequested();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -46,6 +49,10 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
     void fitImageToView();

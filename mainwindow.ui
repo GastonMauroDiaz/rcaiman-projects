@@ -38,14 +38,21 @@
     <addaction name="separator"/>
     <addaction name="menuRecentProjects"/>
    </widget>
-   <widget class="QMenu" name="menuImage">
-    <property name="title">
-     <string>Image</string>
-    </property>
-    <addaction name="actionOpen_Image"/>
-   </widget>
-   <addaction name="menuProject"/>
-   <addaction name="menuImage"/>
+    <widget class="QMenu" name="menuImage">
+     <property name="title">
+      <string>Image</string>
+     </property>
+     <addaction name="actionOpen_Image"/>
+    </widget>
+    <widget class="QMenu" name="menuView">
+     <property name="title">
+      <string>View</string>
+     </property>
+     <addaction name="actionSplitViewer"/>
+    </widget>
+    <addaction name="menuProject"/>
+    <addaction name="menuImage"/>
+    <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QMenu" name="menuRecentProjects">
@@ -241,6 +248,14 @@
    </property>
    <property name="toolTip">
     <string>Edit points on the active point layer</string>
+   </property>
+  </action>
+  <action name="actionSplitViewer">
+   <property name="text">
+    <string>Split viewer</string>
+   </property>
+   <property name="toolTip">
+    <string>Split the current viewer horizontally</string>
    </property>
   </action>
  </widget>
