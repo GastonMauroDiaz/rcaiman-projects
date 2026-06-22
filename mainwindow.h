@@ -49,6 +49,7 @@ private slots:
     void onPointSelectionChanged(int index);
     void onProjectTreeItemClicked(const QModelIndex &index);
     void splitViewer();
+    void onSyncSplitViewsToggled(bool checked);
     void onFocusChanged(QWidget *old, QWidget *now);
     void onActiveViewerChanged(ImageViewer *viewer);
 

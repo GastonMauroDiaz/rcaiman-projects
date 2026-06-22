@@ -17,18 +17,25 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMutexLocker>
+#include <QScrollBar>
+#include <QSplitter>
 #include <QUrl>
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
     , m_scene(new QGraphicsScene(this))
     , m_layerManager(new LayerManager(this))
+    , m_lastMousePos(0, 0)
 {
     setAcceptDrops(true);
     viewport()->setAcceptDrops(true);
     viewport()->installEventFilter(this);
     setScene(m_scene);
     m_layerManager->attachToScene(m_scene);
+
+    connect(m_layerManager, &LayerManager::activeLayerChanged,
+            this, &ImageViewer::onActiveLayerChanged);
 
     connect(m_layerManager, &LayerManager::layersChanged, this, [this]() {
         m_imageLayer = nullptr;
@@ -60,6 +67,7 @@ void ImageViewer::setImage(const QString &fileName)
     m_imageLayer = imageLayer;
     m_layerManager->addLayer(imageLayer);
 
+    m_lastPixelInfo = PixelInfo{};
     m_autoFitImage = true;
     fitImageToView();
 }
@@ -126,6 +134,21 @@ void ImageViewer::wheelEvent(QWheelEvent *event)
         scale(zoomFactor, zoomFactor);
     else
         scale(1.0 / zoomFactor, 1.0 / zoomFactor);
+
+    if (ms_syncEnabled) {
+        const QTransform t = transform();
+        if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
+            for (int i = 0; i < splitter->count(); ++i) {
+                if (ImageViewer *sib = qobject_cast<ImageViewer*>(splitter->widget(i))) {
+                    if (sib != this) {
+                        sib->m_syncingScroll = true;
+                        sib->setTransform(t);
+                        sib->m_syncingScroll = false;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void ImageViewer::fitImageToView()
@@ -145,6 +168,8 @@ void ImageViewer::updateDragMode()
 
 void ImageViewer::mousePressEvent(QMouseEvent *event)
 {
+    m_lastMousePos = event->pos();
+
     if (m_pointEditEnabled && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
         QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
@@ -164,6 +189,8 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
 
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
+    m_lastMousePos = event->pos();
+    const bool wasPanning = m_panModeEnabled || m_spacePanActive;
     PixelInfo info;
     info.row = -1;
     info.col = -1;
@@ -194,7 +221,9 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
         }
     }
 
+    m_lastPixelInfo = info;
     emit pixelInfoChanged(info);
+
     QGraphicsView::mouseMoveEvent(event);
 }
 
@@ -247,6 +276,75 @@ void ImageViewer::dragEnterEvent(QDragEnterEvent *event)
     event->ignore();
 }
 
+bool ImageViewer::ms_syncEnabled = false;
+
+void ImageViewer::setSyncEnabled(bool enabled)
+{
+    ms_syncEnabled = enabled;
+}
+
+bool ImageViewer::syncEnabled()
+{
+    return ms_syncEnabled;
+}
+
+void ImageViewer::scrollContentsBy(int dx, int dy)
+{
+    if (m_syncingScroll) {
+        QGraphicsView::scrollContentsBy(dx, dy);
+        return;
+    }
+
+    QGraphicsView::scrollContentsBy(dx, dy);
+
+    if (!ms_syncEnabled)
+        return;
+
+    syncToSiblings(dx, dy);
+}
+
+void ImageViewer::syncToSiblings(int dx, int dy)
+{
+    if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
+        for (int i = 0; i < splitter->count(); ++i) {
+            if (ImageViewer *sibling = qobject_cast<ImageViewer*>(splitter->widget(i))) {
+                if (sibling != this) {
+                    sibling->m_syncingScroll = true;
+                    sibling->horizontalScrollBar()->setValue(
+                        sibling->horizontalScrollBar()->value() - dx); // Negar dx
+                    sibling->verticalScrollBar()->setValue(
+                        sibling->verticalScrollBar()->value() - dy);  // Negar dy
+                    sibling->m_syncingScroll = false;
+                }
+            }
+        }
+    }
+}
+
+void ImageViewer::onActiveLayerChanged(Layer *layer)
+{
+    // Use the actually active layer directly
+    m_imageLayer = qobject_cast<ImageLayer*>(layer);
+
+    PixelInfo info;
+    info.row = m_lastPixelInfo.row;
+    info.col = m_lastPixelInfo.col;
+
+    if (m_imageLayer && m_lastPixelInfo.row >= 0) {
+        const RasterData &data = m_imageLayer->rasterData();
+        const int r = m_lastPixelInfo.row;
+        const int c = m_lastPixelInfo.col;
+        if (r >= 0 && r < data.height() && c >= 0 && c < data.width()) {
+            info.bandCount = data.bands();
+            info.bandValues.reserve(data.bands());
+            for (int b = 0; b < data.bands(); ++b)
+                info.bandValues.append(data.sample(b, r, c));
+        }
+    }
+
+    emit pixelInfoChanged(info);
+}
+
 void ImageViewer::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
@@ -268,8 +366,13 @@ void ImageViewer::dropEvent(QDropEvent *event)
         const QString suffix = QFileInfo(path).suffix().toLower();
 
         if (imgExts.contains(suffix)) {
-            // Replace content of this viewer
-            setImage(path);
+            // Add image as a new layer on top of existing content
+            auto *imgLayer = new ImageLayer(path);
+            if (imgLayer->rasterData().isNull()) {
+                delete imgLayer;
+                continue;
+            }
+            m_layerManager->addLayer(imgLayer);
         } else if (csvExts.contains(suffix)) {
             if (!m_imageLayer) {
                 QMessageBox::information(this, "Add Points",

@@ -102,6 +102,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::splitViewer);
 
+    connect(ui->actionSyncSplitViews,
+            &QAction::toggled,
+            this,
+            &MainWindow::onSyncSplitViewsToggled);
+
     connect(ui->projectTree,
             &QTreeView::doubleClicked,
             this,
@@ -649,6 +654,7 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     if (!viewer) {
         ui->actionPan->setChecked(false);
         ui->actionPan->setEnabled(false);
+        ui->actionSyncSplitViews->setEnabled(false);
         if (m_layersDock)
             m_layersDock->setLayerManager(nullptr);
         clearPropertiesTable();
@@ -657,6 +663,10 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 
     ui->actionPan->setChecked(viewer->panModeEnabled());
     ui->actionPan->setEnabled(true);
+
+    // Enable sync only if the viewer is inside a QSplitter with siblings
+    auto *splitter = qobject_cast<QSplitter*>(viewer->parentWidget());
+    ui->actionSyncSplitViews->setEnabled(splitter && splitter->count() > 1);
 
     LayerManager *mgr = viewer->layerManager();
     Layer *active = mgr ? mgr->activeLayer() : nullptr;
@@ -890,6 +900,11 @@ void MainWindow::updatePropertiesTable(const PixelInfo &info)
 void MainWindow::updatePropertiesForPointLayer(PointLayer *layer)
 {
     onPointSelectionChanged(layer ? layer->selectedPointIndex() : -1);
+}
+
+void MainWindow::onSyncSplitViewsToggled(bool checked)
+{
+    ImageViewer::setSyncEnabled(checked);
 }
 
 void MainWindow::clearPropertiesTable()
