@@ -18,9 +18,22 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMutexLocker>
+#include <QPixmap>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QUrl>
+
+namespace {
+QCursor editPointsCursor()
+{
+    QPixmap pixmap(QStringLiteral(":/icons/edit-points-target-cursor.png"));
+    if (pixmap.isNull())
+        return Qt::CrossCursor;
+
+    pixmap = pixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    return QCursor(pixmap, pixmap.width() / 2, pixmap.height() / 2);
+}
+}
 
 ImageViewer::ImageViewer(QWidget *parent)
     : QGraphicsView(parent)
@@ -31,6 +44,7 @@ ImageViewer::ImageViewer(QWidget *parent)
     setAcceptDrops(true);
     viewport()->setAcceptDrops(true);
     viewport()->installEventFilter(this);
+    viewport()->setFocusPolicy(Qt::StrongFocus);
     setScene(m_scene);
     m_layerManager->attachToScene(m_scene);
 
@@ -45,6 +59,7 @@ ImageViewer::ImageViewer(QWidget *parent)
                 break;
             }
         }
+        setPointItemsInteractionBlocked(panInteractionActive());
     });
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
@@ -85,36 +100,39 @@ void ImageViewer::setPanModeEnabled(bool enabled)
 
 void ImageViewer::setPointEditEnabled(bool enabled)
 {
+    if (enabled) {
+        if (!m_editingPointLayer && m_layerManager) {
+            Layer *active = m_layerManager->activeLayer();
+            m_editingPointLayer = qobject_cast<PointLayer*>(active);
+        }
+
+        if (!m_editingPointLayer)
+            enabled = false;
+    }
+
     m_pointEditEnabled = enabled;
+    updateDragMode();
 
-    if (!m_layerManager)
-        return;
-
-    Layer *active = m_layerManager->activeLayer();
-    if (auto *pointLayer = qobject_cast<PointLayer*>(active)) {
-        pointLayer->setEditMode(enabled);
+    if (m_editingPointLayer) {
+        m_editingPointLayer->setEditMode(enabled);
+        if (!enabled)
+            m_editingPointLayer.clear();
     }
 }
 
 void ImageViewer::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
-        m_spacePanActive = true;
-        updateDragMode();
-        event->accept();
+    if (handleSpacePanKeyEvent(event))
         return;
-    }
+
     QGraphicsView::keyPressEvent(event);
 }
 
 void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
-        m_spacePanActive = false;
-        updateDragMode();
-        event->accept();
+    if (handleSpacePanKeyEvent(event))
         return;
-    }
+
     QGraphicsView::keyReleaseEvent(event);
 }
 
@@ -161,23 +179,67 @@ void ImageViewer::fitImageToView()
 
 void ImageViewer::updateDragMode()
 {
-    const bool shouldPan = m_panModeEnabled || m_spacePanActive;
+    const bool shouldPan = panInteractionActive();
     setDragMode(shouldPan ? QGraphicsView::ScrollHandDrag : QGraphicsView::NoDrag);
-    viewport()->setCursor(shouldPan ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    setPointItemsInteractionBlocked(shouldPan);
+    if (shouldPan) {
+        viewport()->setCursor(Qt::OpenHandCursor);
+    } else if (m_pointEditEnabled) {
+        viewport()->setCursor(editPointsCursor());
+    } else {
+        viewport()->setCursor(Qt::ArrowCursor);
+    }
+}
+
+bool ImageViewer::panInteractionActive() const
+{
+    return m_panModeEnabled || m_spacePanActive;
+}
+
+bool ImageViewer::handleSpacePanKeyEvent(QEvent *event)
+{
+    if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+        return false;
+
+    auto *keyEvent = static_cast<QKeyEvent*>(event);
+    if (keyEvent->key() != Qt::Key_Space || keyEvent->isAutoRepeat())
+        return false;
+
+    m_spacePanActive = (event->type() == QEvent::KeyPress);
+    updateDragMode();
+    keyEvent->accept();
+    return true;
+}
+
+void ImageViewer::setPointItemsInteractionBlocked(bool blocked)
+{
+    if (!m_scene)
+        return;
+
+    for (QGraphicsItem *item : m_scene->items()) {
+        auto *pointItem = dynamic_cast<PointItem*>(item);
+        if (!pointItem)
+            continue;
+
+        pointItem->setAcceptedMouseButtons(blocked ? Qt::NoButton : Qt::AllButtons);
+        pointItem->setAcceptHoverEvents(!blocked);
+        if (blocked)
+            pointItem->unsetCursor();
+    }
 }
 
 void ImageViewer::mousePressEvent(QMouseEvent *event)
 {
+    emit activatedByClick();
     m_lastMousePos = event->pos();
 
-    if (m_pointEditEnabled && event->button() == Qt::LeftButton) {
+    if (m_pointEditEnabled && !panInteractionActive() && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
         QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
         const bool isPointItem = itemUnder && (itemUnder->type() == QGraphicsEllipseItem::Type);
         if (!isPointItem) {
-            Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
-            if (auto *pointLayer = qobject_cast<PointLayer*>(active)) {
-                pointLayer->addPoint(scenePos.y(), scenePos.x());
+            if (m_editingPointLayer) {
+                m_editingPointLayer->addPoint(scenePos.y(), scenePos.x());
                 event->accept();
                 return;
             }
@@ -190,7 +252,6 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
-    const bool wasPanning = m_panModeEnabled || m_spacePanActive;
     PixelInfo info;
     info.row = -1;
     info.col = -1;
@@ -236,6 +297,12 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == viewport()) {
+        if (event->type() == QEvent::Enter) {
+            setFocus(Qt::MouseFocusReason);
+            viewport()->setFocus(Qt::MouseFocusReason);
+        }
+        if (handleSpacePanKeyEvent(event))
+            return true;
         if (event->type() == QEvent::DragEnter) {
             auto *de = static_cast<QDragEnterEvent*>(event);
             dragEnterEvent(de);

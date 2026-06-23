@@ -2,6 +2,7 @@
 #define POINTLAYER_H
 
 #include "layer.h"
+#include "layerstyle.h"
 #include "pointcollection.h"
 
 class PointItem;
@@ -17,9 +18,15 @@ public:
     const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) override;
 
     const PointCollection &collection() const { return m_collection; }
+    PointLayerStyle style() const { return m_style; }
+    void setStyle(const PointLayerStyle &style);
+    void setColor(const QColor &color);
+    void setSize(double size);
+    void setSymbol(PointSymbol symbol);
 
     void setEditMode(bool enabled);
     bool editMode() const { return m_editMode; }
+    void setActive(bool active) override;
 
     void cancelEdit();
 
@@ -43,11 +50,15 @@ private slots:
 
 private:
     void rebuildItems(QGraphicsScene *scene);
+    void applyStyleToItems();
+    void applyStyleToPointItem(int index);
+    QColor selectionColor() const;
     void clearPointItems();
     bool ensureBackup();
     void removeBackup();
 
     PointCollection m_collection;
+    PointLayerStyle m_style;
     QGraphicsScene *m_scene = nullptr;
     bool m_editMode = false;
     QString m_backupPath;

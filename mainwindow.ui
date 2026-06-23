@@ -148,7 +148,7 @@
    <widget class="QWidget" name="dockLayersContents">
     <layout class="QVBoxLayout" name="dockLayersLayout">
      <item>
-      <widget class="LayersDock" name="layersDock" native="true"/>
+      <widget class="LayersDock" name="layersDock"/>
      </item>
     </layout>
    </widget>
@@ -258,6 +258,10 @@
    <property name="checkable">
     <bool>true</bool>
    </property>
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/icons/edit-points-target.png</normaloff>:/icons/edit-points-target.png</iconset>
+   </property>
    <property name="text">
     <string>Edit</string>
    </property>
@@ -304,7 +308,7 @@
   </customwidget>
   <customwidget>
    <class>LayersDock</class>
-   <extends>QDockWidget</extends>
+   <extends>QWidget</extends>
    <header>layersdock.h</header>
   </customwidget>
  </customwidgets>

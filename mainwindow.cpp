@@ -24,10 +24,12 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
+#include <QSizePolicy>
 #include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
@@ -165,18 +167,17 @@ MainWindow::MainWindow(QWidget *parent)
     ui->workspaceTabs->setMovable(true);
     ui->workspaceTabs->setDocumentMode(true);
 
-    // Track focus changes to know which ImageViewer is active
-    connect(qApp, &QApplication::focusChanged,
-            this, &MainWindow::onFocusChanged);
-
     // Obtain LayersDock from the UI instead of creating it again
     if (QDockWidget *dockLayers = findChild<QDockWidget *>("dockLayers")) {
         m_layersDock = dockLayers->findChild<LayersDock *>("layersDock");
     } else {
         m_layersDock = new LayersDock(this);
-        addDockWidget(Qt::RightDockWidgetArea, m_layersDock);
+        auto *fallbackDockLayers = new QDockWidget("Layers", this);
+        fallbackDockLayers->setObjectName("dockLayers");
+        fallbackDockLayers->setWidget(m_layersDock);
+        addDockWidget(Qt::RightDockWidgetArea, fallbackDockLayers);
     }
-    if (m_project.isValid())
+    if (m_layersDock && m_project.isValid())
         m_layersDock->setProjectPath(m_project.rootPath());
 
     if (m_layersDock) {
@@ -201,9 +202,11 @@ MainWindow::MainWindow(QWidget *parent)
     splitDockWidget(ui->dockProjectExplorer, m_previewDock, Qt::Vertical);
     m_previewDock->hide(); // hidden until a project is loaded
 
-    // Resize proportions: Viewer takes more space
+    configureDockSizing();
+
+    // Initial dock proportions.
     resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
-                {300, 600, 300}, Qt::Horizontal);
+                {420, 600, 260}, Qt::Horizontal);
 
     updateProjectActions();
     updateRecentProjectsMenu();
@@ -395,7 +398,7 @@ void MainWindow::extractRawData()
             QStringLiteral("Extracting: %1").arg(fi.fileName()), 0);
 
         QString errorMsg;
-        if (RawReader::extractSensorData(rawPath, tiffPath, &errorMsg))
+        if (RawReader::extractSensorData(rawPath, tiffPath, m_project.rootPath(), &errorMsg))
             ++successCount;
         else
             ++failCount;
@@ -540,21 +543,28 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
 void MainWindow::onWorkspaceTabCloseRequested(int index)
 {
     QWidget *tabWidget = ui->workspaceTabs->widget(index);
+    if (!tabWidget)
+        return;
 
-    // Remove from open image map (find by searching child viewers)
+    if (m_activeViewer
+        && (tabWidget == m_activeViewer || tabWidget->isAncestorOf(m_activeViewer))) {
+        m_activeViewer.clear();
+        onActiveViewerChanged(nullptr);
+    }
+
     const QString key = m_openImageTabs.key(tabWidget);
     if (!key.isEmpty())
         m_openImageTabs.remove(key);
 
     ui->workspaceTabs->removeTab(index);
-    delete tabWidget;  // deletes the splitter and all its viewers
+    delete tabWidget;
 
-    if (m_activeViewer) {
-        // Check if the active viewer was deleted
-        m_activeViewer = currentImageViewer();
-        if (!m_activeViewer)
-            onActiveViewerChanged(nullptr);
-    }
+    // Re-resolve the active viewer from the surviving current tab. This also
+    // makes closing a non-current tab harmless.
+    m_activeViewer.clear();
+    ImageViewer *viewer = currentImageViewer();
+    m_activeViewer = viewer;
+    onActiveViewerChanged(viewer);
 
     updateProjectActions();
 }
@@ -591,9 +601,12 @@ void MainWindow::onLayerSelectionChanged(int index)
         ui->actionEditPoints->setEnabled(true);
     } else {
         m_currentPointLayer = nullptr;
-        ui->actionEditPoints->setChecked(false);
-        ui->actionEditPoints->setEnabled(false);
+        ui->actionEditPoints->setEnabled(viewer->pointEditEnabled());
     }
+
+    PointLayer *editingLayer = viewer->editingPointLayer();
+    ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
+    ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
 }
 
 void MainWindow::onPointSelectionChanged(int index)
@@ -656,9 +669,9 @@ void MainWindow::onEditPointsToggled(bool enabled)
     viewer->setPointEditEnabled(enabled);
 
     // Update Cancel edit button state
-    Layer *active = viewer->layerManager() ? viewer->layerManager()->activeLayer() : nullptr;
-    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    PointLayer *pointLayer = viewer->editingPointLayer();
     ui->actionCancelEdit->setEnabled(pointLayer && pointLayer->editMode());
+    ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
 }
 
 void MainWindow::onCancelEditTriggered()
@@ -667,8 +680,7 @@ void MainWindow::onCancelEditTriggered()
     if (!viewer)
         return;
 
-    Layer *active = viewer->layerManager() ? viewer->layerManager()->activeLayer() : nullptr;
-    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    PointLayer *pointLayer = viewer->editingPointLayer();
     if (!pointLayer || !pointLayer->editMode())
         return;
 
@@ -727,28 +739,13 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     Layer *active = mgr ? mgr->activeLayer() : nullptr;
     auto *pointLayer = qobject_cast<PointLayer*>(active);
     const bool isPointLayer = (pointLayer != nullptr);
-    ui->actionEditPoints->setEnabled(isPointLayer);
-    ui->actionEditPoints->setChecked(isPointLayer && viewer->pointEditEnabled());
-    ui->actionCancelEdit->setEnabled(isPointLayer && pointLayer->editMode());
+    PointLayer *editingLayer = viewer->editingPointLayer();
+    ui->actionEditPoints->setEnabled(isPointLayer || viewer->pointEditEnabled());
+    ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
+    ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
 
     if (m_layersDock)
         m_layersDock->setLayerManager(mgr);
-}
-
-void MainWindow::onFocusChanged(QWidget * /*old*/, QWidget *now)
-{
-    // Walk up the parent chain to find if a ImageViewer received focus
-    QWidget *w = now;
-    while (w) {
-        if (auto *viewer = qobject_cast<ImageViewer*>(w)) {
-            if (viewer != m_activeViewer) {
-                m_activeViewer = viewer;
-                onActiveViewerChanged(viewer);
-            }
-            return;
-        }
-        w = w->parentWidget();
-    }
 }
 
 void MainWindow::splitViewer()
@@ -763,6 +760,7 @@ void MainWindow::splitViewer()
 
     auto *newViewer = new ImageViewer(this);
     newViewer->setFocusPolicy(Qt::StrongFocus);
+    configureViewer(newViewer);
 
     int idx = splitter->indexOf(viewer);
     splitter->insertWidget(idx + 1, newViewer);
@@ -872,33 +870,68 @@ void MainWindow::openImageAtPath(const QString &filePath)
         }
     }
 
-    connect(viewer, &ImageViewer::pixelInfoChanged, this, &MainWindow::updatePropertiesTable);
-    connect(viewer, &ImageViewer::closeRequested, this, [this]() {
+    configureViewer(viewer);
+
+    m_activeViewer = viewer;
+    updateProjectActions();
+}
+
+void MainWindow::configureViewer(ImageViewer *viewer)
+{
+    if (!viewer)
+        return;
+
+    connect(viewer, &ImageViewer::pixelInfoChanged,
+            this, &MainWindow::updatePropertiesTable);
+    connect(viewer, &ImageViewer::activatedByClick, this, [this, viewer]() {
+        if (m_activeViewer == viewer)
+            return;
+
+        m_activeViewer = viewer;
+        onActiveViewerChanged(viewer);
+    });
+    connect(viewer, &ImageViewer::closeRequested, this, [this, viewer]() {
         auto *v = qobject_cast<ImageViewer*>(sender());
-        if (!v) return;
+        if (!v || v != viewer)
+            return;
 
         auto *splitter = qobject_cast<QSplitter*>(v->parentWidget());
-        if (!splitter) {
-            // Not in a splitter, close the tab
+        if (!splitter)
+            return;
+
+        if (splitter->count() <= 1) {
+            QPointer<QWidget> tabWidget = splitter;
             for (int t = 0; t < ui->workspaceTabs->count(); ++t) {
-                if (ui->workspaceTabs->widget(t) == v) {
-                    onWorkspaceTabCloseRequested(t);
+                if (ui->workspaceTabs->widget(t) == splitter) {
+                    // The request originates inside ImageViewer::contextMenuEvent().
+                    // Closing synchronously would destroy that viewer before its
+                    // event handler has returned.
+                    QTimer::singleShot(0, this, [this, tabWidget]() {
+                        if (!tabWidget)
+                            return;
+
+                        const int tabIndex = ui->workspaceTabs->indexOf(tabWidget);
+                        if (tabIndex >= 0)
+                            onWorkspaceTabCloseRequested(tabIndex);
+                    });
                     return;
                 }
             }
             return;
         }
 
-        // With 2+ viewers: just remove this one
-        v->setVisible(false);
+        v->hide();
+        v->setParent(nullptr);
         v->deleteLater();
 
-        // With 1 viewer left (was 2 before removal), the remaining viewer
-        // expands to fill the splitter naturally. No tab close needed.
+        if (m_activeViewer == v) {
+            auto *remainingViewer = qobject_cast<ImageViewer*>(splitter->widget(0));
+            m_activeViewer = remainingViewer;
+            onActiveViewerChanged(remainingViewer);
+            if (remainingViewer)
+                remainingViewer->setFocus();
+        }
     });
-
-    m_activeViewer = viewer;
-    updateProjectActions();
 }
 
 void MainWindow::loadProject(const Project &project)
@@ -1043,6 +1076,39 @@ void MainWindow::clearPropertiesTable()
 {
     if (ui->propertiesTable)
         ui->propertiesTable->setRowCount(0);
+}
+
+void MainWindow::configureDockSizing()
+{
+    if (ui->centralwidget) {
+        ui->centralwidget->setMinimumSize(0, 0);
+        ui->centralwidget->setMaximumSize(0, 0);
+        ui->centralwidget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+
+    auto constrainWidth = [](QDockWidget *dock, int minimumWidth, int maximumWidth) {
+        if (!dock)
+            return;
+
+        dock->setMinimumWidth(minimumWidth);
+        dock->setMaximumWidth(maximumWidth);
+
+        if (QWidget *contents = dock->widget()) {
+            contents->setMinimumWidth(minimumWidth);
+            contents->setMaximumWidth(maximumWidth);
+        }
+    };
+
+    constrainWidth(ui->dockProjectExplorer, 260, 460);
+    constrainWidth(m_previewDock, 260, 460);
+    constrainWidth(ui->dockLayers, 220, 320);
+    constrainWidth(ui->dockProperties, 220, 320);
+
+    if (ui->dockViewer) {
+        ui->dockViewer->setMinimumWidth(320);
+        if (QWidget *contents = ui->dockViewer->widget())
+            contents->setMinimumWidth(320);
+    }
 }
 
 QString MainWindow::selectedProjectPath() const

@@ -39,6 +39,16 @@ bool Layer::isVisible() const
     return m_visible;
 }
 
+bool Layer::isActive() const
+{
+    return m_active;
+}
+
+void Layer::setActive(bool active)
+{
+    m_active = active;
+}
+
 void Layer::setVisible(bool visible)
 {
     m_visible = visible;

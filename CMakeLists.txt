@@ -49,11 +49,15 @@ qt_add_executable(rcaiman_projects
     imageviewer.h imageviewer.cpp
     imagelayer.h imagelayer.cpp
     layer.h layer.cpp
+    layerstyle.h
+    layerpropertieswidget.h layerpropertieswidget.cpp
     layermanager.h layermanager.cpp
     layersdock.h layersdock.cpp
+    imagelayerpropertieswidget.h imagelayerpropertieswidget.cpp
     pointcollection.h pointcollection.cpp
     pointitem.h pointitem.cpp
     pointlayer.h pointlayer.cpp
+    pointlayerpropertieswidget.h pointlayerpropertieswidget.cpp
     previewdock.h previewdock.cpp
     project.h project.cpp
     rasterdata.h rasterdata.cpp

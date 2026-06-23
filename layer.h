@@ -24,6 +24,8 @@ public:
 
     bool isVisible() const;
     void setVisible(bool visible);
+    bool isActive() const;
+    virtual void setActive(bool active);
 
     int zOrder() const;        // calculado desde el índice en el manager
 
@@ -50,6 +52,7 @@ signals:
     void visibilityChanged(bool visible);
     void nameChanged(const QString &name);
     void flickerChanged(bool enabled);
+    void styleChanged();
 
 private slots:
     void onFlickerTick();
@@ -58,6 +61,7 @@ private:
     QString m_name;
     QString m_sourcePath;
     bool m_visible = true;
+    bool m_active = false;
     bool m_flickerEnabled = false;
     bool m_visibleBeforeFlicker = true;
     QTimer *m_flickerTimer = nullptr;

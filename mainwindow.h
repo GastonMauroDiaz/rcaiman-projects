@@ -5,8 +5,9 @@
 
 #include <QMainWindow>
 #include <QMap>
-#include <QSettings>
 #include <QMetaObject>
+#include <QPointer>
+#include <QSettings>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 
@@ -53,7 +54,6 @@ private slots:
     void onProjectTreeItemClicked(const QModelIndex &index);
     void splitViewer();
     void onSyncSplitViewsToggled(bool checked);
-    void onFocusChanged(QWidget *old, QWidget *now);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
 
@@ -69,6 +69,8 @@ private:
     void updatePropertiesTable(const PixelInfo &info);
     void updatePropertiesForPointLayer(PointLayer *layer);
     void clearPropertiesTable();
+    void configureDockSizing();
+    void configureViewer(ImageViewer *viewer);
 
     Ui::MainWindow *ui;
     QFileSystemModel *m_projectFileSystemModel = nullptr;
@@ -79,7 +81,7 @@ private:
     QStringList m_recentProjects;
     PointLayer *m_currentPointLayer = nullptr;
     QMetaObject::Connection m_pointLayerConnection;
-    ImageViewer *m_activeViewer = nullptr;
+    QPointer<ImageViewer> m_activeViewer;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

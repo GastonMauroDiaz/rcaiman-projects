@@ -45,6 +45,8 @@ public:
 
     static QStringList reservedDirectories();
 
+    static QStringList projectSubdirectories();
+
 private:
     Project(QString rootPath, QString name, QString created);
 

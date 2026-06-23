@@ -1,9 +1,9 @@
 #ifndef LAYERSDOCK_H
 #define LAYERSDOCK_H
 
-#include <QDockWidget>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QWidget>
 
 class QListWidget;
 class QListWidgetItem;
@@ -11,8 +11,9 @@ class QPushButton;
 class QDoubleSpinBox;
 class LayerManager;
 class Layer;
+class LayerPropertiesWidget;
 
-class LayersDock : public QDockWidget
+class LayersDock : public QWidget
 {
     Q_OBJECT
 
@@ -29,8 +30,6 @@ signals:
 private slots:
     void updateList();
     void onItemChanged(QListWidgetItem *item);
-    void dragEnterEvent(QDragEnterEvent *event) override;
-    void dropEvent(QDropEvent *event) override;
     void updateActiveLayerFromUi(int row);
     void addPointLayer();
     void removeLayer();
@@ -40,11 +39,16 @@ private slots:
     void onFlickerSpeedChanged(double seconds);
     void onCurrentRowChanged(int row);
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     LayerManager *m_manager = nullptr;
     QListWidget *m_listWidget = nullptr;
     QPushButton *m_flickerBtn = nullptr;
     QDoubleSpinBox *m_flickerSpeed = nullptr;
+    LayerPropertiesWidget *m_propertiesWidget = nullptr;
     bool m_updatingList = false;
     QString m_projectPath;
     Layer *m_trackedLayer = nullptr;

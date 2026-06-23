@@ -247,10 +247,15 @@ QStringList Project::reservedDirectories()
     return {"raw_files", "sensor_data"};
 }
 
+QStringList Project::projectSubdirectories()
+{
+    return {"raw_files", "sensor_data", "image_metadata"};
+}
+
 bool Project::createDirectoryStructure(const QString &rootPath, QString *errorMessage)
 {
     QDir root(rootPath);
-    const QStringList directories = Project::reservedDirectories();
+    const QStringList directories = Project::projectSubdirectories();
 
     for (const QString &directory : directories) {
         if (!root.mkpath(directory)) {

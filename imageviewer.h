@@ -7,6 +7,7 @@
 #include <QKeyEvent>
 #include <QMutex>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QWheelEvent>
 
@@ -36,6 +37,7 @@ public:
 
     void setPointEditEnabled(bool enabled);
     bool pointEditEnabled() const { return m_pointEditEnabled; }
+    PointLayer *editingPointLayer() const { return m_editingPointLayer; }
 
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
@@ -43,6 +45,7 @@ public:
 signals:
     void pixelInfoChanged(const PixelInfo &info);
     void closeRequested();
+    void activatedByClick();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -68,6 +71,9 @@ private:
     void fitImageToView();
     void updateDragMode();
     void syncToSiblings(int dx, int dy);
+    bool panInteractionActive() const;
+    bool handleSpacePanKeyEvent(QEvent *event);
+    void setPointItemsInteractionBlocked(bool blocked);
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
@@ -78,6 +84,7 @@ private:
     QGraphicsScene *m_scene = nullptr;
     LayerManager *m_layerManager = nullptr;
     ImageLayer *m_imageLayer = nullptr;
+    QPointer<PointLayer> m_editingPointLayer;
     static bool ms_syncEnabled;
     bool m_syncingScroll = false;
     QMutex m_syncMutex;

@@ -1,6 +1,7 @@
 #include "layersdock.h"
 #include "layermanager.h"
 #include "layer.h"
+#include "layerpropertieswidget.h"
 #include "imagelayer.h"
 #include "pointlayer.h"
 
@@ -13,18 +14,17 @@
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QDir>
+#include <QGroupBox>
 #include <QMimeData>
 #include <QUrl>
 
 LayersDock::LayersDock(QWidget *parent)
-    : QDockWidget("Layers", parent)
+    : QWidget(parent)
 {
     setAcceptDrops(true);
     setObjectName("LayersDock");
-    setWindowTitle("Layers");
 
-    auto *container = new QWidget(this);
-    auto *mainLayout = new QVBoxLayout(container);
+    auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(4, 4, 4, 4);
     mainLayout->setSpacing(4);
 
@@ -63,7 +63,12 @@ LayersDock::LayersDock(QWidget *parent)
     orderLayout->addWidget(m_flickerSpeed);
     mainLayout->addLayout(orderLayout);
 
-    setWidget(container);
+    auto *propertiesGroup = new QGroupBox("Layer style", this);
+    auto *propertiesLayout = new QVBoxLayout(propertiesGroup);
+    propertiesLayout->setContentsMargins(4, 4, 4, 4);
+    m_propertiesWidget = new LayerPropertiesWidget(propertiesGroup);
+    propertiesLayout->addWidget(m_propertiesWidget);
+    mainLayout->addWidget(propertiesGroup);
 
     connect(addLayerBtn, &QPushButton::clicked, this, [this]() {
         if (!m_manager) return;
@@ -117,6 +122,8 @@ void LayersDock::setLayerManager(LayerManager *manager)
         disconnect(m_trackedLayer, nullptr, this, nullptr);
         m_trackedLayer = nullptr;
     }
+    if (m_propertiesWidget)
+        m_propertiesWidget->setLayer(nullptr);
 
     m_manager = manager;
 
@@ -138,6 +145,8 @@ void LayersDock::updateList()
     {
         m_updatingList = false;
         m_listWidget->blockSignals(false);
+        if (m_propertiesWidget)
+            m_propertiesWidget->setLayer(nullptr);
         return;
     }
 
@@ -273,11 +282,15 @@ void LayersDock::onCurrentRowChanged(int row)
         m_flickerBtn->setEnabled(false);
         m_flickerSpeed->setEnabled(false);
         m_flickerBtn->setChecked(false);
+        if (m_propertiesWidget)
+            m_propertiesWidget->setLayer(nullptr);
         return;
     }
 
     Layer *layer = m_manager->layerAt(row);
     m_trackedLayer = layer;
+    if (m_propertiesWidget)
+        m_propertiesWidget->setLayer(layer);
 
     // Connect to flickerChanged to sync button state
     connect(layer, &Layer::flickerChanged, this, [this](bool enabled) {

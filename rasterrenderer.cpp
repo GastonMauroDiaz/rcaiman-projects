@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <vector>
 
 // ============================================================================
 // Range computation — template definitions come FIRST
@@ -34,6 +36,82 @@ static void computeMinMaxForBand(const RasterData &data, int band,
     outMax = mx;
 }
 
+template<typename T>
+static void collectFiniteValuesForBand(const RasterData &data, int band,
+                                       std::vector<double> &values)
+{
+    const T *ptr = data.bandPointer<T>(band);
+    if (!ptr)
+        return;
+
+    const qsizetype n = static_cast<qsizetype>(data.width()) * data.height();
+    values.reserve(static_cast<size_t>(n));
+
+    for (qsizetype i = 0; i < n; ++i) {
+        const double v = static_cast<double>(ptr[i]);
+        if (!std::isfinite(v))
+            continue;
+        values.push_back(v);
+    }
+}
+
+static QRgb colorFromRamp(double value, ColorRamp ramp)
+{
+    value = std::clamp(value, 0.0, 1.0);
+    if (ramp == ColorRamp::Rainbow) {
+        const double h = value * 240.0;
+        const double c = 1.0;
+        const double x = c * (1.0 - std::abs(std::fmod(h / 60.0, 2.0) - 1.0));
+
+        double r = 0.0;
+        double g = 0.0;
+        double b = 0.0;
+        if (h < 60.0) {
+            r = c; g = x;
+        } else if (h < 120.0) {
+            r = x; g = c;
+        } else if (h < 180.0) {
+            g = c; b = x;
+        } else {
+            g = x; b = c;
+        }
+
+        return qRgb(static_cast<int>(r * 255.0 + 0.5),
+                    static_cast<int>(g * 255.0 + 0.5),
+                    static_cast<int>(b * 255.0 + 0.5));
+    }
+
+    if (ramp == ColorRamp::RedBlue) {
+        return qRgb(static_cast<int>((1.0 - value) * 255.0 + 0.5),
+                    0,
+                    static_cast<int>(value * 255.0 + 0.5));
+    }
+
+    if (ramp == ColorRamp::GreenMagenta) {
+        return qRgb(static_cast<int>(value * 255.0 + 0.5),
+                    static_cast<int>((1.0 - value) * 180.0 + 0.5),
+                    static_cast<int>(value * 255.0 + 0.5));
+    }
+
+    const int gray = static_cast<int>(value * 255.0 + 0.5);
+    return qRgb(gray, gray, gray);
+}
+
+static QRgb categoricalColor(double value)
+{
+    uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+
+    // SplitMix64 gives stable, well-separated colors without storing a palette.
+    bits += 0x9e3779b97f4a7c15ULL;
+    bits = (bits ^ (bits >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    bits = (bits ^ (bits >> 27)) * 0x94d049bb133111ebULL;
+    bits ^= bits >> 31;
+
+    const int hue = static_cast<int>(bits % 360ULL);
+    return QColor::fromHsv(hue, 190, 230).rgb();
+}
+
 // ============================================================================
 // Typed RGB rendering — templates come FIRST
 // ============================================================================
@@ -44,6 +122,8 @@ static void renderRgbLines(const RasterData &data,
                            double minR, double maxR,
                            double minG, double maxG,
                            double minB, double maxB,
+                           StretchMode stretchMode,
+                           double gamma,
                            QImage &image)
 {
     const T *r = data.bandPointer<T>(bandR);
@@ -69,6 +149,12 @@ static void renderRgbLines(const RasterData &data,
             vr = std::clamp(vr, 0.0, 1.0);
             vg = std::clamp(vg, 0.0, 1.0);
             vb = std::clamp(vb, 0.0, 1.0);
+            if (stretchMode == StretchMode::Gamma) {
+                const double exponent = 1.0 / std::clamp(gamma, 1.0, 4.0);
+                vr = std::pow(vr, exponent);
+                vg = std::pow(vg, exponent);
+                vb = std::pow(vb, exponent);
+            }
             line[x] = qRgb(static_cast<int>(vr * 255.0 + 0.5),
                            static_cast<int>(vg * 255.0 + 0.5),
                            static_cast<int>(vb * 255.0 + 0.5));
@@ -102,6 +188,42 @@ static void renderGrayLines(const RasterData &data,
     }
 }
 
+template<typename T>
+static void renderRampLines(const RasterData &data,
+                            int band,
+                            double minVal, double maxVal,
+                            ColorRamp ramp,
+                            StretchMode stretchMode,
+                            double gamma,
+                            QImage &image)
+{
+    const T *ptr = data.bandPointer<T>(band);
+    if (!ptr)
+        return;
+
+    const double range = maxVal - minVal;
+    uchar *bits = image.bits();
+    const int bytesPerLine = image.bytesPerLine();
+
+    for (int y = 0; y < data.height(); ++y) {
+        QRgb *line = reinterpret_cast<QRgb *>(bits + y * bytesPerLine);
+        for (int x = 0; x < data.width(); ++x) {
+            const qsizetype idx = static_cast<qsizetype>(y) * data.width() + x;
+            const double rawValue = static_cast<double>(ptr[idx]);
+            if (ramp == ColorRamp::Categorical) {
+                line[x] = categoricalColor(rawValue);
+                continue;
+            }
+
+            double v = range == 0.0 ? 0.0 : (rawValue - minVal) / range;
+            v = std::clamp(v, 0.0, 1.0);
+            if (stretchMode == StretchMode::Gamma)
+                v = std::pow(v, 1.0 / std::clamp(gamma, 1.0, 4.0));
+            line[x] = colorFromRamp(v, ramp);
+        }
+    }
+}
+
 // ============================================================================
 // Render dispatch: RGB
 // ============================================================================
@@ -110,7 +232,9 @@ QImage RasterRenderer::renderRgb(const RasterData &data,
                                  int bandR, int bandG, int bandB,
                                  double minR, double maxR,
                                  double minG, double maxG,
-                                 double minB, double maxB) const
+                                 double minB, double maxB,
+                                 StretchMode stretchMode,
+                                 double gamma) const
 {
     if (data.isNull())
         return {};
@@ -127,25 +251,25 @@ QImage RasterRenderer::renderRgb(const RasterData &data,
 
     switch (data.dataType()) {
     case RasterData::DataType::UInt8:
-        renderRgbLines<uint8_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<uint8_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::UInt16:
-        renderRgbLines<uint16_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<uint16_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::Int16:
-        renderRgbLines<int16_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<int16_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::UInt32:
-        renderRgbLines<uint32_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<uint32_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::Int32:
-        renderRgbLines<int32_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<int32_t>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::Float32:
-        renderRgbLines<float>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<float>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     case RasterData::DataType::Float64:
-        renderRgbLines<double>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, image);
+        renderRgbLines<double>(data, bR, bG, bB, minR, maxR, minG, maxG, minB, maxB, stretchMode, gamma, image);
         break;
     default:
         break;
@@ -197,6 +321,66 @@ QImage RasterRenderer::renderSingle(const RasterData &data,
     return image;
 }
 
+QImage RasterRenderer::render(const RasterData &data, const RasterRenderStyle &style) const
+{
+    if (data.isNull())
+        return {};
+
+    if (style.mode == RasterRenderMode::Rgb) {
+        double minR = 0.0;
+        double maxR = 1.0;
+        double minG = 0.0;
+        double maxG = 1.0;
+        double minB = 0.0;
+        double maxB = 1.0;
+        computeRenderRange(data, style.redBand, style, minR, maxR);
+        computeRenderRange(data, style.greenBand, style, minG, maxG);
+        computeRenderRange(data, style.blueBand, style, minB, maxB);
+        return renderRgb(data, style.redBand, style.greenBand, style.blueBand,
+                         minR, maxR, minG, maxG, minB, maxB,
+                         style.stretchMode, style.gamma);
+    }
+
+    const int w = data.width();
+    const int h = data.height();
+    const int band = std::clamp(style.band, 0, data.bands() - 1);
+
+    double minVal = 0.0;
+    double maxVal = 1.0;
+    computeRenderRange(data, band, style, minVal, maxVal);
+
+    QImage image(w, h, QImage::Format_ARGB32_Premultiplied);
+    image.fill(0);
+
+    switch (data.dataType()) {
+    case RasterData::DataType::UInt8:
+        renderRampLines<uint8_t>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::UInt16:
+        renderRampLines<uint16_t>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::Int16:
+        renderRampLines<int16_t>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::UInt32:
+        renderRampLines<uint32_t>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::Int32:
+        renderRampLines<int32_t>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::Float32:
+        renderRampLines<float>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    case RasterData::DataType::Float64:
+        renderRampLines<double>(data, band, minVal, maxVal, style.colorRamp, style.stretchMode, style.gamma, image);
+        break;
+    default:
+        break;
+    }
+
+    return image;
+}
+
 QImage RasterRenderer::renderAuto(const RasterData &data) const
 {
     if (data.isNull())
@@ -208,7 +392,8 @@ QImage RasterRenderer::renderAuto(const RasterData &data) const
         computeRange(data, 1, min1, max1);
         computeRange(data, 2, min2, max2);
         return renderRgb(data, 0, 1, 2,
-                         min0, max0, min1, max1, min2, max2);
+                         min0, max0, min1, max1, min2, max2,
+                         StretchMode::Linear, 1.0);
     }
 
     double mn, mx;
@@ -247,6 +432,65 @@ void RasterRenderer::computeRange(const RasterData &data, int band,
         outMin = 0.0;
         outMax = 1.0;
         return;
+    }
+
+    if (std::abs(outMax - outMin) < 1e-10)
+        outMax = outMin + 1.0;
+}
+
+void RasterRenderer::computeRenderRange(const RasterData &data, int band,
+                                        const RasterRenderStyle &style,
+                                        double &outMin, double &outMax) const
+{
+    const int b = std::clamp(band, 0, data.bands() - 1);
+
+    if (style.stretchMode == StretchMode::None) {
+        computeRange(data, b, outMin, outMax);
+        return;
+    }
+
+    std::vector<double> values;
+    switch (data.dataType()) {
+    case RasterData::DataType::UInt8:
+        collectFiniteValuesForBand<uint8_t>(data, b, values);
+        break;
+    case RasterData::DataType::UInt16:
+        collectFiniteValuesForBand<uint16_t>(data, b, values);
+        break;
+    case RasterData::DataType::Int16:
+        collectFiniteValuesForBand<int16_t>(data, b, values);
+        break;
+    case RasterData::DataType::UInt32:
+        collectFiniteValuesForBand<uint32_t>(data, b, values);
+        break;
+    case RasterData::DataType::Int32:
+        collectFiniteValuesForBand<int32_t>(data, b, values);
+        break;
+    case RasterData::DataType::Float32:
+        collectFiniteValuesForBand<float>(data, b, values);
+        break;
+    case RasterData::DataType::Float64:
+        collectFiniteValuesForBand<double>(data, b, values);
+        break;
+    default:
+        break;
+    }
+
+    if (values.empty()) {
+        computeRange(data, b, outMin, outMax);
+        return;
+    }
+
+    std::sort(values.begin(), values.end());
+    if (style.tailTrim && style.trimPercent > 0.0) {
+        const double trim = std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
+        const size_t lowIndex = static_cast<size_t>(trim * static_cast<double>(values.size() - 1));
+        const size_t highIndex = static_cast<size_t>((1.0 - trim) * static_cast<double>(values.size() - 1));
+        outMin = values[lowIndex];
+        outMax = values[highIndex];
+    } else {
+        outMin = values.front();
+        outMax = values.back();
     }
 
     if (std::abs(outMax - outMin) < 1e-10)

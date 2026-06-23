@@ -1,5 +1,8 @@
 <RCC>
     <qresource prefix="/icons">
         <file alias="hand-pan.png">assets/icons/hand-gloves_13387215.png</file>
+        <file alias="select-point.png">assets/icons/select-point.png</file>
+        <file alias="edit-points-target.png">assets/icons/edit-points-target.png</file>
+        <file alias="edit-points-target-cursor.png">assets/icons/edit-points-target_cursor.png</file>
     </qresource>
 </RCC>
