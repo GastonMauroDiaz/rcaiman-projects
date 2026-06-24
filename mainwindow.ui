@@ -32,6 +32,7 @@
     <addaction name="actionSaveProject"/>
     <addaction name="actionSaveProjectAs"/>
     <addaction name="actionSaveProjectAsCleanCopy"/>
+    <addaction name="actionProjectReport"/>
     <addaction name="actionCloseProject"/>
     <addaction name="separator"/>
     <addaction name="actionImportRaw"/>
@@ -61,6 +62,8 @@
      </property>
      <addaction name="actionSplitViewer"/>
      <addaction name="actionSyncSplitViews"/>
+     <addaction name="separator"/>
+     <addaction name="actionResetWindowLayout"/>
     </widget>
     <addaction name="menuProject"/>
     <addaction name="menuImage"/>
@@ -236,6 +239,14 @@
     <string>Close</string>
    </property>
   </action>
+  <action name="actionProjectReport">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Report...</string>
+   </property>
+  </action>
    <action name="actionImportRaw">
     <property name="text">
      <string>Import raw...</string>
@@ -345,6 +356,11 @@ Click empty space to add, drag a point to move it, and Alt+click to delete.</str
    </property>
    <property name="toolTip">
     <string>Synchronize pan and zoom between split viewers.</string>
+   </property>
+  </action>
+  <action name="actionResetWindowLayout">
+   <property name="text">
+    <string>Reset window layout</string>
    </property>
   </action>
  </widget>

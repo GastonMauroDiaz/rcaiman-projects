@@ -43,7 +43,10 @@ class Project
 public:
     Project() = default;
 
-    static Project create(const QString &rootPath, const QString &projectName, QString *errorMessage = nullptr);
+    static Project create(const QString &rootPath,
+                          const QString &projectName,
+                          const QString &description = {},
+                          QString *errorMessage = nullptr);
     static Project open(const QString &rootPath, QString *errorMessage = nullptr);
 
     // Register a collection: creates collection.yaml inside dirPath.
@@ -67,6 +70,9 @@ public:
 
     bool isValid() const;
     bool save(QString *errorMessage = nullptr) const;
+    bool setDescription(const QString &description,
+                        QString *errorMessage = nullptr);
+    bool writeReport(QString *errorMessage = nullptr) const;
     Project saveAs(const QString &newRootPath,
                    const QString &newProjectName,
                    QString *errorMessage = nullptr) const;
@@ -77,13 +83,16 @@ public:
     QString rootPath() const;
     QString name() const;
     QString created() const;
+    QString description() const;
+    QString reportFilePath() const;
 
     static QStringList reservedDirectories();
 
     static QStringList projectSubdirectories();
 
 private:
-    Project(QString rootPath, QString name, QString created);
+    Project(QString rootPath, QString name, QString created,
+            QString description = {});
 
     static QString metadataFilePath(const QString &rootPath);
     static bool createDirectoryStructure(const QString &rootPath, QString *errorMessage);
@@ -91,6 +100,7 @@ private:
     QString m_rootPath;
     QString m_name;
     QString m_created;
+    QString m_description;
 };
 
 #endif // PROJECT_H

@@ -11,6 +11,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QHash>
+#include <QByteArray>
 
 class QCloseEvent;
 class QEvent;
@@ -48,6 +49,7 @@ private slots:
     void saveProject();
     void saveProjectAs();
     void saveProjectAsCleanCopy();
+    void createProjectReport();
     void openImage();
     void importRaw();
     void extractRawData();
@@ -62,6 +64,7 @@ private slots:
     void onPointSelectionChanged();
     void onProjectTreeItemClicked(const QModelIndex &index);
     void splitViewer();
+    void resetWindowLayout();
     void onSyncSplitViewsToggled(bool checked);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
@@ -110,6 +113,8 @@ private:
     QMetaObject::Connection m_pointCollectionConnection;
     QPointer<ImageViewer> m_activeViewer;
     QHash<PointLayer*, QPointer<PointAttributeTableWindow>> m_attributeTables;
+    QByteArray m_defaultWindowState;
+    bool m_resetLayoutPending = false;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

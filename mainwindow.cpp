@@ -14,6 +14,7 @@
 #include "collectiondialog.h"
 #include "collectionautoload.h"
 #include "collectionstyledialog.h"
+#include "newprojectdialog.h"
 
 #include <QAction>
 #include <QApplication>
@@ -196,6 +197,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::saveProjectAsCleanCopy);
 
+    connect(ui->actionProjectReport,
+            &QAction::triggered,
+            this,
+            &MainWindow::createProjectReport);
+
     connect(ui->actionOpen_Image,
             &QAction::triggered,
             this,
@@ -249,6 +255,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::toggled,
             this,
             &MainWindow::onSyncSplitViewsToggled);
+
+    connect(ui->actionResetWindowLayout,
+            &QAction::triggered,
+            this,
+            &MainWindow::resetWindowLayout);
 
     connect(ui->projectTree,
             &QTreeView::doubleClicked,
@@ -324,6 +335,7 @@ MainWindow::MainWindow(QWidget *parent)
     resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
                 {420, 600, 260}, Qt::Horizontal);
 
+    m_defaultWindowState = saveState(1);
     updateProjectActions();
     updateRecentProjectsMenu();
     restoreApplicationState();
@@ -389,21 +401,15 @@ void MainWindow::updateRecentProjectsMenu()
 
 void MainWindow::newProject()
 {
-    const QString parentPath = QFileDialog::getExistingDirectory(
-        this, "Select Project Parent Folder");
-    if (parentPath.isEmpty())
+    NewProjectDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted)
         return;
 
-    bool accepted = false;
-    const QString projectName = QInputDialog::getText(
-        this, "New Project", "Project name:",
-        QLineEdit::Normal, "", &accepted).trimmed();
-    if (!accepted || projectName.isEmpty())
-        return;
-
-    const QString rootPath = QDir(parentPath).filePath(projectName);
+    const QString rootPath =
+        QDir(dialog.parentDirectory()).filePath(dialog.folderName());
     QString errorMessage;
-    const Project project = Project::create(rootPath, projectName, &errorMessage);
+    const Project project = Project::create(
+        rootPath, dialog.folderName(), dialog.description(), &errorMessage);
     if (!project.isValid()) {
         QMessageBox::warning(this, "New Project", errorMessage);
         return;
@@ -513,13 +519,13 @@ void MainWindow::saveProjectAsCleanCopy()
         return;
 
     ProjectCleanupDialog cleanupDialog(
-        m_project.buildCleanupPlan(), this);
+        m_project.buildCleanupPlan(), m_project.description(), this);
     if (cleanupDialog.exec() != QDialog::Accepted)
         return;
 
     const QString destination = QDir(parentPath).filePath(projectName);
     QString errorMessage;
-    const Project copy =
+    Project copy =
         m_project.saveAs(destination, projectName, &errorMessage);
     if (!copy.isValid()) {
         QMessageBox::warning(
@@ -538,11 +544,63 @@ void MainWindow::saveProjectAsCleanCopy()
         return;
     }
 
+    QFile::remove(copy.reportFilePath());
+    if (!copy.setDescription(
+            cleanupDialog.selectedDescription(), &errorMessage)) {
+        QDir(copy.rootPath()).removeRecursively();
+        QMessageBox::warning(
+            this, "Save Project As Clean Copy",
+            QStringLiteral(
+                "The clean copy metadata could not be completed and "
+                "the copy was removed.\n%1").arg(errorMessage));
+        return;
+    }
+
     loadProject(copy);
     statusBar()->showMessage(
         QStringLiteral("Clean project copy created: %1")
             .arg(destination),
         5000);
+}
+
+void MainWindow::createProjectReport()
+{
+    if (!m_project.isValid())
+        return;
+
+    const QString reportPath = m_project.reportFilePath();
+    if (QFileInfo::exists(reportPath)) {
+        const auto answer = QMessageBox::question(
+            this, "Project Report",
+            "Replace the existing project report?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    QString errorMessage;
+    if (!m_project.writeReport(&errorMessage)) {
+        QMessageBox::warning(
+            this, "Project Report", errorMessage);
+        return;
+    }
+
+    m_projectFileSystemModel->refreshDirectory(m_project.rootPath());
+    const auto openAnswer = QMessageBox::question(
+        this, "Project Report",
+        "The report was created as project-report.md.\n"
+        "Open it with the default application?",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    if (openAnswer == QMessageBox::Yes) {
+        if (!QDesktopServices::openUrl(
+                QUrl::fromLocalFile(reportPath))) {
+            QMessageBox::warning(
+                this, "Project Report",
+                "The report was created but could not be opened.");
+        }
+    }
 }
 
 void MainWindow::openImage()
@@ -1633,6 +1691,31 @@ void MainWindow::restoreApplicationState()
         restoreState(state, 1);
 }
 
+void MainWindow::resetWindowLayout()
+{
+    if (m_resetLayoutPending)
+        return;
+
+    m_resetLayoutPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_resetLayoutPending = false;
+
+        if (m_defaultWindowState.isEmpty()
+            || !restoreState(m_defaultWindowState, 1)) {
+            statusBar()->showMessage(
+                "Window layout could not be reset", 4000);
+            return;
+        }
+
+        if (m_previewDock)
+            m_previewDock->setVisible(m_project.isValid());
+
+        QSettings settings;
+        settings.setValue("mainWindow/state", m_defaultWindowState);
+        statusBar()->showMessage("Window layout reset", 3000);
+    });
+}
+
 QString MainWindow::projectRelativePath(const QString &absolutePath) const
 {
     if (!m_project.isValid() || absolutePath.isEmpty())
@@ -1992,6 +2075,7 @@ void MainWindow::updateProjectActions()
     ui->actionSaveProject->setEnabled(hasProject);
     ui->actionSaveProjectAs->setEnabled(hasProject);
     ui->actionSaveProjectAsCleanCopy->setEnabled(hasProject);
+    ui->actionProjectReport->setEnabled(hasProject);
     ui->actionCloseProject->setEnabled(hasProject);
     ui->actionPan->setEnabled(currentImageViewer() != nullptr);
     ui->actionImportRaw->setEnabled(hasProject);

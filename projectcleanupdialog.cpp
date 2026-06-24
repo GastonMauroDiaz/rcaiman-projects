@@ -5,6 +5,7 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -12,9 +13,11 @@
 
 ProjectCleanupDialog::ProjectCleanupDialog(
     const ProjectCleanupPlan &plan,
+    const QString &currentDescription,
     QWidget *parent)
     : QDialog(parent)
     , m_plan(plan)
+    , m_currentDescription(currentDescription)
 {
     setWindowTitle("Create Clean Project Copy");
     setMinimumWidth(420);
@@ -55,6 +58,19 @@ ProjectCleanupDialog::ProjectCleanupDialog(
     m_summaryLabel = new QLabel(this);
     layout->addWidget(m_summaryLabel);
 
+    m_keepDescription = new QCheckBox(
+        "Keep current project description", this);
+    m_keepDescription->setChecked(false);
+    m_keepDescription->setEnabled(!m_currentDescription.isEmpty());
+    layout->addWidget(m_keepDescription);
+
+    auto *descriptionLayout = new QFormLayout();
+    m_newDescription = new QLineEdit(this);
+    m_newDescription->setPlaceholderText(
+        "Leave empty for no description");
+    descriptionLayout->addRow("New description:", m_newDescription);
+    layout->addLayout(descriptionLayout);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
     auto *createButton = buttons->addButton(
         "Create clean copy", QDialogButtonBox::AcceptRole);
@@ -66,8 +82,17 @@ ProjectCleanupDialog::ProjectCleanupDialog(
 
     connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ProjectCleanupDialog::applyProfile);
+    connect(m_keepDescription, &QCheckBox::toggled,
+            m_newDescription, &QWidget::setDisabled);
     applyProfile(0);
     updateSummary();
+}
+
+QString ProjectCleanupDialog::selectedDescription() const
+{
+    return m_keepDescription->isChecked()
+        ? m_currentDescription
+        : m_newDescription->text().trimmed();
 }
 
 ProjectCleanupPlan ProjectCleanupDialog::selectedPlan() const

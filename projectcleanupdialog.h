@@ -9,6 +9,7 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
 
 class ProjectCleanupDialog : public QDialog
 {
@@ -16,9 +17,11 @@ class ProjectCleanupDialog : public QDialog
 
 public:
     explicit ProjectCleanupDialog(const ProjectCleanupPlan &plan,
+                                  const QString &currentDescription,
                                   QWidget *parent = nullptr);
 
     ProjectCleanupPlan selectedPlan() const;
+    QString selectedDescription() const;
 
 private:
     void applyProfile(int profileIndex);
@@ -29,6 +32,9 @@ private:
     QVector<QCheckBox*> m_checkBoxes;
     QComboBox *m_profileCombo = nullptr;
     QLabel *m_summaryLabel = nullptr;
+    QCheckBox *m_keepDescription = nullptr;
+    QLineEdit *m_newDescription = nullptr;
+    QString m_currentDescription;
     bool m_updatingProfile = false;
 };
 

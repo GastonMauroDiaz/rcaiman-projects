@@ -64,6 +64,7 @@ qt_add_executable(rcaiman_projects
     project.h project.cpp
     projectfilesystemmodel.h projectfilesystemmodel.cpp
     projectcleanupdialog.h projectcleanupdialog.cpp
+    newprojectdialog.h newprojectdialog.cpp
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp
     tiffreader.h tiffreader.cpp

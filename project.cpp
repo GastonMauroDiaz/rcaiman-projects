@@ -1,6 +1,7 @@
 #include "project.h"
 
 #include <QDate>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -21,6 +22,25 @@ QString valueAfterColon(const QString &line)
         return {};
     }
     return line.mid(separatorIndex + 1).trimmed();
+}
+
+QString yamlString(const QString &value)
+{
+    QString escaped = value;
+    escaped.replace('\\', "\\\\");
+    escaped.replace('"', "\\\"");
+    return QStringLiteral("\"%1\"").arg(escaped);
+}
+
+QString yamlValueAfterColon(const QString &line)
+{
+    QString value = valueAfterColon(line);
+    if (value.size() >= 2 && value.startsWith('"') && value.endsWith('"')) {
+        value = value.mid(1, value.size() - 2);
+        value.replace("\\\"", "\"");
+        value.replace("\\\\", "\\");
+    }
+    return value;
 }
 
 QString normalizedAbsolutePath(const QString &path)
@@ -125,14 +145,19 @@ int ProjectCleanupPlan::totalSelectedFiles() const
     return total;
 }
 
-Project::Project(QString rootPath, QString name, QString created)
+Project::Project(QString rootPath, QString name, QString created,
+                 QString description)
     : m_rootPath(std::move(rootPath))
     , m_name(std::move(name))
     , m_created(std::move(created))
+    , m_description(std::move(description))
 {
 }
 
-Project Project::create(const QString &rootPath, const QString &projectName, QString *errorMessage)
+Project Project::create(const QString &rootPath,
+                        const QString &projectName,
+                        const QString &description,
+                        QString *errorMessage)
 {
     const QString cleanName = projectName.trimmed();
     if (rootPath.trimmed().isEmpty() || cleanName.isEmpty()) {
@@ -162,7 +187,11 @@ Project Project::create(const QString &rootPath, const QString &projectName, QSt
         return {};
     }
 
-    Project project(QDir(rootPath).absolutePath(), cleanName, QDate::currentDate().toString(Qt::ISODate));
+    Project project(
+        QDir(rootPath).absolutePath(),
+        cleanName,
+        QDate::currentDate().toString(Qt::ISODate),
+        description.trimmed());
     if (!project.save(errorMessage)) {
         return {};
     }
@@ -190,6 +219,7 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
 
     QString name;
     QString created;
+    QString description;
 
     QTextStream stream(&file);
     while (!stream.atEnd()) {
@@ -198,6 +228,8 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
             name = valueAfterColon(line);
         } else if (line.startsWith("created:")) {
             created = valueAfterColon(line);
+        } else if (line.startsWith("description:")) {
+            description = yamlValueAfterColon(line);
         }
     }
 
@@ -208,7 +240,8 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
         return {};
     }
 
-    return Project(QDir(rootPath).absolutePath(), name, created);
+    return Project(
+        QDir(rootPath).absolutePath(), name, created, description);
 }
 
 bool Project::registerCollection(const QString &projectRootPath,
@@ -363,10 +396,19 @@ bool Project::save(QString *errorMessage) const
     QTextStream stream(&file);
     stream << "version: " << ProjectVersion << '\n';
     stream << "project_name: " << m_name << '\n';
+    if (!m_description.isEmpty())
+        stream << "description: " << yamlString(m_description) << '\n';
     stream << "created: " << m_created << '\n';
     stream << "rcaiman_projects_version: " << ApplicationVersion << '\n';
 
     return true;
+}
+
+bool Project::setDescription(const QString &description,
+                             QString *errorMessage)
+{
+    m_description = description.trimmed();
+    return save(errorMessage);
 }
 
 Project Project::saveAs(const QString &newRootPath,
@@ -400,13 +442,158 @@ Project Project::saveAs(const QString &newRootPath,
 
     Project copy(destination,
                  newProjectName.trimmed(),
-                 QDate::currentDate().toString(Qt::ISODate));
+                 QDate::currentDate().toString(Qt::ISODate),
+                 m_description);
+    QFile::remove(copy.reportFilePath());
     if (!copy.save(errorMessage)) {
         QDir(destination).removeRecursively();
         return {};
     }
 
     return copy;
+}
+
+bool Project::writeReport(QString *errorMessage) const
+{
+    if (!isValid()) {
+        if (errorMessage)
+            *errorMessage = "There is no valid project to report.";
+        return false;
+    }
+
+    QFile file(reportFilePath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text
+                   | QIODevice::Truncate)) {
+        if (errorMessage)
+            *errorMessage = "Could not write project-report.md.";
+        return false;
+    }
+
+    const QStringList rawFilters = {
+        "*.CR2", "*.CR3", "*.NEF", "*.ARW", "*.DNG", "*.RAF",
+        "*.ORF", "*.RW2", "*.PEF", "*.SRW", "*.RAW", "*.DCR", "*.KDC",
+        "*.cr2", "*.cr3", "*.nef", "*.arw", "*.dng", "*.raf",
+        "*.orf", "*.rw2", "*.pef", "*.srw", "*.raw", "*.dcr", "*.kdc"
+    };
+    const QStringList imageFilters = {
+        "*.tif", "*.tiff", "*.TIF", "*.TIFF",
+        "*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG",
+        "*.bmp", "*.BMP"
+    };
+
+    const QVector<Collection> collections =
+        discoverCollections(m_rootPath);
+    const int rawCount = matchingRelativeFiles(
+        m_rootPath, QDir(m_rootPath).filePath("raw_files"),
+        rawFilters).size();
+    const int sensorCount = matchingRelativeFiles(
+        m_rootPath, QDir(m_rootPath).filePath("sensor_data"),
+        imageFilters).size();
+    const int scriptCount = matchingRelativeFiles(
+        m_rootPath, QDir(m_rootPath).filePath("scripts"),
+        {"*.R", "*.r", "*.Rmd", "*.rmd", "*.qmd"}).size();
+
+    QTextStream stream(&file);
+    stream << "# "
+           << (m_description.isEmpty() ? m_name : m_description)
+           << "\n\n";
+    stream << "- **Project folder:** `" << m_name << "`\n";
+    if (!m_description.isEmpty())
+        stream << "- **Description:** " << m_description << "\n";
+    stream << "- **Created:** " << m_created << "\n";
+    stream << "- **Report generated:** "
+           << QDateTime::currentDateTime().toString(Qt::ISODate)
+           << "\n\n";
+
+    stream << "## Overview\n\n";
+    stream << "- RAW files: " << rawCount << "\n";
+    stream << "- Sensor images: " << sensorCount << "\n";
+    stream << "- Registered collections: " << collections.size() << "\n";
+    stream << "- Scripts: " << scriptCount << "\n\n";
+
+    stream << "## Project Structure\n\n";
+    const QDir projectRoot(m_rootPath);
+    const QStringList directories = projectRoot.entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+        QDir::Name);
+    if (directories.isEmpty()) {
+        stream << "No project folders.\n\n";
+    } else {
+        for (const QString &directory : directories) {
+            const int fileCount = allRelativeFiles(
+                m_rootPath, projectRoot.filePath(directory)).size();
+            QString role;
+            if (reservedDirectories().contains(
+                    directory, Qt::CaseInsensitive)) {
+                role = "reserved";
+            } else {
+                for (const Collection &collection : collections) {
+                    if (collection.dirName.compare(
+                            directory, Qt::CaseInsensitive) == 0) {
+                        role = collection.collectionClass;
+                        break;
+                    }
+                }
+            }
+
+            stream << "- `" << directory << "/` - "
+                   << fileCount << " file(s)";
+            if (!role.isEmpty())
+                stream << " - " << role;
+            stream << "\n";
+        }
+        stream << "\n";
+    }
+
+    stream << "## Collections\n\n";
+    if (collections.isEmpty()) {
+        stream << "No registered collections.\n";
+    } else {
+        stream << "| Folder | Class | Relevant files | Parent | Related |\n";
+        stream << "| --- | --- | ---: | --- | --- |\n";
+        for (const Collection &collection : collections) {
+            QStringList filters = {"*"};
+            if (collection.collectionClass == "point_collection")
+                filters = {"*.csv", "*.CSV"};
+            else if (collection.collectionClass != "other")
+                filters = imageFilters;
+            const int fileCount = matchingRelativeFiles(
+                m_rootPath, collection.dirPath, filters, false).size();
+            stream << "| `" << collection.dirName << "` | "
+                   << collection.collectionClass << " | "
+                   << fileCount << " | "
+                   << (collection.parent.isEmpty() ? "-" : collection.parent)
+                   << " | "
+                   << (collection.related.isEmpty() ? "-" : collection.related)
+                   << " |\n";
+        }
+    }
+
+    stream << "\n## Collection Details\n";
+    for (const Collection &collection : collections) {
+        stream << "\n### " << collection.dirName << "\n\n";
+        stream << "- Class: `" << collection.collectionClass << "`\n";
+        if (!collection.parent.isEmpty())
+            stream << "- Parent: `" << collection.parent << "`\n";
+        if (!collection.related.isEmpty())
+            stream << "- Related: `" << collection.related << "`\n";
+        if (!collection.registry.isEmpty())
+            stream << "- Registry: `" << collection.registry << "`\n";
+        if (!collection.script.isEmpty())
+            stream << "- Script: `" << collection.script << "`\n";
+        stream << "- Custom style: "
+               << (QFileInfo::exists(
+                       QDir(collection.dirPath).filePath("style.yaml"))
+                       ? "yes" : "no")
+               << "\n";
+    }
+
+    if (stream.status() != QTextStream::Ok) {
+        if (errorMessage)
+            *errorMessage = "Could not complete project-report.md.";
+        return false;
+    }
+    return true;
 }
 
 ProjectCleanupPlan Project::buildCleanupPlan() const
@@ -573,6 +760,16 @@ QString Project::name() const
 QString Project::created() const
 {
     return m_created;
+}
+
+QString Project::description() const
+{
+    return m_description;
+}
+
+QString Project::reportFilePath() const
+{
+    return QDir(m_rootPath).filePath("project-report.md");
 }
 
 QString Project::metadataFilePath(const QString &rootPath)
