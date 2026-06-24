@@ -21,11 +21,14 @@ private:
     void updateFromLayer();
     void chooseColor();
     void updateColorButton();
+    void updateLabelFields();
 
     PointLayer *m_layer = nullptr;
     QPushButton *m_colorButton = nullptr;
     QDoubleSpinBox *m_sizeSpin = nullptr;
     QComboBox *m_symbolCombo = nullptr;
+    QComboBox *m_labelCombo = nullptr;
+    QDoubleSpinBox *m_labelSizeSpin = nullptr;
     bool m_updating = false;
 };
 

@@ -5,6 +5,8 @@
 #include "layerstyle.h"
 #include "pointcollection.h"
 
+#include <QSet>
+
 class PointItem;
 class QGraphicsScene;
 
@@ -14,6 +16,7 @@ class PointLayer : public Layer
 
 public:
     explicit PointLayer(const QString &path, QGraphicsScene *scene, QObject *parent = nullptr);
+    ~PointLayer() override;
 
     const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) override;
 
@@ -23,6 +26,8 @@ public:
     void setColor(const QColor &color);
     void setSize(double size);
     void setSymbol(PointSymbol symbol);
+    void setLabelField(const QString &field);
+    void setLabelSize(double size);
 
     void setEditMode(bool enabled);
     bool editMode() const { return m_editMode; }
@@ -35,16 +40,21 @@ public:
     void addPoint(double row, double col);
 
     // Selection
-    int selectedPointIndex() const { return m_selectedPointIndex; }
+    int selectedPointIndex() const { return m_primarySelectedPointIndex; }
+    int primarySelectedPointIndex() const { return m_primarySelectedPointIndex; }
+    const QSet<int> &selectedPointIndices() const { return m_selectedPointIndices; }
     const PointRecord *selectedPoint() const;
     void selectPoint(int index);
+    void togglePointSelection(int index);
+    void setSelectedPointIndices(const QSet<int> &indices, int primaryIndex = -1);
     void clearSelection();
 
 signals:
-    void selectedPointChanged(int index);  // -1 = deseleccionado
+    void selectionChanged();
+    void collectionChanged();
 
 private slots:
-    void onPointClicked(int index);
+    void onPointClicked(int index, Qt::KeyboardModifiers modifiers);
     void onPointMoved(int index, QPointF pos);
     void onPointDeleted(int index);
 
@@ -52,6 +62,7 @@ private:
     void rebuildItems(QGraphicsScene *scene);
     void applyStyleToItems();
     void applyStyleToPointItem(int index);
+    QString labelTextForPoint(int index) const;
     QColor selectionColor() const;
     void clearPointItems();
     bool ensureBackup();
@@ -62,7 +73,8 @@ private:
     QGraphicsScene *m_scene = nullptr;
     bool m_editMode = false;
     QString m_backupPath;
-    int m_selectedPointIndex = -1;
+    QSet<int> m_selectedPointIndices;
+    int m_primarySelectedPointIndex = -1;
 };
 
 #endif // POINTLAYER_H

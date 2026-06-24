@@ -9,6 +9,7 @@
 #include <QPointF>
 
 class QPainter;
+class PointLabelItem;
 
 class PointItem : public QObject, public QGraphicsEllipseItem
 {
@@ -22,9 +23,10 @@ public:
 
     void setMovable(bool movable);
     void setSymbol(PointSymbol symbol);
+    void setLabel(const QString &text, double pointSize);
 
 signals:
-    void clicked(int index);
+    void clicked(int index, Qt::KeyboardModifiers modifiers);
     void positionChanged(int index, QPointF pos);
     void deleteRequested(int index);
 
@@ -39,6 +41,7 @@ protected:
 private:
     int m_pointIndex;
     PointSymbol m_symbol = PointSymbol::Circle;
+    PointLabelItem *m_labelItem = nullptr;
     bool m_dragging = false;
     QPointF m_dragStartPos;
 };

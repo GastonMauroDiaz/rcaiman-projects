@@ -26,6 +26,7 @@ public:
     void setVisible(bool visible);
     bool isActive() const;
     virtual void setActive(bool active);
+    void setZOrder(int zOrder);
 
     int zOrder() const;        // calculado desde el índice en el manager
 
@@ -62,6 +63,7 @@ private:
     QString m_sourcePath;
     bool m_visible = true;
     bool m_active = false;
+    int m_zOrder = 0;
     bool m_flickerEnabled = false;
     bool m_visibleBeforeFlicker = true;
     QTimer *m_flickerTimer = nullptr;

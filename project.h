@@ -15,6 +15,29 @@ struct Collection {
     QString script;
 };
 
+enum class ProjectCleanupCategory {
+    RawFiles,
+    SensorImages,
+    CollectionImages,
+    Segmentations,
+    PointFiles,
+    OtherCollections,
+    TemporaryBackups
+};
+
+struct ProjectCleanupGroup {
+    ProjectCleanupCategory category;
+    QString label;
+    QStringList relativeFiles;
+    bool selected = true;
+};
+
+struct ProjectCleanupPlan {
+    QVector<ProjectCleanupGroup> groups;
+
+    int totalSelectedFiles() const;
+};
+
 class Project
 {
 public:
@@ -24,7 +47,8 @@ public:
     static Project open(const QString &rootPath, QString *errorMessage = nullptr);
 
     // Register a collection: creates collection.yaml inside dirPath.
-    static bool registerCollection(const QString &dirPath,
+    static bool registerCollection(const QString &projectRootPath,
+                                   const QString &dirPath,
                                    const QString &collectionClass,
                                    const QString &parent,
                                    const QString &related,
@@ -36,8 +60,19 @@ public:
     // looking for collection.yaml files.
     static QVector<Collection> discoverCollections(const QString &rootPath);
 
+    static QString resolveReference(const QString &projectRootPath,
+                                    const QString &reference);
+    static QString portableReference(const QString &projectRootPath,
+                                     const QString &reference);
+
     bool isValid() const;
     bool save(QString *errorMessage = nullptr) const;
+    Project saveAs(const QString &newRootPath,
+                   const QString &newProjectName,
+                   QString *errorMessage = nullptr) const;
+    ProjectCleanupPlan buildCleanupPlan() const;
+    bool applyCleanupPlan(const ProjectCleanupPlan &plan,
+                          QString *errorMessage = nullptr) const;
 
     QString rootPath() const;
     QString name() const;

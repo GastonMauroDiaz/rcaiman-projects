@@ -7,11 +7,13 @@
 
 class QListWidget;
 class QListWidgetItem;
+class QIcon;
 class QPushButton;
 class QDoubleSpinBox;
 class LayerManager;
 class Layer;
 class LayerPropertiesWidget;
+class PointLayer;
 
 class LayersDock : public QWidget
 {
@@ -26,6 +28,7 @@ public:
 
 signals:
     void activeLayerChanged(int index);
+    void pointLayerDoubleClicked(PointLayer *layer);
 
 private slots:
     void updateList();
@@ -38,12 +41,15 @@ private slots:
     void onFlickerToggled(bool checked);
     void onFlickerSpeedChanged(double seconds);
     void onCurrentRowChanged(int row);
+    void onLayerStyleChanged();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 
 private:
+    QIcon pointLayerIcon(const Layer *layer) const;
+
     LayerManager *m_manager = nullptr;
     QListWidget *m_listWidget = nullptr;
     QPushButton *m_flickerBtn = nullptr;

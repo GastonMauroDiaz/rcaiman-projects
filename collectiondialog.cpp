@@ -73,7 +73,7 @@ QString CollectionDialog::related() const
 
 QString CollectionDialog::registry() const
 {
-    if (m_registryEdit)
+    if (m_registryEdit && m_registryWidget && m_registryWidget->isVisible())
         return m_registryEdit->text();
     return {};
 }
@@ -166,11 +166,7 @@ void CollectionDialog::setupUI()
             this, "Select a subfolder", m_projectRootPath);
         if (!dir.isEmpty()) {
             m_directoryEdit->setText(dir);
-            bool ok = dir.startsWith(m_projectRootPath) && dir != m_projectRootPath;
-            if (m_buttonBox) {
-                if (auto *okBtn = m_buttonBox->button(QDialogButtonBox::Ok))
-                    okBtn->setEnabled(ok);
-            }
+            updateOkButton();
         }
     });
 
@@ -194,10 +190,15 @@ void CollectionDialog::updateFieldVisibility()
 {
     const QString collectionClass = m_typeCombo->currentText();
 
-    if (collectionClass == "preprocessed_image_collection" || collectionClass == "processed_image_collection") {
+    if (collectionClass == "preprocessed_image_collection") {
         m_parentWidget->setVisible(false);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(true);
+        m_scriptWidget->setVisible(true);
+    } else if (collectionClass == "processed_image_collection") {
+        m_parentWidget->setVisible(false);
+        m_relatedWidget->setVisible(false);
+        m_registryWidget->setVisible(false);
         m_scriptWidget->setVisible(true);
     } else if (collectionClass == "point_collection") {
         m_parentWidget->setVisible(true);
@@ -283,12 +284,29 @@ void CollectionDialog::updateOkButton()
         return;
 
     const QString collectionClass = m_typeCombo->currentText();
+    const QString projectRoot =
+        QDir::cleanPath(QDir::fromNativeSeparators(m_projectRootPath));
+    const QString selectedDirectory =
+        QDir::cleanPath(QDir::fromNativeSeparators(m_directoryEdit->text()));
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity pathCaseSensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity pathCaseSensitivity = Qt::CaseSensitive;
+#endif
+    const bool hasDirectory =
+        !selectedDirectory.isEmpty()
+        && selectedDirectory.compare(projectRoot, pathCaseSensitivity) != 0
+        && selectedDirectory.startsWith(
+            projectRoot + QLatin1Char('/'), pathCaseSensitivity);
     bool enableOk = false;
 
-    if (collectionClass == "preprocessed_image_collection" || collectionClass == "processed_image_collection" || collectionClass == "other") {
-        enableOk = !m_registryEdit->text().isEmpty();
+    if (collectionClass == "preprocessed_image_collection" || collectionClass == "other") {
+        enableOk = hasDirectory && !m_registryEdit->text().isEmpty();
+    } else if (collectionClass == "processed_image_collection") {
+        enableOk = hasDirectory;
     } else if (collectionClass == "point_collection" || collectionClass == "segmentation_collection") {
-        enableOk = !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
+        enableOk = hasDirectory
+            && !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
     }
 
     if (auto *okBtn = m_buttonBox->button(QDialogButtonBox::Ok))
@@ -306,8 +324,13 @@ void CollectionDialog::browseRegistry()
 
 void CollectionDialog::browseScript()
 {
+    const QString scriptDirectory = QDir(m_projectRootPath).filePath("scripts");
+    const QString initialDirectory = QDir(scriptDirectory).exists()
+        ? scriptDirectory
+        : m_projectRootPath;
+
     const QString filePath = QFileDialog::getOpenFileName(
-        this, "Select script file", m_projectRootPath);
+        this, "Select script file", initialDirectory);
     if (!filePath.isEmpty()) {
         m_scriptEdit->setText(filePath);
     }

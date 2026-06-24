@@ -15,7 +15,10 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QGroupBox>
+#include <QIcon>
 #include <QMimeData>
+#include <QPainter>
+#include <QPixmap>
 #include <QUrl>
 
 LayersDock::LayersDock(QWidget *parent)
@@ -30,6 +33,7 @@ LayersDock::LayersDock(QWidget *parent)
 
     m_listWidget = new QListWidget(this);
     m_listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_listWidget->setIconSize(QSize(18, 18));
     mainLayout->addWidget(m_listWidget);
 
     auto *btnLayout = new QHBoxLayout();
@@ -99,6 +103,16 @@ LayersDock::LayersDock(QWidget *parent)
             this, &LayersDock::onCurrentRowChanged);
     connect(m_listWidget, &QListWidget::itemChanged,
             this, &LayersDock::onItemChanged);
+    connect(m_listWidget, &QListWidget::itemDoubleClicked,
+            this, [this](QListWidgetItem *item) {
+                if (!m_manager || !item)
+                    return;
+                const int row = m_listWidget->row(item);
+                if (auto *pointLayer =
+                        qobject_cast<PointLayer*>(m_manager->layerAt(row))) {
+                    emit pointLayerDoubleClicked(pointLayer);
+                }
+            });
 
     connect(m_flickerBtn, &QPushButton::toggled,
             this, &LayersDock::onFlickerToggled);
@@ -153,10 +167,17 @@ void LayersDock::updateList()
     for (int i = 0; i < m_manager->layerCount(); ++i) {
         Layer *layer = m_manager->layerAt(i);
         auto *item = new QListWidgetItem(layer->name());
+        item->setIcon(pointLayerIcon(layer));
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(layer->isVisible() ? Qt::Checked : Qt::Unchecked);
         item->setData(Qt::UserRole, i);
         m_listWidget->addItem(item);
+
+        if (qobject_cast<PointLayer*>(layer)) {
+            connect(layer, &Layer::styleChanged,
+                    this, &LayersDock::onLayerStyleChanged,
+                    Qt::UniqueConnection);
+        }
     }
 
     if (m_manager->activeLayer()) {
@@ -173,6 +194,51 @@ void LayersDock::updateList()
     onCurrentRowChanged(currentRow);
     if (currentRow >= 0)
         emit activeLayerChanged(currentRow);
+}
+
+void LayersDock::onLayerStyleChanged()
+{
+    if (!m_manager)
+        return;
+
+    auto *layer = qobject_cast<Layer*>(sender());
+    const int index = m_manager->indexOf(layer);
+    if (index < 0)
+        return;
+
+    if (QListWidgetItem *item = m_listWidget->item(index))
+        item->setIcon(pointLayerIcon(layer));
+}
+
+QIcon LayersDock::pointLayerIcon(const Layer *layer) const
+{
+    const auto *pointLayer = qobject_cast<const PointLayer*>(layer);
+    if (!pointLayer)
+        return {};
+
+    constexpr int iconSize = 18;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const PointLayerStyle style = pointLayer->style();
+    const QPointF center(iconSize / 2.0, iconSize / 2.0);
+    if (style.symbol == PointSymbol::Circle) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(style.color);
+        painter.drawEllipse(center, 5.0, 5.0);
+    } else {
+        QPen pen(style.color, 3.0, Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(pen);
+        painter.drawLine(QPointF(3.5, center.y()),
+                         QPointF(iconSize - 3.5, center.y()));
+        painter.drawLine(QPointF(center.x(), 3.5),
+                         QPointF(center.x(), iconSize - 3.5));
+    }
+
+    return QIcon(pixmap);
 }
 
 void LayersDock::updateActiveLayerFromUi(int row)

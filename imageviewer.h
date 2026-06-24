@@ -9,6 +9,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QSet>
 #include <QWheelEvent>
 
 class QGraphicsScene;
@@ -32,6 +33,11 @@ public:
     explicit ImageViewer(QWidget *parent = nullptr);
 
     void setImage(const QString &fileName);
+    void fitLoadedImage();
+    QPointF viewCenter() const;
+    QTransform viewTransform() const { return transform(); }
+    void restoreView(const QTransform &transform, const QPointF &center);
+    void zoomToPointIndices(PointLayer *layer, const QSet<int> &indices);
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
 
@@ -41,6 +47,8 @@ public:
 
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
+    QString primarySourcePath() const { return m_primarySourcePath; }
+    void setPrimarySourcePath(const QString &path) { m_primarySourcePath = path; }
 
 signals:
     void pixelInfoChanged(const PixelInfo &info);
@@ -84,6 +92,7 @@ private:
     QGraphicsScene *m_scene = nullptr;
     LayerManager *m_layerManager = nullptr;
     ImageLayer *m_imageLayer = nullptr;
+    QString m_primarySourcePath;
     QPointer<PointLayer> m_editingPointLayer;
     static bool ms_syncEnabled;
     bool m_syncingScroll = false;

@@ -156,9 +156,6 @@ void LayerManager::rebuildZOrder()
     const int count = m_layers.size();
     for (int i = 0; i < count; ++i) {
         Layer *layer = m_layers[i];
-        const double zValue = static_cast<double>(count - 1 - i);
-        for (QGraphicsItem *item : std::as_const(layer->m_items)) {
-            item->setZValue(zValue);
-        }
+        layer->setZOrder(count - 1 - i);
     }
 }

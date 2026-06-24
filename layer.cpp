@@ -60,7 +60,14 @@ void Layer::setVisible(bool visible)
 
 int Layer::zOrder() const
 {
-    return -1; // calculado externamente por el manager
+    return m_zOrder;
+}
+
+void Layer::setZOrder(int zOrder)
+{
+    m_zOrder = zOrder;
+    for (QGraphicsItem *item : std::as_const(m_items))
+        item->setZValue(m_zOrder);
 }
 
 void Layer::addToScene(QGraphicsScene *scene)
@@ -71,6 +78,7 @@ void Layer::addToScene(QGraphicsScene *scene)
         if (item->scene() != scene) {
             scene->addItem(item);
         }
+        item->setZValue(m_zOrder);
         item->setVisible(m_visible);
     }
 }

@@ -1,22 +1,77 @@
 #include "pointitem.h"
+#include "cursorutils.h"
 
 #include <QCursor>
 #include <QGraphicsSceneHoverEvent>
 #include <QGraphicsSceneMouseEvent>
+#include <QPainterPath>
 #include <QPainter>
-#include <QPixmap>
 
 namespace {
 QCursor pointInteractionCursor()
 {
-    QPixmap pixmap(QStringLiteral(":/icons/select-point.png"));
-    if (pixmap.isNull())
-        return Qt::PointingHandCursor;
+    return highDpiCursor(
+        QStringLiteral(":/icons/select-point.png"),
+        QPoint(16, 2),
+        Qt::PointingHandCursor);
+}
+}
 
-    pixmap = pixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    return QCursor(pixmap, pixmap.width() / 2, 2);
-}
-}
+class PointLabelItem : public QGraphicsItem
+{
+public:
+    explicit PointLabelItem(QGraphicsItem *parent = nullptr)
+        : QGraphicsItem(parent)
+    {
+        setAcceptedMouseButtons(Qt::NoButton);
+        setAcceptHoverEvents(false);
+    }
+
+    void setText(const QString &text, double pointSize)
+    {
+        prepareGeometryChange();
+        m_text = text;
+        m_font.setPointSizeF(pointSize);
+
+        QPainterPath path;
+        path.addText(0.0, 0.0, m_font, m_text);
+        m_textPath = path;
+        m_bounds = m_textPath.boundingRect().adjusted(-2.0, -2.0, 2.0, 2.0);
+        update();
+    }
+
+    QRectF boundingRect() const override
+    {
+        return m_bounds;
+    }
+
+    QPainterPath shape() const override
+    {
+        return m_textPath;
+    }
+
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *) override
+    {
+        painter->setRenderHint(QPainter::Antialiasing, true);
+
+        QPen haloPen(Qt::white);
+        haloPen.setWidthF(3.0);
+        haloPen.setJoinStyle(Qt::RoundJoin);
+        painter->setPen(haloPen);
+        painter->setBrush(Qt::white);
+        painter->drawPath(m_textPath);
+
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(Qt::black);
+        painter->drawPath(m_textPath);
+    }
+
+private:
+    QString m_text;
+    QFont m_font;
+    QPainterPath m_textPath;
+    QRectF m_bounds;
+};
 
 PointItem::PointItem(int index, QGraphicsItem *parent)
     : QObject(nullptr)
@@ -28,6 +83,9 @@ PointItem::PointItem(int index, QGraphicsItem *parent)
     setFlag(QGraphicsItem::ItemSendsGeometryChanges, false);
     setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     setCursor(pointInteractionCursor());
+    m_labelItem = new PointLabelItem(this);
+    m_labelItem->setZValue(1.0);
+    m_labelItem->hide();
 }
 
 void PointItem::setPointIndex(int index)
@@ -47,6 +105,23 @@ void PointItem::setSymbol(PointSymbol symbol)
 
     m_symbol = symbol;
     update();
+}
+
+void PointItem::setLabel(const QString &text, double pointSize)
+{
+    if (!m_labelItem)
+        return;
+
+    if (text.isEmpty()) {
+        m_labelItem->hide();
+        return;
+    }
+
+    m_labelItem->setText(text, pointSize);
+    const QRectF labelBounds = m_labelItem->boundingRect();
+    m_labelItem->setPos(rect().right() + 3.0,
+                        rect().top() - labelBounds.bottom() - 2.0);
+    m_labelItem->show();
 }
 
 void PointItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
@@ -96,7 +171,7 @@ void PointItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
     if (event->button() == Qt::LeftButton) {
         // Always emit clicked (regardless of movable state)
-        emit clicked(m_pointIndex);
+        emit clicked(m_pointIndex, event->modifiers());
 
         if (flags() & QGraphicsItem::ItemIsMovable) {
             m_dragging = true;

@@ -1,4 +1,5 @@
 #include "imageviewer.h"
+#include "cursorutils.h"
 #include "imagelayer.h"
 #include "layermanager.h"
 #include "layer.h"
@@ -18,7 +19,6 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMutexLocker>
-#include <QPixmap>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QUrl>
@@ -26,12 +26,19 @@
 namespace {
 QCursor editPointsCursor()
 {
-    QPixmap pixmap(QStringLiteral(":/icons/edit-points-target-cursor.png"));
-    if (pixmap.isNull())
-        return Qt::CrossCursor;
+    return highDpiCursor(
+        QStringLiteral(":/icons/edit-points-target-cursor.png"),
+        QPoint(16, 16),
+        Qt::CrossCursor);
+}
 
-    pixmap = pixmap.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    return QCursor(pixmap, pixmap.width() / 2, pixmap.height() / 2);
+bool belongsToPointItem(QGraphicsItem *item)
+{
+    for (QGraphicsItem *current = item; current; current = current->parentItem()) {
+        if (dynamic_cast<PointItem*>(current))
+            return true;
+    }
+    return false;
 }
 }
 
@@ -70,6 +77,7 @@ ImageViewer::ImageViewer(QWidget *parent)
 void ImageViewer::setImage(const QString &fileName)
 {
     m_layerManager->clearAll();
+    m_primarySourcePath = QFileInfo(fileName).absoluteFilePath();
 
     auto *imageLayer = new ImageLayer(fileName);
     if (imageLayer->rasterData().isNull()) {
@@ -85,6 +93,66 @@ void ImageViewer::setImage(const QString &fileName)
     m_lastPixelInfo = PixelInfo{};
     m_autoFitImage = true;
     fitImageToView();
+}
+
+void ImageViewer::fitLoadedImage()
+{
+    m_lastPixelInfo = PixelInfo{};
+    m_autoFitImage = true;
+    fitImageToView();
+}
+
+QPointF ImageViewer::viewCenter() const
+{
+    return mapToScene(viewport()->rect().center());
+}
+
+void ImageViewer::restoreView(const QTransform &viewTransform,
+                              const QPointF &center)
+{
+    m_autoFitImage = false;
+    setTransform(viewTransform);
+    centerOn(center);
+}
+
+void ImageViewer::zoomToPointIndices(PointLayer *layer,
+                                     const QSet<int> &indices)
+{
+    if (!layer || indices.isEmpty())
+        return;
+
+    const QVector<PointRecord> &points = layer->collection().points();
+    QVector<QPointF> positions;
+    positions.reserve(indices.size());
+    for (int index : indices) {
+        if (index >= 0 && index < points.size())
+            positions.append(QPointF(points[index].col, points[index].row));
+    }
+    if (positions.isEmpty())
+        return;
+
+    m_autoFitImage = false;
+    if (positions.size() == 1) {
+        centerOn(positions.first());
+        return;
+    }
+
+    double minX = positions.first().x();
+    double maxX = minX;
+    double minY = positions.first().y();
+    double maxY = minY;
+    for (const QPointF &position : std::as_const(positions)) {
+        minX = qMin(minX, position.x());
+        maxX = qMax(maxX, position.x());
+        minY = qMin(minY, position.y());
+        maxY = qMax(maxY, position.y());
+    }
+    QRectF bounds(QPointF(minX, minY), QPointF(maxX, maxY));
+
+    const double margin = qMax(10.0, qMax(bounds.width(), bounds.height()) * 0.1);
+    bounds.adjust(-margin, -margin, margin, margin);
+    resetTransform();
+    fitInView(bounds, Qt::KeepAspectRatio);
 }
 
 bool ImageViewer::panModeEnabled() const
@@ -236,7 +304,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
     if (m_pointEditEnabled && !panInteractionActive() && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
         QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
-        const bool isPointItem = itemUnder && (itemUnder->type() == QGraphicsEllipseItem::Type);
+        const bool isPointItem = belongsToPointItem(itemUnder);
         if (!isPointItem) {
             if (m_editingPointLayer) {
                 m_editingPointLayer->addPoint(scenePos.y(), scenePos.x());
@@ -448,6 +516,8 @@ void ImageViewer::dropEvent(QDropEvent *event)
                 continue;
             }
             m_layerManager->addLayer(imgLayer);
+            if (m_primarySourcePath.isEmpty())
+                m_primarySourcePath = QFileInfo(path).absoluteFilePath();
         } else if (csvExts.contains(suffix)) {
             if (!m_imageLayer) {
                 QMessageBox::information(this, "Add Points",

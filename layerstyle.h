@@ -2,6 +2,7 @@
 #define LAYERSTYLE_H
 
 #include <QColor>
+#include <QString>
 
 enum class ColorRamp {
     Gray,
@@ -32,6 +33,8 @@ struct PointLayerStyle
     QColor color = Qt::yellow;
     double size = 6.0;
     PointSymbol symbol = PointSymbol::Circle;
+    QString labelField;
+    double labelSize = 10.0;
 };
 
 struct RasterRenderStyle

@@ -30,6 +30,9 @@
     <addaction name="actionNewProject"/>
     <addaction name="actionOpenProject"/>
     <addaction name="actionSaveProject"/>
+    <addaction name="actionSaveProjectAs"/>
+    <addaction name="actionSaveProjectAsCleanCopy"/>
+    <addaction name="actionCloseProject"/>
     <addaction name="separator"/>
     <addaction name="actionImportRaw"/>
     <addaction name="actionExtractRawData"/>
@@ -212,6 +215,21 @@
   <action name="actionSaveProject">
    <property name="text">
     <string>Save</string>
+   </property>
+  </action>
+  <action name="actionSaveProjectAs">
+   <property name="text">
+    <string>Save As...</string>
+   </property>
+  </action>
+  <action name="actionSaveProjectAsCleanCopy">
+   <property name="text">
+    <string>Save As Clean Copy...</string>
+   </property>
+  </action>
+  <action name="actionCloseProject">
+   <property name="text">
+    <string>Close</string>
    </property>
   </action>
    <action name="actionImportRaw">

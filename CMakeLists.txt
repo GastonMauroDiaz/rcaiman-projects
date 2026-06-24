@@ -58,13 +58,21 @@ qt_add_executable(rcaiman_projects
     pointitem.h pointitem.cpp
     pointlayer.h pointlayer.cpp
     pointlayerpropertieswidget.h pointlayerpropertieswidget.cpp
+    pointattributetablemodel.h pointattributetablemodel.cpp
+    pointattributetablewindow.h pointattributetablewindow.cpp
     previewdock.h previewdock.cpp
     project.h project.cpp
+    projectfilesystemmodel.h projectfilesystemmodel.cpp
+    projectcleanupdialog.h projectcleanupdialog.cpp
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp
     tiffreader.h tiffreader.cpp
     rawreader.h rawreader.cpp
     collectiondialog.h collectiondialog.cpp
+    collectionautoload.h collectionautoload.cpp
+    collectionstylefile.h collectionstylefile.cpp
+    collectionstyledialog.h collectionstyledialog.cpp
+    cursorutils.h cursorutils.cpp
     resources.qrc
 )
 

@@ -6,18 +6,26 @@
 #include "layer.h"
 #include "imagelayer.h"
 #include "pointlayer.h"
+#include "pointattributetablewindow.h"
 #include "previewdock.h"
+#include "projectcleanupdialog.h"
+#include "projectfilesystemmodel.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
+#include "collectionautoload.h"
+#include "collectionstyledialog.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFileSystemModel>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -26,6 +34,8 @@
 #include <QPixmap>
 #include <QSizePolicy>
 #include <QSettings>
+#include <QSaveFile>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -33,41 +43,84 @@
 #include <QVBoxLayout>
 
 namespace {
-QString normalizedPathForCompare(const QString &path)
+QJsonObject imageStyleToJson(const ImageLayerStyle &style)
 {
-    QFileInfo info(path);
-    QString normalized = info.canonicalFilePath();
-    if (normalized.isEmpty())
-        normalized = info.absoluteFilePath();
+    const RasterRenderStyle &render = style.render;
+    QJsonObject object;
+    object["opacity"] = style.opacity;
+    object["mode"] = static_cast<int>(render.mode);
+    object["ramp"] = static_cast<int>(render.colorRamp);
+    object["stretch"] = static_cast<int>(render.stretchMode);
+    object["tail_trim"] = render.tailTrim;
+    object["trim_percent"] = render.trimPercent;
+    object["gamma"] = render.gamma;
+    object["band"] = render.band;
+    object["red_band"] = render.redBand;
+    object["green_band"] = render.greenBand;
+    object["blue_band"] = render.blueBand;
+    return object;
+}
 
-    normalized = QDir::cleanPath(QDir::fromNativeSeparators(normalized));
+ImageLayerStyle imageStyleFromJson(const QJsonObject &object,
+                                   const ImageLayerStyle &fallback)
+{
+    ImageLayerStyle style = fallback;
+    style.opacity = object.value("opacity").toDouble(style.opacity);
+    RasterRenderStyle &render = style.render;
+    render.mode = static_cast<RasterRenderMode>(
+        object.value("mode").toInt(static_cast<int>(render.mode)));
+    render.colorRamp = static_cast<ColorRamp>(
+        object.value("ramp").toInt(static_cast<int>(render.colorRamp)));
+    render.stretchMode = static_cast<StretchMode>(
+        object.value("stretch").toInt(static_cast<int>(render.stretchMode)));
+    render.tailTrim = object.value("tail_trim").toBool(render.tailTrim);
+    render.trimPercent =
+        object.value("trim_percent").toDouble(render.trimPercent);
+    render.gamma = object.value("gamma").toDouble(render.gamma);
+    render.band = object.value("band").toInt(render.band);
+    render.redBand = object.value("red_band").toInt(render.redBand);
+    render.greenBand = object.value("green_band").toInt(render.greenBand);
+    render.blueBand = object.value("blue_band").toInt(render.blueBand);
+    return style;
+}
+
+QString normalizedSessionPath(const QString &path)
+{
+    QString normalized = QDir::cleanPath(
+        QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
 #ifdef Q_OS_WIN
     normalized = normalized.toCaseFolded();
 #endif
     return normalized;
-}
-
-bool samePath(const QString &left, const QString &right)
-{
-    return normalizedPathForCompare(left) == normalizedPathForCompare(right);
 }
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
-    , m_projectFileSystemModel(new QFileSystemModel(this))
+    , m_projectFileSystemModel(new ProjectFileSystemModel(this))
 {
     ui->setupUi(this);
 
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     ui->projectTree->setModel(m_projectFileSystemModel);
+    const QModelIndex fileSystemRoot =
+        m_projectFileSystemModel->setRootPath(QString());
+    ui->projectTree->setRootIndex(fileSystemRoot);
     ui->projectTree->setDragEnabled(true);
     setAcceptDrops(true);
     ui->projectTree->setHeaderHidden(true);
     ui->projectTree->hideColumn(1);
     ui->projectTree->hideColumn(2);
     ui->projectTree->hideColumn(3);
+    ui->projectTree->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    connect(m_projectFileSystemModel, &QAbstractItemModel::rowsInserted,
+            this, [this]() { updateProjectActions(); });
+    connect(m_projectFileSystemModel, &QAbstractItemModel::rowsRemoved,
+            this, [this]() { updateProjectActions(); });
+    connect(m_projectFileSystemModel, &QFileSystemModel::directoryLoaded,
+            this, [this]() { updateProjectActions(); });
 
     // Load recent projects
     QSettings settings;
@@ -83,10 +136,25 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::openProject);
 
+    connect(ui->actionCloseProject,
+            &QAction::triggered,
+            this,
+            &MainWindow::closeProject);
+
     connect(ui->actionSaveProject,
             &QAction::triggered,
             this,
             &MainWindow::saveProject);
+
+    connect(ui->actionSaveProjectAs,
+            &QAction::triggered,
+            this,
+            &MainWindow::saveProjectAs);
+
+    connect(ui->actionSaveProjectAsCleanCopy,
+            &QAction::triggered,
+            this,
+            &MainWindow::saveProjectAsCleanCopy);
 
     connect(ui->actionOpen_Image,
             &QAction::triggered,
@@ -152,6 +220,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::onProjectTreeItemClicked);
 
+    connect(ui->projectTree,
+            &QWidget::customContextMenuRequested,
+            this,
+            &MainWindow::onProjectTreeContextMenu);
+
     connect(ui->workspaceTabs,
             &QTabWidget::tabCloseRequested,
             this,
@@ -183,6 +256,8 @@ MainWindow::MainWindow(QWidget *parent)
     if (m_layersDock) {
         connect(m_layersDock, &LayersDock::activeLayerChanged,
                 this, &MainWindow::onLayerSelectionChanged);
+        connect(m_layersDock, &LayersDock::pointLayerDoubleClicked,
+                this, &MainWindow::openAttributeTable);
     }
 
     // Ensure 3-column layout: Explorer (left), Viewer (center), Layers+Properties (right)
@@ -198,6 +273,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Preview Dock: below Project Explorer
     m_previewDock = new PreviewDock(this);
+    m_previewDock->setObjectName("dockPreview");
     addDockWidget(Qt::LeftDockWidgetArea, m_previewDock);
     splitDockWidget(ui->dockProjectExplorer, m_previewDock, Qt::Vertical);
     m_previewDock->hide(); // hidden until a project is loaded
@@ -210,11 +286,19 @@ MainWindow::MainWindow(QWidget *parent)
 
     updateProjectActions();
     updateRecentProjectsMenu();
+    restoreApplicationState();
 }
 
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    saveProjectSession();
+    saveApplicationState();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::addToRecentProjects(const QString &path)
@@ -241,7 +325,11 @@ void MainWindow::updateRecentProjectsMenu()
         if (path.isEmpty())
             continue;
         hasRecent = true;
-        QAction *act = recentMenu->addAction(QDir(path).dirName());
+        const QFileInfo projectInfo(path);
+        QAction *act = recentMenu->addAction(
+            QStringLiteral("%1 - %2")
+                .arg(projectInfo.fileName(),
+                     projectInfo.dir().dirName()));
         act->setToolTip(path);
         connect(act, &QAction::triggered, this, [this, path]() {
             QString errorMessage;
@@ -301,6 +389,15 @@ void MainWindow::openProject()
     loadProject(project);
 }
 
+void MainWindow::closeProject()
+{
+    if (!m_project.isValid())
+        return;
+
+    closeCurrentProject();
+    statusBar()->showMessage("Project closed", 3000);
+}
+
 void MainWindow::saveProject()
 {
     QString errorMessage;
@@ -309,6 +406,103 @@ void MainWindow::saveProject()
         return;
     }
     statusBar()->showMessage("Project saved", 3000);
+}
+
+void MainWindow::saveProjectAs()
+{
+    if (!m_project.isValid())
+        return;
+
+    saveProjectSession();
+
+    const QString parentPath = QFileDialog::getExistingDirectory(
+        this,
+        "Select Destination Parent Folder",
+        QFileInfo(m_project.rootPath()).absolutePath());
+    if (parentPath.isEmpty())
+        return;
+
+    bool accepted = false;
+    const QString projectName = QInputDialog::getText(
+        this,
+        "Save Project As",
+        "New project name:",
+        QLineEdit::Normal,
+        m_project.name(),
+        &accepted).trimmed();
+    if (!accepted || projectName.isEmpty())
+        return;
+
+    const QString destination = QDir(parentPath).filePath(projectName);
+    QString errorMessage;
+    const Project copy =
+        m_project.saveAs(destination, projectName, &errorMessage);
+    if (!copy.isValid()) {
+        QMessageBox::warning(this, "Save Project As", errorMessage);
+        return;
+    }
+
+    loadProject(copy);
+    statusBar()->showMessage(
+        QStringLiteral("Project saved as: %1").arg(destination), 5000);
+}
+
+void MainWindow::saveProjectAsCleanCopy()
+{
+    if (!m_project.isValid())
+        return;
+
+    saveProjectSession();
+
+    const QString parentPath = QFileDialog::getExistingDirectory(
+        this,
+        "Select Destination Parent Folder",
+        QFileInfo(m_project.rootPath()).absolutePath());
+    if (parentPath.isEmpty())
+        return;
+
+    bool accepted = false;
+    const QString projectName = QInputDialog::getText(
+        this,
+        "Save Project As Clean Copy",
+        "New project name:",
+        QLineEdit::Normal,
+        m_project.name(),
+        &accepted).trimmed();
+    if (!accepted || projectName.isEmpty())
+        return;
+
+    ProjectCleanupDialog cleanupDialog(
+        m_project.buildCleanupPlan(), this);
+    if (cleanupDialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString destination = QDir(parentPath).filePath(projectName);
+    QString errorMessage;
+    const Project copy =
+        m_project.saveAs(destination, projectName, &errorMessage);
+    if (!copy.isValid()) {
+        QMessageBox::warning(
+            this, "Save Project As Clean Copy", errorMessage);
+        return;
+    }
+
+    const ProjectCleanupPlan selectedPlan = cleanupDialog.selectedPlan();
+    if (!copy.applyCleanupPlan(selectedPlan, &errorMessage)) {
+        QDir(copy.rootPath()).removeRecursively();
+        QMessageBox::warning(
+            this, "Save Project As Clean Copy",
+            QStringLiteral(
+                "The clean copy could not be completed and was removed.\n%1")
+                .arg(errorMessage));
+        return;
+    }
+
+    loadProject(copy);
+    statusBar()->showMessage(
+        QStringLiteral("Clean project copy created: %1")
+            .arg(destination),
+        5000);
 }
 
 void MainWindow::openImage()
@@ -350,6 +544,7 @@ void MainWindow::importRaw()
     }
 
     if (copiedCount > 0) {
+        m_projectFileSystemModel->refreshDirectory(rawDir);
         statusBar()->showMessage(
             QStringLiteral("Imported %1 RAW file(s)").arg(copiedCount), 5000);
         updateProjectActions();
@@ -407,6 +602,7 @@ void MainWindow::extractRawData()
     statusBar()->showMessage(
         QStringLiteral("Extraction complete: %1 succeeded, %2 failed")
             .arg(successCount).arg(failCount), 8000);
+    m_projectFileSystemModel->refreshDirectory(sensorDir);
 
     updateProjectActions();
 }
@@ -444,7 +640,8 @@ void MainWindow::registerCollection()
     }
 
     QString errorMsg;
-    if (Project::registerCollection(dirPath,
+    if (Project::registerCollection(m_project.rootPath(),
+                                     dirPath,
                                      dialog.collectionClass(),
                                      dialog.parent(),
                                      dialog.related(),
@@ -452,6 +649,7 @@ void MainWindow::registerCollection()
                                      dialog.script(),
                                      &errorMsg))
     {
+        m_projectFileSystemModel->refreshDirectory(dirPath);
         statusBar()->showMessage(
             QStringLiteral("Collection registered: %1").arg(QDir(dirPath).dirName()), 5000);
     } else {
@@ -504,6 +702,64 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
                 auto *layer = new PointLayer(filePath, viewer->scene());
         viewer->layerManager()->addLayer(layer);
     }
+}
+
+void MainWindow::onProjectTreeContextMenu(const QPoint &position)
+{
+    if (!m_project.isValid())
+        return;
+
+    const QModelIndex index = ui->projectTree->indexAt(position);
+    if (!index.isValid())
+        return;
+
+    const QFileInfo info(m_projectFileSystemModel->filePath(index));
+    if (!info.isDir())
+        return;
+
+    ui->projectTree->setCurrentIndex(index);
+
+    QMenu menu(this);
+    QAction *registerAction = menu.addAction("Register collection...");
+    QAction *styleAction = menu.addAction("Edit collection style...");
+
+    const bool isProjectRoot =
+        QDir::cleanPath(info.absoluteFilePath())
+        == QDir::cleanPath(m_project.rootPath());
+    const bool isReserved =
+        Project::reservedDirectories().contains(
+            info.fileName(), Qt::CaseInsensitive);
+    registerAction->setEnabled(!isProjectRoot && !isReserved);
+
+    Collection selectedCollection;
+    bool hasRegisteredCollection = false;
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    for (const Collection &collection : collections) {
+        if (QDir::cleanPath(collection.dirPath)
+            == QDir::cleanPath(info.absoluteFilePath())) {
+            selectedCollection = collection;
+            hasRegisteredCollection = true;
+            break;
+        }
+    }
+    const bool supportsStyle = hasRegisteredCollection
+        && selectedCollection.collectionClass != "other";
+    styleAction->setEnabled(supportsStyle);
+
+    connect(registerAction, &QAction::triggered,
+            this, &MainWindow::registerCollection);
+    connect(styleAction, &QAction::triggered,
+            this, [this, selectedCollection, supportsStyle]() {
+                if (!supportsStyle)
+                    return;
+                CollectionStyleDialog dialog(selectedCollection, this);
+                if (dialog.exec() == QDialog::Accepted)
+                    m_projectFileSystemModel->refreshDirectory(
+                        selectedCollection.dirPath);
+            });
+
+    menu.exec(ui->projectTree->viewport()->mapToGlobal(position));
 }
 
 void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
@@ -588,16 +844,18 @@ void MainWindow::onLayerSelectionChanged(int index)
     // Disconnect previous point layer connection
     if (m_currentPointLayer) {
         disconnect(m_pointLayerConnection);
+        disconnect(m_pointCollectionConnection);
         m_currentPointLayer = nullptr;
     }
 
     if (auto *pointLayer = qobject_cast<PointLayer*>(layer)) {
         m_currentPointLayer = pointLayer;
-        m_pointLayerConnection = connect(pointLayer, &PointLayer::selectedPointChanged,
+        m_pointLayerConnection = connect(pointLayer, &PointLayer::selectionChanged,
                                          this, &MainWindow::onPointSelectionChanged);
+        m_pointCollectionConnection = connect(
+            pointLayer, &PointLayer::collectionChanged,
+            this, &MainWindow::onPointSelectionChanged);
         updatePropertiesForPointLayer(pointLayer);
-        if (pointLayer->selectedPointIndex() >= 0)
-            onPointSelectionChanged(pointLayer->selectedPointIndex());
         ui->actionEditPoints->setEnabled(true);
     } else {
         m_currentPointLayer = nullptr;
@@ -609,14 +867,19 @@ void MainWindow::onLayerSelectionChanged(int index)
     ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
 }
 
-void MainWindow::onPointSelectionChanged(int index)
+void MainWindow::onPointSelectionChanged()
 {
     if (!m_currentPointLayer || !ui->propertiesTable)
         return;
 
     const PointCollection &col = m_currentPointLayer->collection();
+    const int selectionCount =
+        m_currentPointLayer->selectedPointIndices().size();
+    const int index = m_currentPointLayer->primarySelectedPointIndex();
     const int sectionARows = 4;
-    const int sectionBRows = (index >= 0) ? (3 + col.points()[index].attributes.size()) : 0;
+    const int sectionBRows = selectionCount == 1 && index >= 0
+        ? 3 + col.points()[index].attributes.size()
+        : (selectionCount > 1 ? 1 : 0);
 
     ui->propertiesTable->setRowCount(sectionARows + sectionBRows);
 
@@ -631,7 +894,14 @@ void MainWindow::onPointSelectionChanged(int index)
     ui->propertiesTable->setItem(3, 1, new QTableWidgetItem(col.columnNames().join(", ")));
 
     // Section B — Selected point detail
-    if (index >= 0 && index < col.points().size()) {
+    if (selectionCount > 1) {
+        ui->propertiesTable->setItem(
+            sectionARows, 0, new QTableWidgetItem("Selected"));
+        ui->propertiesTable->setItem(
+            sectionARows, 1,
+            new QTableWidgetItem(QString::number(selectionCount)));
+    } else if (selectionCount == 1
+               && index >= 0 && index < col.points().size()) {
         const PointRecord &rec = col.points()[index];
         int row = sectionARows;
 
@@ -695,6 +965,7 @@ void MainWindow::onWorkspaceTabChanged(int index)
     // Clean up previous point layer connection
     if (m_currentPointLayer) {
         disconnect(m_pointLayerConnection);
+        disconnect(m_pointCollectionConnection);
         m_currentPointLayer = nullptr;
     }
 
@@ -722,6 +993,9 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         ui->actionPan->setChecked(false);
         ui->actionPan->setEnabled(false);
         ui->actionSyncSplitViews->setEnabled(false);
+        ui->actionEditPoints->setChecked(false);
+        ui->actionEditPoints->setEnabled(false);
+        ui->actionCancelEdit->setEnabled(false);
         if (m_layersDock)
             m_layersDock->setLayerManager(nullptr);
         clearPropertiesTable();
@@ -746,6 +1020,57 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 
     if (m_layersDock)
         m_layersDock->setLayerManager(mgr);
+}
+
+ImageViewer *MainWindow::viewerForLayer(PointLayer *layer) const
+{
+    if (!layer)
+        return nullptr;
+
+    for (int tabIndex = 0;
+         tabIndex < ui->workspaceTabs->count();
+         ++tabIndex) {
+        auto *splitter = qobject_cast<QSplitter*>(
+            ui->workspaceTabs->widget(tabIndex));
+        if (!splitter)
+            continue;
+        for (int panelIndex = 0;
+             panelIndex < splitter->count();
+             ++panelIndex) {
+            auto *viewer = qobject_cast<ImageViewer*>(
+                splitter->widget(panelIndex));
+            if (viewer && viewer->layerManager()
+                && viewer->layerManager()->indexOf(layer) >= 0)
+                return viewer;
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::openAttributeTable(PointLayer *layer)
+{
+    if (!layer)
+        return;
+
+    if (auto existing = m_attributeTables.value(layer)) {
+        existing->showNormal();
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+
+    ImageViewer *viewer = viewerForLayer(layer);
+    if (!viewer)
+        return;
+
+    auto *window = new PointAttributeTableWindow(layer, viewer, this);
+    m_attributeTables.insert(layer, window);
+    connect(window, &QObject::destroyed, this, [this, layer]() {
+        m_attributeTables.remove(layer);
+    });
+    window->show();
+    window->raise();
+    window->activateWindow();
 }
 
 void MainWindow::splitViewer()
@@ -778,7 +1103,7 @@ void MainWindow::openImageAtPath(const QString &filePath)
         if (!splitter) continue;
         for (int i = 0; i < splitter->count(); ++i) {
             auto *v = qobject_cast<ImageViewer*>(splitter->widget(i));
-            if (v && v->imageLayer() && v->imageLayer()->sourcePath() == absolutePath) {
+            if (v && v->primarySourcePath() == absolutePath) {
                 ui->workspaceTabs->setCurrentIndex(t);
                 v->setFocus();
                 return;
@@ -786,9 +1111,11 @@ void MainWindow::openImageAtPath(const QString &filePath)
         }
     }
 
-    // Create a new viewer inside a splitter
     auto *viewer = new ImageViewer(this);
-    viewer->setImage(absolutePath);
+    if (!loadImageIntoViewer(viewer, absolutePath)) {
+        delete viewer;
+        return;
+    }
 
     auto *splitter = new QSplitter(Qt::Horizontal);
     splitter->addWidget(viewer);
@@ -797,83 +1124,104 @@ void MainWindow::openImageAtPath(const QString &filePath)
     const int newIndex = ui->workspaceTabs->addTab(splitter, tabTitle);
     ui->workspaceTabs->setCurrentIndex(newIndex);
 
-    // Store mapping from absolutePath to the splitter widget
     m_openImageTabs.insert(absolutePath, splitter);
 
-    // Update layers dock
     if (m_layersDock)
         m_layersDock->setLayerManager(viewer->layerManager());
 
-    // Autoload PointCollection if applicable (after setLayerManager so scene is set)
-    if (viewer->layerManager()) {
-        const QString baseName = fi.completeBaseName();
-        const QString imgDir = fi.absolutePath();
-        const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
+    configureViewer(viewer);
+    m_activeViewer = viewer;
+    updateProjectActions();
+}
 
-        QStringList matchingParents;
-        for (const Collection &col : collections) {
-            if (samePath(col.dirPath, imgDir))
-                matchingParents.append(col.dirPath);
-        }
+bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
+                                     const QString &filePath,
+                                     bool showWarning)
+{
+    if (!viewer)
+        return false;
 
-        QStringList pointCsvPaths;
-        if (matchingParents.size() == 1) {
-            for (const Collection &col : collections) {
-                if (col.collectionClass != "point_collection" || !samePath(col.parent, matchingParents.first()))
-                    continue;
+    const QFileInfo fi(filePath);
+    const QString absolutePath = fi.absoluteFilePath();
+    const QVector<Collection> collections = m_project.isValid()
+        ? Project::discoverCollections(m_project.rootPath())
+        : QVector<Collection>{};
+    CollectionAutoloadResolver autoloadResolver;
+    QVector<AutoloadCandidate> candidates =
+        autoloadResolver.resolve(
+            m_project.isValid() ? m_project.rootPath() : fi.absolutePath(),
+            absolutePath,
+            collections);
 
-                const QString csvPath = QDir(col.dirPath).filePath(baseName + ".csv");
-                if (QFile::exists(csvPath))
-                    pointCsvPaths.append(csvPath);
-                else
-                    qWarning() << "Autoload: parented point_collection has no matching CSV" << csvPath;
-            }
-
-            if (pointCsvPaths.isEmpty())
-                qWarning() << "Autoload skipped: no point_collection parented to" << matchingParents.first();
-        } else if (matchingParents.size() > 1) {
-            qWarning() << "Autoload skipped: multiple image collections match" << imgDir;
-        } else {
-            qWarning() << "Autoload skipped: no image collection matches" << imgDir;
-        }
-
-        if (pointCsvPaths.isEmpty()) {
-            for (const Collection &col : collections) {
-                if (col.collectionClass != "point_collection")
-                    continue;
-
-                const QString csvPath = QDir(col.dirPath).filePath(baseName + ".csv");
-                if (QFile::exists(csvPath))
-                    pointCsvPaths.append(csvPath);
-            }
-
-            pointCsvPaths.removeDuplicates();
-
-            if (pointCsvPaths.size() == 1)
-                qWarning() << "Autoload fallback: using matching CSV" << pointCsvPaths.first();
-        }
-
-        pointCsvPaths.removeDuplicates();
-
-        if (!pointCsvPaths.isEmpty()) {
-            for (const QString &csvPath : std::as_const(pointCsvPaths)) {
-                auto *layer = new PointLayer(csvPath, viewer->scene());
-                if (pointCsvPaths.size() > 1) {
-                    const QString collectionName = QFileInfo(QFileInfo(csvPath).absolutePath()).fileName();
-                    layer->rename(QStringLiteral("%1/%2").arg(collectionName, QFileInfo(csvPath).fileName()));
-                }
-                viewer->layerManager()->addLayer(layer);
-            }
-            qInfo() << "Autoload loaded" << pointCsvPaths.size() << "point layer(s) for" << baseName;
-        } else {
-            qWarning() << "Autoload skipped: no point CSV found for" << baseName;
+    bool openedFileIncluded = false;
+    for (const AutoloadCandidate &candidate : std::as_const(candidates)) {
+        if (candidate.openedFile) {
+            openedFileIncluded = true;
+            break;
         }
     }
 
-    configureViewer(viewer);
+    if (!openedFileIncluded) {
+        AutoloadCandidate fallback;
+        fallback.collection.dirPath = fi.absolutePath();
+        fallback.collection.dirName = fi.dir().dirName();
+        fallback.filePath = absolutePath;
+        fallback.layerKind = AutoloadLayerKind::Image;
+        fallback.priority = 100;
+        fallback.openedFile = true;
+        candidates.prepend(fallback);
+    }
 
-    m_activeViewer = viewer;
-    updateProjectActions();
+    CollectionStyleResolver styleResolver;
+    int loadedImageCount = 0;
+
+    for (const AutoloadCandidate &candidate : std::as_const(candidates)) {
+        Layer *layer = nullptr;
+        if (candidate.layerKind == AutoloadLayerKind::Image) {
+            auto *imageLayer = new ImageLayer(candidate.filePath);
+            if (imageLayer->rasterData().isNull()) {
+                qWarning() << "Autoload: could not load image" << candidate.filePath;
+                delete imageLayer;
+                continue;
+            }
+            imageLayer->setStyle(styleResolver.imageStyle(
+                candidate.collection, imageLayer->rasterData()));
+            layer = imageLayer;
+            ++loadedImageCount;
+        } else {
+            auto *pointLayer = new PointLayer(candidate.filePath, viewer->scene());
+            if (!pointLayer->collection().isValid()) {
+                qWarning() << "Autoload: could not load points" << candidate.filePath;
+                delete pointLayer;
+                continue;
+            }
+            pointLayer->setStyle(styleResolver.pointStyle(
+                candidate.collection, pointLayer->collection().recordCount()));
+            layer = pointLayer;
+        }
+
+        if (!candidate.collection.dirName.isEmpty()) {
+            layer->rename(QStringLiteral("%1/%2")
+                              .arg(candidate.collection.dirName,
+                                   QFileInfo(candidate.filePath).fileName()));
+        }
+        viewer->layerManager()->addLayer(layer);
+    }
+
+    if (loadedImageCount == 0) {
+        if (showWarning) {
+            QMessageBox::warning(
+                this, "Open Image",
+                QStringLiteral("Could not load image:\n%1").arg(absolutePath));
+        }
+        return false;
+    }
+
+    viewer->fitLoadedImage();
+    viewer->setPrimarySourcePath(absolutePath);
+    qInfo() << "Autoload loaded" << viewer->layerManager()->layerCount()
+            << "layer(s) for" << fi.completeBaseName();
+    return true;
 }
 
 void MainWindow::configureViewer(ImageViewer *viewer)
@@ -936,13 +1284,7 @@ void MainWindow::configureViewer(ImageViewer *viewer)
 
 void MainWindow::loadProject(const Project &project)
 {
-    while (ui->workspaceTabs->count() > 0) {
-        QWidget *w = ui->workspaceTabs->widget(0);
-        ui->workspaceTabs->removeTab(0);
-        delete w;
-    }
-    m_openImageTabs.clear();
-    m_activeViewer = nullptr;
+    closeCurrentProject();
 
     m_project = project;
     updateProjectExplorer();
@@ -953,6 +1295,364 @@ void MainWindow::loadProject(const Project &project)
     if (m_previewDock)
         m_previewDock->show();
     addToRecentProjects(m_project.rootPath());
+    restoreProjectSession();
+}
+
+void MainWindow::closeCurrentProject()
+{
+    saveProjectSession();
+
+    if (m_currentPointLayer) {
+        disconnect(m_pointLayerConnection);
+        disconnect(m_pointCollectionConnection);
+        m_currentPointLayer = nullptr;
+    }
+
+    {
+        const QSignalBlocker blocker(ui->workspaceTabs);
+        while (ui->workspaceTabs->count() > 0) {
+            QWidget *tab = ui->workspaceTabs->widget(0);
+            ui->workspaceTabs->removeTab(0);
+            delete tab;
+        }
+    }
+
+    m_openImageTabs.clear();
+    m_activeViewer.clear();
+    onActiveViewerChanged(nullptr);
+
+    if (m_layersDock) {
+        m_layersDock->setLayerManager(nullptr);
+        m_layersDock->setProjectPath(QString());
+    }
+    if (m_previewDock) {
+        m_previewDock->clear();
+        m_previewDock->hide();
+    }
+
+    m_project = Project();
+    m_projectFileSystemModel->setProjectRoot(QString());
+    ui->projectTree->setRootIndex(
+        m_projectFileSystemModel->setRootPath(QString()));
+    clearPropertiesTable();
+    setWindowTitle("rcaiman_projects");
+    updateProjectActions();
+}
+
+void MainWindow::saveApplicationState()
+{
+    QSettings settings;
+    settings.setValue("mainWindow/geometry", saveGeometry());
+    settings.setValue("mainWindow/state", saveState(1));
+}
+
+void MainWindow::restoreApplicationState()
+{
+    QSettings settings;
+    const QByteArray geometry =
+        settings.value("mainWindow/geometry").toByteArray();
+    const QByteArray state =
+        settings.value("mainWindow/state").toByteArray();
+    if (!geometry.isEmpty())
+        restoreGeometry(geometry);
+    if (!state.isEmpty())
+        restoreState(state, 1);
+}
+
+QString MainWindow::projectRelativePath(const QString &absolutePath) const
+{
+    if (!m_project.isValid() || absolutePath.isEmpty())
+        return {};
+    return QDir::fromNativeSeparators(
+        QDir(m_project.rootPath()).relativeFilePath(absolutePath));
+}
+
+QString MainWindow::projectAbsolutePath(const QString &relativePath) const
+{
+    if (!m_project.isValid() || relativePath.isEmpty())
+        return {};
+    return QFileInfo(
+        QDir(m_project.rootPath()).filePath(relativePath)).absoluteFilePath();
+}
+
+void MainWindow::saveProjectSession()
+{
+    if (!m_project.isValid())
+        return;
+
+    QJsonArray tabs;
+    for (int tabIndex = 0; tabIndex < ui->workspaceTabs->count(); ++tabIndex) {
+        auto *splitter =
+            qobject_cast<QSplitter*>(ui->workspaceTabs->widget(tabIndex));
+        if (!splitter)
+            continue;
+
+        QJsonArray panels;
+        int activePanel = 0;
+        for (int panelIndex = 0; panelIndex < splitter->count(); ++panelIndex) {
+            auto *viewer =
+                qobject_cast<ImageViewer*>(splitter->widget(panelIndex));
+            if (!viewer || viewer->primarySourcePath().isEmpty())
+                continue;
+
+            const QString source = projectRelativePath(
+                viewer->primarySourcePath());
+            if (source.isEmpty())
+                continue;
+
+            const QTransform transform = viewer->viewTransform();
+            QJsonArray transformValues{
+                transform.m11(), transform.m12(), transform.m13(),
+                transform.m21(), transform.m22(), transform.m23(),
+                transform.m31(), transform.m32(), transform.m33()
+            };
+            const QPointF center = viewer->viewCenter();
+
+            QJsonObject panel;
+            panel["source"] = source;
+            panel["transform"] = transformValues;
+            panel["center"] = QJsonArray{center.x(), center.y()};
+
+            QJsonArray layers;
+            LayerManager *manager = viewer->layerManager();
+            for (int layerIndex = 0;
+                 manager && layerIndex < manager->layerCount();
+                 ++layerIndex) {
+                Layer *layer = manager->layerAt(layerIndex);
+                if (!layer)
+                    continue;
+
+                const QString layerSource =
+                    projectRelativePath(layer->sourcePath());
+                if (layerSource.isEmpty())
+                    continue;
+
+                QJsonObject layerObject;
+                layerObject["source"] = layerSource;
+                layerObject["visible"] = layer->isVisible();
+                if (auto *imageLayer = qobject_cast<ImageLayer*>(layer)) {
+                    layerObject["image_style"] =
+                        imageStyleToJson(imageLayer->style());
+                }
+                layers.append(layerObject);
+            }
+            panel["layers"] = layers;
+            panels.append(panel);
+
+            if (viewer == m_activeViewer)
+                activePanel = panels.size() - 1;
+        }
+
+        if (panels.isEmpty())
+            continue;
+
+        QJsonArray sizes;
+        for (int size : splitter->sizes())
+            sizes.append(size);
+
+        QJsonObject tab;
+        tab["title"] = ui->workspaceTabs->tabText(tabIndex);
+        tab["panels"] = panels;
+        tab["split_sizes"] = sizes;
+        tab["active_panel"] = activePanel;
+        tabs.append(tab);
+    }
+
+    QJsonObject session;
+    session["schema_version"] = 1;
+    session["current_tab"] = ui->workspaceTabs->currentIndex();
+    session["sync_split_views"] = ImageViewer::syncEnabled();
+    session["tabs"] = tabs;
+
+    const QString sessionDirectory =
+        QDir(m_project.rootPath()).filePath(".rcaiman");
+    if (!QDir().mkpath(sessionDirectory))
+        return;
+
+    QSaveFile file(QDir(sessionDirectory).filePath("session.json"));
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(session).toJson(QJsonDocument::Indented));
+    file.commit();
+}
+
+void MainWindow::restoreProjectSession()
+{
+    if (!m_project.isValid())
+        return;
+
+    QFile file(QDir(m_project.rootPath()).filePath(".rcaiman/session.json"));
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        qWarning() << "Session restore skipped:" << parseError.errorString();
+        return;
+    }
+
+    const QJsonObject session = document.object();
+    if (session.value("schema_version").toInt() != 1)
+        return;
+
+    const QJsonArray tabs = session.value("tabs").toArray();
+    int restoredCurrentTab = session.value("current_tab").toInt(0);
+    ImageViewer *requestedActiveViewer = nullptr;
+
+    for (const QJsonValue &tabValue : tabs) {
+        const QJsonObject tabObject = tabValue.toObject();
+        const QJsonArray panels = tabObject.value("panels").toArray();
+        auto *splitter = new QSplitter(Qt::Horizontal);
+        int restoredPanels = 0;
+        const int activePanel =
+            tabObject.value("active_panel").toInt(0);
+
+        for (int panelIndex = 0; panelIndex < panels.size(); ++panelIndex) {
+            const QJsonObject panelObject = panels.at(panelIndex).toObject();
+            const QString absolutePath = projectAbsolutePath(
+                panelObject.value("source").toString());
+            if (!QFileInfo::exists(absolutePath))
+                continue;
+
+            auto *viewer = new ImageViewer(this);
+            if (!loadImageIntoViewer(viewer, absolutePath, false)) {
+                delete viewer;
+                continue;
+            }
+
+            const QJsonArray savedLayers =
+                panelObject.value("layers").toArray();
+            QMap<QString, QJsonObject> savedLayerState;
+            for (const QJsonValue &layerValue : savedLayers) {
+                const QJsonObject layerObject = layerValue.toObject();
+                const QString sourcePath = projectAbsolutePath(
+                    layerObject.value("source").toString());
+                if (!sourcePath.isEmpty()) {
+                    savedLayerState.insert(
+                        normalizedSessionPath(sourcePath), layerObject);
+                }
+            }
+
+            LayerManager *manager = viewer->layerManager();
+            for (int layerIndex = 0;
+                 manager && layerIndex < manager->layerCount();
+                 ++layerIndex) {
+                Layer *layer = manager->layerAt(layerIndex);
+                if (!layer)
+                    continue;
+
+                const auto stateIt = savedLayerState.constFind(
+                    normalizedSessionPath(layer->sourcePath()));
+                if (stateIt == savedLayerState.cend())
+                    continue;
+
+                const QJsonObject layerObject = stateIt.value();
+                layer->setVisible(
+                    layerObject.value("visible").toBool(layer->isVisible()));
+                if (auto *imageLayer = qobject_cast<ImageLayer*>(layer)) {
+                    const QJsonObject styleObject =
+                        layerObject.value("image_style").toObject();
+                    if (!styleObject.isEmpty()) {
+                        imageLayer->setStyle(imageStyleFromJson(
+                            styleObject, imageLayer->style()));
+                    }
+                }
+            }
+
+            configureViewer(viewer);
+            splitter->addWidget(viewer);
+
+            const QJsonArray transformValues =
+                panelObject.value("transform").toArray();
+            const QJsonArray centerValues =
+                panelObject.value("center").toArray();
+            if (transformValues.size() == 9 && centerValues.size() == 2) {
+                const QTransform transform(
+                    transformValues[0].toDouble(),
+                    transformValues[1].toDouble(),
+                    transformValues[2].toDouble(),
+                    transformValues[3].toDouble(),
+                    transformValues[4].toDouble(),
+                    transformValues[5].toDouble(),
+                    transformValues[6].toDouble(),
+                    transformValues[7].toDouble(),
+                    transformValues[8].toDouble());
+                const QPointF center(
+                    centerValues[0].toDouble(),
+                    centerValues[1].toDouble());
+                QPointer<ImageViewer> guardedViewer = viewer;
+                QTimer::singleShot(0, this, [guardedViewer, transform, center]() {
+                    if (guardedViewer)
+                        guardedViewer->restoreView(transform, center);
+                });
+            }
+
+            if (panelIndex == activePanel)
+                requestedActiveViewer = viewer;
+            ++restoredPanels;
+        }
+
+        if (restoredPanels == 0) {
+            delete splitter;
+            continue;
+        }
+
+        const QJsonArray savedSizes =
+            tabObject.value("split_sizes").toArray();
+        QList<int> sizes;
+        for (const QJsonValue &size : savedSizes)
+            sizes.append(size.toInt());
+        if (sizes.size() == splitter->count())
+            splitter->setSizes(sizes);
+
+        QString title = tabObject.value("title").toString();
+        if (title.isEmpty()) {
+            auto *viewer =
+                qobject_cast<ImageViewer*>(splitter->widget(0));
+            title = viewer && !viewer->primarySourcePath().isEmpty()
+                ? QFileInfo(viewer->primarySourcePath()).fileName()
+                : QStringLiteral("Viewer");
+        }
+        ui->workspaceTabs->addTab(splitter, title);
+
+        auto *firstViewer =
+            qobject_cast<ImageViewer*>(splitter->widget(0));
+        if (firstViewer && !firstViewer->primarySourcePath().isEmpty()) {
+            m_openImageTabs.insert(
+                firstViewer->primarySourcePath(), splitter);
+        }
+    }
+
+    if (ui->workspaceTabs->count() == 0)
+        return;
+
+    restoredCurrentTab = qBound(
+        0, restoredCurrentTab, ui->workspaceTabs->count() - 1);
+    ui->workspaceTabs->setCurrentIndex(restoredCurrentTab);
+
+    if (!requestedActiveViewer
+        || ui->workspaceTabs->indexOf(
+            requestedActiveViewer->parentWidget()) != restoredCurrentTab) {
+        auto *splitter = qobject_cast<QSplitter*>(
+            ui->workspaceTabs->widget(restoredCurrentTab));
+        requestedActiveViewer = splitter
+            ? qobject_cast<ImageViewer*>(splitter->widget(0))
+            : nullptr;
+    }
+
+    m_activeViewer = requestedActiveViewer;
+    onActiveViewerChanged(requestedActiveViewer);
+    if (requestedActiveViewer)
+        requestedActiveViewer->setFocus();
+
+    const bool sync =
+        session.value("sync_split_views").toBool(false);
+    ui->actionSyncSplitViews->setChecked(sync);
+    ImageViewer::setSyncEnabled(sync);
+    updateProjectActions();
 }
 
 void MainWindow::updateProjectExplorer()
@@ -961,6 +1661,7 @@ void MainWindow::updateProjectExplorer()
         ui->projectTree->setRootIndex(QModelIndex());
         return;
     }
+    m_projectFileSystemModel->setProjectRoot(m_project.rootPath());
     const QModelIndex rootIndex = m_projectFileSystemModel->setRootPath(m_project.rootPath());
     ui->projectTree->setRootIndex(rootIndex);
     ui->projectTree->setColumnWidth(0, 220);
@@ -970,14 +1671,29 @@ void MainWindow::updateProjectActions()
 {
     const bool hasProject = m_project.isValid();
     ui->actionSaveProject->setEnabled(hasProject);
+    ui->actionSaveProjectAs->setEnabled(hasProject);
+    ui->actionSaveProjectAsCleanCopy->setEnabled(hasProject);
+    ui->actionCloseProject->setEnabled(hasProject);
     ui->actionPan->setEnabled(currentImageViewer() != nullptr);
     ui->actionImportRaw->setEnabled(hasProject);
+    ui->actionRegisterCollection->setEnabled(hasProject);
+    ui->actionCreatePoints->setEnabled(hasProject);
 
     bool hasRawFiles = false;
     if (hasProject) {
         const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
-        QDirIterator it(rawDir, QDir::Files);
-        hasRawFiles = it.hasNext();
+        const QStringList rawExtensions = {
+            "cr2", "cr3", "nef", "arw", "dng", "raf", "orf",
+            "rw2", "pef", "srw", "raw", "dcr", "kdc"
+        };
+        QDirIterator it(rawDir, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            if (rawExtensions.contains(
+                    QFileInfo(it.next()).suffix().toLower())) {
+                hasRawFiles = true;
+                break;
+            }
+        }
     }
     ui->actionExtractRawData->setEnabled(hasRawFiles);
 }
@@ -1024,7 +1740,8 @@ void MainWindow::updatePropertiesTable(const PixelInfo &info)
 
 void MainWindow::updatePropertiesForPointLayer(PointLayer *layer)
 {
-    onPointSelectionChanged(layer ? layer->selectedPointIndex() : -1);
+    Q_UNUSED(layer);
+    onPointSelectionChanged();
 }
 
 void MainWindow::onSyncSplitViewsToggled(bool checked)
@@ -1173,6 +1890,7 @@ void MainWindow::createPointsCsv()
     }
 
     statusBar()->showMessage(QStringLiteral("Created points file: %1").arg(QFileInfo(savePath).fileName()), 5000);
+    m_projectFileSystemModel->refreshDirectory(QFileInfo(savePath).absolutePath());
 
     // If an image viewer is active, offer to add the new layer
     ImageViewer *viewer = currentImageViewer();

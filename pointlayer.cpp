@@ -23,6 +23,11 @@ PointLayer::PointLayer(const QString &path, QGraphicsScene *scene, QObject *pare
     }
 }
 
+PointLayer::~PointLayer()
+{
+    removeBackup();
+}
+
 const QVector<QGraphicsItem*> &PointLayer::buildItems(QGraphicsScene *scene)
 {
     if (m_itemsBuilt)
@@ -50,7 +55,7 @@ void PointLayer::rebuildItems(QGraphicsScene *scene)
 
         // Always connect clicked
         connect(pointItem, &PointItem::clicked,
-                this, &PointLayer::onPointClicked, Qt::QueuedConnection);
+                this, &PointLayer::onPointClicked);
 
         // Only connect edit signals in edit mode
         if (m_editMode) {
@@ -64,6 +69,7 @@ void PointLayer::rebuildItems(QGraphicsScene *scene)
         pointItem->setPen(QPen(m_style.color));
         pointItem->setBrush(QBrush(m_style.color));
         pointItem->setPos(rec.col, rec.row);
+        pointItem->setZValue(zOrder());
         pointItem->setVisible(isVisible());
         scene->addItem(pointItem);
         m_items.append(pointItem);
@@ -77,7 +83,9 @@ void PointLayer::setStyle(const PointLayerStyle &style)
 {
     if (m_style.color == style.color &&
         qFuzzyCompare(m_style.size, style.size) &&
-        m_style.symbol == style.symbol)
+        m_style.symbol == style.symbol &&
+        m_style.labelField == style.labelField &&
+        qFuzzyCompare(m_style.labelSize, style.labelSize))
         return;
 
     m_style = style;
@@ -106,6 +114,20 @@ void PointLayer::setSymbol(PointSymbol symbol)
     setStyle(next);
 }
 
+void PointLayer::setLabelField(const QString &field)
+{
+    PointLayerStyle next = m_style;
+    next.labelField = field;
+    setStyle(next);
+}
+
+void PointLayer::setLabelSize(double size)
+{
+    PointLayerStyle next = m_style;
+    next.labelSize = qBound(6.0, size, 48.0);
+    setStyle(next);
+}
+
 void PointLayer::setActive(bool active)
 {
     if (isActive() == active)
@@ -130,7 +152,7 @@ void PointLayer::applyStyleToPointItem(int index)
     if (!pointItem)
         return;
 
-    const bool selected = isActive() && (index == m_selectedPointIndex);
+    const bool selected = isActive() && m_selectedPointIndices.contains(index);
     const double size = selected ? m_style.size * 1.35 : m_style.size;
     const QPointF offset(-size / 2.0, -size / 2.0);
     const QColor color = selected ? selectionColor() : m_style.color;
@@ -141,6 +163,34 @@ void PointLayer::applyStyleToPointItem(int index)
     pointItem->setRect(QRectF(offset.x(), offset.y(), size, size));
     pointItem->setPen(pen);
     pointItem->setBrush(m_style.symbol == PointSymbol::Circle ? QBrush(color) : QBrush(Qt::NoBrush));
+    pointItem->setLabel(labelTextForPoint(index), m_style.labelSize);
+}
+
+QString PointLayer::labelTextForPoint(int index) const
+{
+    if (m_style.labelField.isEmpty()
+        || index < 0
+        || index >= m_collection.points().size()) {
+        return {};
+    }
+
+    if (m_style.labelField == QStringLiteral("__id__"))
+        return QString::number(index);
+
+    const QStringList columns = m_collection.columnNames();
+    const int csvColumn = columns.indexOf(m_style.labelField);
+    const int attributeIndex = csvColumn - 2;
+    if (attributeIndex < 0)
+        return {};
+
+    const QVector<QVariant> &attributes =
+        m_collection.points().at(index).attributes;
+    if (attributeIndex >= attributes.size()
+        || !attributes.at(attributeIndex).isValid()) {
+        return {};
+    }
+
+    return attributes.at(attributeIndex).toString();
 }
 
 QColor PointLayer::selectionColor() const
@@ -186,7 +236,6 @@ void PointLayer::setEditMode(bool enabled)
         }
     } else {
         removeBackup();
-        clearSelection();
     }
 
     // Rebuild items with new mode (rebuildItems calls clearPointItems internally)
@@ -243,7 +292,16 @@ void PointLayer::cancelEdit()
     // Clean backup and deactivate edit mode
     m_backupPath.clear();
     m_editMode = false;
-    clearSelection();
+    QSet<int> validSelection;
+    for (int index : std::as_const(m_selectedPointIndices)) {
+        if (index >= 0 && index < m_collection.recordCount())
+            validSelection.insert(index);
+    }
+    m_selectedPointIndices = validSelection;
+    if (!m_selectedPointIndices.contains(m_primarySelectedPointIndex)) {
+        m_primarySelectedPointIndex = m_selectedPointIndices.isEmpty()
+            ? -1 : *m_selectedPointIndices.constBegin();
+    }
 
     // Rebuild items
     if (m_scene) {
@@ -251,6 +309,8 @@ void PointLayer::cancelEdit()
         rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
+    emit collectionChanged();
+    emit selectionChanged();
 }
 
 bool PointLayer::saveCsv(QString *errorMessage)
@@ -270,64 +330,105 @@ bool PointLayer::saveCsv(QString *errorMessage)
 
 const PointRecord *PointLayer::selectedPoint() const
 {
-    if (m_selectedPointIndex < 0 || m_selectedPointIndex >= m_collection.points().size())
+    if (m_primarySelectedPointIndex < 0
+        || m_primarySelectedPointIndex >= m_collection.points().size())
         return nullptr;
-    return &m_collection.points()[m_selectedPointIndex];
+    return &m_collection.points()[m_primarySelectedPointIndex];
 }
 
 void PointLayer::selectPoint(int index)
 {
-    if (index < -1 || index >= m_collection.points().size())
+    if (index < 0) {
+        clearSelection();
+        return;
+    }
+    setSelectedPointIndices(QSet<int>{index}, index);
+}
+
+void PointLayer::togglePointSelection(int index)
+{
+    if (index < 0 || index >= m_collection.recordCount())
         return;
 
-    const int previousIndex = m_selectedPointIndex;
-    if (previousIndex == index)
+    QSet<int> selection = m_selectedPointIndices;
+    int primary = m_primarySelectedPointIndex;
+    if (selection.contains(index)) {
+        selection.remove(index);
+        if (primary == index)
+            primary = selection.isEmpty() ? -1 : *selection.constBegin();
+    } else {
+        selection.insert(index);
+        primary = index;
+    }
+    setSelectedPointIndices(selection, primary);
+}
+
+void PointLayer::setSelectedPointIndices(const QSet<int> &indices,
+                                         int primaryIndex)
+{
+    QSet<int> valid;
+    for (int index : indices) {
+        if (index >= 0 && index < m_collection.recordCount())
+            valid.insert(index);
+    }
+    if (!valid.contains(primaryIndex))
+        primaryIndex = valid.isEmpty() ? -1 : *valid.constBegin();
+
+    if (valid == m_selectedPointIndices
+        && primaryIndex == m_primarySelectedPointIndex)
         return;
 
-    m_selectedPointIndex = index;
-    applyStyleToPointItem(previousIndex);
-    applyStyleToPointItem(m_selectedPointIndex);
-    emit selectedPointChanged(m_selectedPointIndex);
+    const QSet<int> changed = valid | m_selectedPointIndices;
+    m_selectedPointIndices = valid;
+    m_primarySelectedPointIndex = primaryIndex;
+    for (int index : changed)
+        applyStyleToPointItem(index);
+    emit selectionChanged();
 }
 
 void PointLayer::clearSelection()
 {
-    if (m_selectedPointIndex >= 0) {
-        const int previousIndex = m_selectedPointIndex;
-        m_selectedPointIndex = -1;
-        applyStyleToPointItem(previousIndex);
-        emit selectedPointChanged(-1);
-    }
+    setSelectedPointIndices({}, -1);
 }
 
 // --- Slots ---
 
-void PointLayer::onPointClicked(int index)
+void PointLayer::onPointClicked(int index, Qt::KeyboardModifiers modifiers)
 {
     if (!isActive())
         return;
 
-    selectPoint(index);
+    if (modifiers.testFlag(Qt::ControlModifier)) {
+        togglePointSelection(index);
+    } else if (m_editMode && m_selectedPointIndices.contains(index)) {
+        setSelectedPointIndices(m_selectedPointIndices, index);
+    } else {
+        selectPoint(index);
+    }
 }
 
 void PointLayer::addPoint(double row, double col)
 {
     // Backup the collection and selection for potential revert
     const PointCollection backupCollection = m_collection;
-    const int backupSelection = m_selectedPointIndex;
+    const QSet<int> backupSelection = m_selectedPointIndices;
+    const int backupPrimary = m_primarySelectedPointIndex;
 
     m_collection.addPoint(row, col);
 
     QString errorMsg;
     if (!saveCsv(&errorMsg)) {
         m_collection = backupCollection;
-        m_selectedPointIndex = backupSelection;
+        m_selectedPointIndices = backupSelection;
+        m_primarySelectedPointIndex = backupPrimary;
         QMessageBox::warning(nullptr, "Edit Points",
                              QStringLiteral("Failed to save point: %1").arg(errorMsg));
         return;
     }
 
-    m_selectedPointIndex = m_collection.points().size() - 1;
+    const int newIndex = m_collection.points().size() - 1;
+    m_selectedPointIndices = QSet<int>{newIndex};
+    m_primarySelectedPointIndex = newIndex;
 
     // Rebuild items
     if (m_scene) {
@@ -335,6 +436,8 @@ void PointLayer::addPoint(double row, double col)
         rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
+    emit collectionChanged();
+    emit selectionChanged();
 }
 
 void PointLayer::onPointMoved(int index, QPointF pos)
@@ -343,14 +446,16 @@ void PointLayer::onPointMoved(int index, QPointF pos)
         return;
 
     const PointCollection backupCollection = m_collection;
-    const int backupSelection = m_selectedPointIndex;
+    const QSet<int> backupSelection = m_selectedPointIndices;
+    const int backupPrimary = m_primarySelectedPointIndex;
 
     m_collection.movePoint(index, pos.y(), pos.x());  // row=y, col=x
 
     QString errorMsg;
     if (!saveCsv(&errorMsg)) {
         m_collection = backupCollection;
-        m_selectedPointIndex = backupSelection;
+        m_selectedPointIndices = backupSelection;
+        m_primarySelectedPointIndex = backupPrimary;
         QMessageBox::warning(nullptr, "Edit Points",
                              QStringLiteral("Failed to save moved point: %1").arg(errorMsg));
     }
@@ -361,6 +466,7 @@ void PointLayer::onPointMoved(int index, QPointF pos)
         rebuildItems(m_scene);
         m_itemsBuilt = true;
     }
+    emit collectionChanged();
 }
 
 void PointLayer::onPointDeleted(int index)
@@ -370,18 +476,23 @@ void PointLayer::onPointDeleted(int index)
 
     // Backup the full state before modifying
     const PointCollection backupCollection = m_collection;
-    const int backupSelection = m_selectedPointIndex;
+    const QSet<int> backupSelection = m_selectedPointIndices;
+    const int backupPrimary = m_primarySelectedPointIndex;
 
     // Adjust selection index BEFORE removing
-    if (m_selectedPointIndex >= 0) {
-        if (index == m_selectedPointIndex) {
-            // The selected point was deleted → deselect
-            m_selectedPointIndex = -1;
-        } else if (index < m_selectedPointIndex) {
-            // A point before the selected one was removed → shift left
-            m_selectedPointIndex--;
-        }
-        // if index > m_selectedPointIndex: no adjustment needed
+    QSet<int> adjustedSelection;
+    for (int selectedIndex : std::as_const(m_selectedPointIndices)) {
+        if (selectedIndex == index)
+            continue;
+        adjustedSelection.insert(
+            selectedIndex > index ? selectedIndex - 1 : selectedIndex);
+    }
+    m_selectedPointIndices = adjustedSelection;
+    if (m_primarySelectedPointIndex == index) {
+        m_primarySelectedPointIndex = adjustedSelection.isEmpty()
+            ? -1 : *adjustedSelection.constBegin();
+    } else if (m_primarySelectedPointIndex > index) {
+        --m_primarySelectedPointIndex;
     }
 
     m_collection.removePoint(index);
@@ -390,10 +501,11 @@ void PointLayer::onPointDeleted(int index)
     if (!saveCsv(&errorMsg)) {
         // Rollback: restore both collection and selection
         m_collection = backupCollection;
-        m_selectedPointIndex = backupSelection;
+        m_selectedPointIndices = backupSelection;
+        m_primarySelectedPointIndex = backupPrimary;
         QMessageBox::warning(nullptr, "Edit Points",
                              QStringLiteral("Failed to save deletion: %1").arg(errorMsg));
-        emit selectedPointChanged(m_selectedPointIndex);
+        emit selectionChanged();
         return;
     }
 
@@ -404,6 +516,6 @@ void PointLayer::onPointDeleted(int index)
         m_itemsBuilt = true;
     }
 
-    // Notify with the adjusted index
-    emit selectedPointChanged(m_selectedPointIndex);
+    emit collectionChanged();
+    emit selectionChanged();
 }
