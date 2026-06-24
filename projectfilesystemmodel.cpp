@@ -50,6 +50,14 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (role == Qt::ForegroundRole && reserved)
         return QBrush(QColor(35, 105, 190));
 
+    if (role == Qt::ToolTipRole
+        && reserved
+        && info.fileName().compare(
+            ".rcaiman", Qt::CaseInsensitive) == 0) {
+        return QStringLiteral(
+            ".rcaiman stores the application's session state.");
+    }
+
     if (role != Qt::DisplayRole)
         return QFileSystemModel::data(index, role);
 

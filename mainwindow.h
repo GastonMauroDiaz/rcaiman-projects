@@ -13,12 +13,14 @@
 #include <QHash>
 
 class QCloseEvent;
+class QEvent;
 class ProjectFileSystemModel;
 class ImageViewer;
 class LayerManager;
 class LayersDock;
 class QTableWidget;
 class QSplitter;
+class QToolButton;
 class PointLayer;
 class PointAttributeTableWindow;
 class PreviewDock;
@@ -77,6 +79,7 @@ private:
     QString projectRelativePath(const QString &absolutePath) const;
     QString projectAbsolutePath(const QString &relativePath) const;
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void updateProjectExplorer();
@@ -88,8 +91,11 @@ private:
     void clearPropertiesTable();
     void configureDockSizing();
     void configureViewer(ImageViewer *viewer);
+    void createProjectFolder();
     void openAttributeTable(PointLayer *layer);
     ImageViewer *viewerForLayer(PointLayer *layer) const;
+    bool copyDroppedFiles(const QList<QUrl> &urls,
+                          const QString &destinationDirectory);
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
@@ -97,6 +103,7 @@ private:
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
     PreviewDock *m_previewDock = nullptr;
+    QToolButton *m_newFolderButton = nullptr;
     QStringList m_recentProjects;
     PointLayer *m_currentPointLayer = nullptr;
     QMetaObject::Connection m_pointLayerConnection;

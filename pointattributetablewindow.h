@@ -22,6 +22,7 @@ public:
 
 private:
     void syncSelectionFromLayer();
+    void scheduleTableSelectionSync();
     void applyTableSelectionToLayer();
     void updateCounter();
     void zoomToSelection();
@@ -33,6 +34,7 @@ private:
     QTableView *m_table = nullptr;
     QLabel *m_counter = nullptr;
     bool m_syncingSelection = false;
+    bool m_selectionSyncPending = false;
 };
 
 #endif // POINTATTRIBUTETABLEWINDOW_H

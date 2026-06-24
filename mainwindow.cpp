@@ -18,8 +18,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -32,6 +36,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
+#include <QProcess>
 #include <QSizePolicy>
 #include <QSettings>
 #include <QSaveFile>
@@ -40,6 +45,7 @@
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -84,15 +90,34 @@ ImageLayerStyle imageStyleFromJson(const QJsonObject &object,
     return style;
 }
 
-QString normalizedSessionPath(const QString &path)
+QJsonObject pointStyleToJson(const PointLayerStyle &style)
 {
-    QString normalized = QDir::cleanPath(
-        QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
-#ifdef Q_OS_WIN
-    normalized = normalized.toCaseFolded();
-#endif
-    return normalized;
+    QJsonObject object;
+    object["color"] = style.color.name(QColor::HexArgb);
+    object["size"] = style.size;
+    object["symbol"] = static_cast<int>(style.symbol);
+    object["label_field"] = style.labelField;
+    object["label_size"] = style.labelSize;
+    return object;
 }
+
+PointLayerStyle pointStyleFromJson(const QJsonObject &object,
+                                   const PointLayerStyle &fallback)
+{
+    PointLayerStyle style = fallback;
+    const QColor color(object.value("color").toString());
+    if (color.isValid())
+        style.color = color;
+    style.size = object.value("size").toDouble(style.size);
+    style.symbol = static_cast<PointSymbol>(
+        object.value("symbol").toInt(static_cast<int>(style.symbol)));
+    style.labelField =
+        object.value("label_field").toString(style.labelField);
+    style.labelSize =
+        object.value("label_size").toDouble(style.labelSize);
+    return style;
+}
+
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -108,12 +133,27 @@ MainWindow::MainWindow(QWidget *parent)
         m_projectFileSystemModel->setRootPath(QString());
     ui->projectTree->setRootIndex(fileSystemRoot);
     ui->projectTree->setDragEnabled(true);
+    ui->projectTree->setAcceptDrops(true);
+    ui->projectTree->viewport()->setAcceptDrops(true);
+    ui->projectTree->viewport()->installEventFilter(this);
+    ui->projectTree->setDropIndicatorShown(true);
     setAcceptDrops(true);
     ui->projectTree->setHeaderHidden(true);
     ui->projectTree->hideColumn(1);
     ui->projectTree->hideColumn(2);
     ui->projectTree->hideColumn(3);
     ui->projectTree->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    m_newFolderButton = new QToolButton(this);
+    m_newFolderButton->setText("New folder");
+    m_newFolderButton->setIcon(
+        style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+    m_newFolderButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_newFolderButton->setAutoRaise(true);
+    m_newFolderButton->setEnabled(false);
+    ui->dockProjectExplorerLayout->insertWidget(0, m_newFolderButton);
+    connect(m_newFolderButton, &QToolButton::clicked,
+            this, &MainWindow::createProjectFolder);
 
     connect(m_projectFileSystemModel, &QAbstractItemModel::rowsInserted,
             this, [this]() { updateProjectActions(); });
@@ -256,7 +296,7 @@ MainWindow::MainWindow(QWidget *parent)
     if (m_layersDock) {
         connect(m_layersDock, &LayersDock::activeLayerChanged,
                 this, &MainWindow::onLayerSelectionChanged);
-        connect(m_layersDock, &LayersDock::pointLayerDoubleClicked,
+        connect(m_layersDock, &LayersDock::pointAttributeTableRequested,
                 this, &MainWindow::openAttributeTable);
     }
 
@@ -714,22 +754,30 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         return;
 
     const QFileInfo info(m_projectFileSystemModel->filePath(index));
-    if (!info.isDir())
-        return;
-
     ui->projectTree->setCurrentIndex(index);
 
     QMenu menu(this);
-    QAction *registerAction = menu.addAction("Register collection...");
-    QAction *styleAction = menu.addAction("Edit collection style...");
+    QAction *openDefaultAction =
+        menu.addAction("Open with default app");
+    openDefaultAction->setEnabled(info.isFile());
+    QAction *showInFolderAction =
+        menu.addAction("Show in folder");
+    menu.addSeparator();
+    QAction *deleteAction = menu.addAction("Delete");
 
-    const bool isProjectRoot =
-        QDir::cleanPath(info.absoluteFilePath())
-        == QDir::cleanPath(m_project.rootPath());
+    QAction *registerAction = nullptr;
+    QAction *styleAction = nullptr;
+    if (info.isDir()) {
+        menu.addSeparator();
+        registerAction = menu.addAction("Register collection...");
+        styleAction = menu.addAction("Edit collection style...");
+    }
+
     const bool isReserved =
         Project::reservedDirectories().contains(
             info.fileName(), Qt::CaseInsensitive);
-    registerAction->setEnabled(!isProjectRoot && !isReserved);
+    if (registerAction)
+        registerAction->setEnabled(!isReserved);
 
     Collection selectedCollection;
     bool hasRegisteredCollection = false;
@@ -743,23 +791,249 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             break;
         }
     }
-    const bool supportsStyle = hasRegisteredCollection
+    const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
-    styleAction->setEnabled(supportsStyle);
+    if (styleAction)
+        styleAction->setEnabled(supportsStyle);
 
-    connect(registerAction, &QAction::triggered,
-            this, &MainWindow::registerCollection);
-    connect(styleAction, &QAction::triggered,
-            this, [this, selectedCollection, supportsStyle]() {
-                if (!supportsStyle)
-                    return;
-                CollectionStyleDialog dialog(selectedCollection, this);
-                if (dialog.exec() == QDialog::Accepted)
-                    m_projectFileSystemModel->refreshDirectory(
-                        selectedCollection.dirPath);
-            });
+    connect(openDefaultAction, &QAction::triggered, this, [this, info]() {
+        if (!QDesktopServices::openUrl(
+                QUrl::fromLocalFile(info.absoluteFilePath()))) {
+            QMessageBox::warning(
+                this, "Open with default app",
+                "The selected file could not be opened.");
+        }
+    });
+    connect(showInFolderAction, &QAction::triggered, this, [this, info]() {
+#ifdef Q_OS_WIN
+        const QString path = QDir::toNativeSeparators(
+            info.absoluteFilePath());
+        const QStringList arguments = info.isDir()
+            ? QStringList{path}
+            : QStringList{QStringLiteral("/select,%1").arg(path)};
+        if (!QProcess::startDetached(
+                QStringLiteral("explorer.exe"), arguments)) {
+            QMessageBox::warning(
+                this, "Show in folder",
+                "The selected location could not be opened.");
+        }
+#else
+        const QString folderPath = info.isDir()
+            ? info.absoluteFilePath()
+            : info.absoluteDir().absolutePath();
+        if (!QDesktopServices::openUrl(
+                QUrl::fromLocalFile(folderPath))) {
+            QMessageBox::warning(
+                this, "Show in folder",
+                "The selected location could not be opened.");
+        }
+#endif
+    });
+    connect(deleteAction, &QAction::triggered, this, [this, info]() {
+        const QString kind = info.isDir() ? "folder" : "file";
+        const auto answer = QMessageBox::warning(
+            this, "Delete",
+            QStringLiteral("Delete the %1 \"%2\"%3?")
+                .arg(kind, info.fileName(),
+                     info.isDir() ? " and all its contents" : ""),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+
+        const QString parentPath = info.absoluteDir().absolutePath();
+        const bool removed = info.isDir()
+            ? QDir(info.absoluteFilePath()).removeRecursively()
+            : QFile::remove(info.absoluteFilePath());
+        if (!removed) {
+            QMessageBox::warning(
+                this, "Delete", "The selected item could not be deleted.");
+            return;
+        }
+        if (m_previewDock)
+            m_previewDock->clear();
+        m_projectFileSystemModel->refreshDirectory(parentPath);
+        updateProjectActions();
+    });
+
+    if (registerAction) {
+        connect(registerAction, &QAction::triggered,
+                this, &MainWindow::registerCollection);
+    }
+    if (styleAction) {
+        connect(styleAction, &QAction::triggered,
+                this, [this, selectedCollection, supportsStyle]() {
+                    if (!supportsStyle)
+                        return;
+                    CollectionStyleDialog dialog(selectedCollection, this);
+                    if (dialog.exec() == QDialog::Accepted)
+                        m_projectFileSystemModel->refreshDirectory(
+                            selectedCollection.dirPath);
+                });
+    }
 
     menu.exec(ui->projectTree->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::createProjectFolder()
+{
+    if (!m_project.isValid())
+        return;
+
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, "New folder", "Folder name:",
+        QLineEdit::Normal, QString(), &accepted).trimmed();
+    if (!accepted || name.isEmpty())
+        return;
+    if (name == "." || name == ".."
+        || name.contains('/') || name.contains('\\')) {
+        QMessageBox::warning(
+            this, "New folder", "Enter a simple folder name.");
+        return;
+    }
+
+    QDir root(m_project.rootPath());
+    if (QFileInfo::exists(root.filePath(name))) {
+        QMessageBox::warning(
+            this, "New folder",
+            "A file or folder with that name already exists.");
+        return;
+    }
+    if (!root.mkdir(name)) {
+        QMessageBox::warning(
+            this, "New folder", "The folder could not be created.");
+        return;
+    }
+
+    m_projectFileSystemModel->refreshDirectory(m_project.rootPath());
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != ui->projectTree->viewport()
+        || !m_project.isValid()) {
+        return QMainWindow::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::DragEnter
+        || event->type() == QEvent::DragMove) {
+        auto *dragEvent = static_cast<QDragMoveEvent*>(event);
+        if (dragEvent->mimeData()->hasUrls()) {
+            bool hasLocalFile = false;
+            for (const QUrl &url : dragEvent->mimeData()->urls()) {
+                const QFileInfo info(url.toLocalFile());
+                if (info.isFile()) {
+                    hasLocalFile = true;
+                    break;
+                }
+            }
+            if (hasLocalFile) {
+                dragEvent->setDropAction(Qt::CopyAction);
+                dragEvent->accept();
+                return true;
+            }
+        }
+    } else if (event->type() == QEvent::Drop) {
+        auto *dropEvent = static_cast<QDropEvent*>(event);
+        const QModelIndex index =
+            ui->projectTree->indexAt(dropEvent->position().toPoint());
+        if (!index.isValid()) {
+            dropEvent->ignore();
+            return true;
+        }
+
+        QFileInfo destination(
+            m_projectFileSystemModel->filePath(index));
+        const QString destinationDirectory = destination.isDir()
+            ? destination.absoluteFilePath()
+            : destination.absoluteDir().absolutePath();
+        if (copyDroppedFiles(
+                dropEvent->mimeData()->urls(), destinationDirectory)) {
+            dropEvent->setDropAction(Qt::CopyAction);
+            dropEvent->accept();
+        } else {
+            dropEvent->ignore();
+        }
+        return true;
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+bool MainWindow::copyDroppedFiles(
+    const QList<QUrl> &urls,
+    const QString &destinationDirectory)
+{
+    QDir destination(destinationDirectory);
+    if (!destination.exists())
+        return false;
+
+    int copied = 0;
+    for (const QUrl &url : urls) {
+        const QFileInfo source(url.toLocalFile());
+        if (!source.isFile())
+            continue;
+
+        const QString targetPath =
+            destination.filePath(source.fileName());
+        if (QFileInfo(targetPath).absoluteFilePath()
+            == source.absoluteFilePath()) {
+            continue;
+        }
+
+        if (QFileInfo::exists(targetPath)) {
+            const auto answer = QMessageBox::question(
+                this, "Replace file",
+                QStringLiteral("\"%1\" already exists. Replace it?")
+                    .arg(source.fileName()),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);
+            if (answer != QMessageBox::Yes)
+                continue;
+        }
+
+        QFile input(source.absoluteFilePath());
+        QSaveFile output(targetPath);
+        if (!input.open(QIODevice::ReadOnly)
+            || !output.open(QIODevice::WriteOnly)) {
+            QMessageBox::warning(
+                this, "Add files",
+                QStringLiteral("Could not copy \"%1\".")
+                    .arg(source.fileName()));
+            continue;
+        }
+
+        bool ok = true;
+        while (!input.atEnd()) {
+            const QByteArray chunk = input.read(1024 * 1024);
+            if (chunk.isEmpty() && input.error() != QFile::NoError) {
+                ok = false;
+                break;
+            }
+            if (output.write(chunk) != chunk.size()) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok || !output.commit()) {
+            output.cancelWriting();
+            QMessageBox::warning(
+                this, "Add files",
+                QStringLiteral("Could not copy \"%1\".")
+                    .arg(source.fileName()));
+            continue;
+        }
+        ++copied;
+    }
+
+    if (copied > 0) {
+        m_projectFileSystemModel->refreshDirectory(destinationDirectory);
+        updateProjectActions();
+        statusBar()->showMessage(
+            QStringLiteral("%1 file(s) added").arg(copied), 4000);
+    }
+    return copied > 0;
 }
 
 void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
@@ -905,8 +1179,8 @@ void MainWindow::onPointSelectionChanged()
         const PointRecord &rec = col.points()[index];
         int row = sectionARows;
 
-        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Index"));
-        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(index)));
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("ID"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(index + 1)));
         ++row;
 
         ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Row"));
@@ -1429,10 +1703,17 @@ void MainWindow::saveProjectSession()
 
                 QJsonObject layerObject;
                 layerObject["source"] = layerSource;
+                layerObject["name"] = layer->name();
                 layerObject["visible"] = layer->isVisible();
                 if (auto *imageLayer = qobject_cast<ImageLayer*>(layer)) {
+                    layerObject["type"] = "image";
                     layerObject["image_style"] =
                         imageStyleToJson(imageLayer->style());
+                } else if (auto *pointLayer =
+                               qobject_cast<PointLayer*>(layer)) {
+                    layerObject["type"] = "points";
+                    layerObject["point_style"] =
+                        pointStyleToJson(pointLayer->style());
                 }
                 layers.append(layerObject);
             }
@@ -1459,7 +1740,7 @@ void MainWindow::saveProjectSession()
     }
 
     QJsonObject session;
-    session["schema_version"] = 1;
+    session["schema_version"] = 2;
     session["current_tab"] = ui->workspaceTabs->currentIndex();
     session["sync_split_views"] = ImageViewer::syncEnabled();
     session["tabs"] = tabs;
@@ -1495,7 +1776,9 @@ void MainWindow::restoreProjectSession()
     }
 
     const QJsonObject session = document.object();
-    if (session.value("schema_version").toInt() != 1)
+    const int schemaVersion =
+        session.value("schema_version").toInt();
+    if (schemaVersion < 1 || schemaVersion > 2)
         return;
 
     const QJsonArray tabs = session.value("tabs").toArray();
@@ -1518,50 +1801,86 @@ void MainWindow::restoreProjectSession()
                 continue;
 
             auto *viewer = new ImageViewer(this);
-            if (!loadImageIntoViewer(viewer, absolutePath, false)) {
-                delete viewer;
-                continue;
-            }
-
             const QJsonArray savedLayers =
                 panelObject.value("layers").toArray();
-            QMap<QString, QJsonObject> savedLayerState;
-            for (const QJsonValue &layerValue : savedLayers) {
-                const QJsonObject layerObject = layerValue.toObject();
+            LayerManager *manager = viewer->layerManager();
+            int loadedImageCount = 0;
+
+            // LayerManager inserts at the top. Restoring in reverse preserves
+            // the exact top-to-bottom order recorded in the session.
+            for (int layerIndex = savedLayers.size() - 1;
+                 layerIndex >= 0;
+                 --layerIndex) {
+                const QJsonObject layerObject =
+                    savedLayers.at(layerIndex).toObject();
                 const QString sourcePath = projectAbsolutePath(
                     layerObject.value("source").toString());
-                if (!sourcePath.isEmpty()) {
-                    savedLayerState.insert(
-                        normalizedSessionPath(sourcePath), layerObject);
+                if (!QFileInfo::exists(sourcePath))
+                    continue;
+
+                QString type = layerObject.value("type").toString();
+                if (type.isEmpty()) {
+                    type = QFileInfo(sourcePath).suffix().compare(
+                               "csv", Qt::CaseInsensitive) == 0
+                        ? QStringLiteral("points")
+                        : QStringLiteral("image");
                 }
-            }
 
-            LayerManager *manager = viewer->layerManager();
-            for (int layerIndex = 0;
-                 manager && layerIndex < manager->layerCount();
-                 ++layerIndex) {
-                Layer *layer = manager->layerAt(layerIndex);
-                if (!layer)
-                    continue;
-
-                const auto stateIt = savedLayerState.constFind(
-                    normalizedSessionPath(layer->sourcePath()));
-                if (stateIt == savedLayerState.cend())
-                    continue;
-
-                const QJsonObject layerObject = stateIt.value();
-                layer->setVisible(
-                    layerObject.value("visible").toBool(layer->isVisible()));
-                if (auto *imageLayer = qobject_cast<ImageLayer*>(layer)) {
+                Layer *layer = nullptr;
+                if (type == QStringLiteral("points")) {
+                    auto *pointLayer =
+                        new PointLayer(sourcePath, viewer->scene());
+                    if (!pointLayer->collection().isValid()) {
+                        delete pointLayer;
+                        continue;
+                    }
+                    const QJsonObject styleObject =
+                        layerObject.value("point_style").toObject();
+                    if (!styleObject.isEmpty()) {
+                        pointLayer->setStyle(pointStyleFromJson(
+                            styleObject, pointLayer->style()));
+                    }
+                    layer = pointLayer;
+                } else {
+                    auto *imageLayer = new ImageLayer(sourcePath);
+                    if (imageLayer->rasterData().isNull()) {
+                        delete imageLayer;
+                        continue;
+                    }
                     const QJsonObject styleObject =
                         layerObject.value("image_style").toObject();
                     if (!styleObject.isEmpty()) {
                         imageLayer->setStyle(imageStyleFromJson(
                             styleObject, imageLayer->style()));
                     }
+                    layer = imageLayer;
+                    ++loadedImageCount;
                 }
+
+                const QString savedName =
+                    layerObject.value("name").toString();
+                if (!savedName.isEmpty())
+                    layer->rename(savedName);
+                layer->setVisible(
+                    layerObject.value("visible").toBool(layer->isVisible()));
+                manager->addLayer(layer);
             }
 
+            // Very early session files may not contain a layer inventory.
+            // Keep their previous behavior without involving autoload for
+            // sessions that do contain explicit layers.
+            if (savedLayers.isEmpty()
+                && loadImageIntoViewer(viewer, absolutePath, false)) {
+                loadedImageCount = 1;
+            }
+
+            if (loadedImageCount == 0) {
+                delete viewer;
+                continue;
+            }
+
+            viewer->fitLoadedImage();
+            viewer->setPrimarySourcePath(absolutePath);
             configureViewer(viewer);
             splitter->addWidget(viewer);
 
@@ -1678,6 +1997,8 @@ void MainWindow::updateProjectActions()
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
+    if (m_newFolderButton)
+        m_newFolderButton->setEnabled(hasProject);
 
     bool hasRawFiles = false;
     if (hasProject) {

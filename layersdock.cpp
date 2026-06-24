@@ -19,6 +19,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
+#include <QStyle>
 #include <QUrl>
 
 LayersDock::LayersDock(QWidget *parent)
@@ -39,14 +40,41 @@ LayersDock::LayersDock(QWidget *parent)
     auto *btnLayout = new QHBoxLayout();
     auto *addLayerBtn = new QPushButton("Add Image...", this);
     auto *addPointsBtn = new QPushButton("Add Points...", this);
+    auto *removeBtn = new QPushButton("Remove", this);
+    removeBtn->setStyleSheet(
+        "QPushButton {"
+        "  background-color: #b94a48;"
+        "  color: white;"
+        "  border: 1px solid #983b39;"
+        "  padding: 3px 8px;"
+        "}"
+        "QPushButton:hover { background-color: #c95754; }"
+        "QPushButton:pressed { background-color: #983b39; }"
+        "QPushButton:disabled {"
+        "  background-color: #d8b2b1;"
+        "  color: #f4e8e8;"
+        "  border-color: #c99a99;"
+        "}");
     btnLayout->addWidget(addLayerBtn);
     btnLayout->addWidget(addPointsBtn);
+    btnLayout->addWidget(removeBtn);
     mainLayout->addLayout(btnLayout);
 
     auto *orderLayout = new QHBoxLayout();
-    auto *removeBtn = new QPushButton("Remove", this);
-    auto *upBtn = new QPushButton("Up", this);
-    auto *downBtn = new QPushButton("Down", this);
+    auto *upBtn = new QPushButton(this);
+    upBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    upBtn->setToolTip("Move layer up");
+    auto *downBtn = new QPushButton(this);
+    downBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
+    downBtn->setToolTip("Move layer down");
+    upBtn->setFixedWidth(30);
+    downBtn->setFixedWidth(30);
+
+    m_openTableBtn = new QPushButton("Open table", this);
+    m_openTableBtn->setEnabled(false);
+    m_openTableBtn->setToolTip(
+        "Open the attribute table for the selected point layer.\n"
+        "You can also double-click the layer.");
 
     // Flicker controls
     m_flickerBtn = new QPushButton("Flicker", this);
@@ -60,9 +88,9 @@ LayersDock::LayersDock(QWidget *parent)
     m_flickerSpeed->setSuffix(" s");
     m_flickerSpeed->setEnabled(false);
 
-    orderLayout->addWidget(removeBtn);
     orderLayout->addWidget(upBtn);
     orderLayout->addWidget(downBtn);
+    orderLayout->addWidget(m_openTableBtn);
     orderLayout->addWidget(m_flickerBtn);
     orderLayout->addWidget(m_flickerSpeed);
     mainLayout->addLayout(orderLayout);
@@ -96,6 +124,14 @@ LayersDock::LayersDock(QWidget *parent)
     connect(removeBtn, &QPushButton::clicked, this, &LayersDock::removeLayer);
     connect(upBtn, &QPushButton::clicked, this, &LayersDock::moveUp);
     connect(downBtn, &QPushButton::clicked, this, &LayersDock::moveDown);
+    connect(m_openTableBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_manager)
+            return;
+        auto *pointLayer = qobject_cast<PointLayer*>(
+            m_manager->layerAt(m_listWidget->currentRow()));
+        if (pointLayer)
+            emit pointAttributeTableRequested(pointLayer);
+    });
 
     connect(m_listWidget, &QListWidget::currentRowChanged,
             this, &LayersDock::updateActiveLayerFromUi);
@@ -110,7 +146,7 @@ LayersDock::LayersDock(QWidget *parent)
                 const int row = m_listWidget->row(item);
                 if (auto *pointLayer =
                         qobject_cast<PointLayer*>(m_manager->layerAt(row))) {
-                    emit pointLayerDoubleClicked(pointLayer);
+                    emit pointAttributeTableRequested(pointLayer);
                 }
             });
 
@@ -159,6 +195,7 @@ void LayersDock::updateList()
     {
         m_updatingList = false;
         m_listWidget->blockSignals(false);
+        m_openTableBtn->setEnabled(false);
         if (m_propertiesWidget)
             m_propertiesWidget->setLayer(nullptr);
         return;
@@ -345,6 +382,7 @@ void LayersDock::onCurrentRowChanged(int row)
     }
 
     if (!m_manager || row < 0 || row >= m_manager->layerCount()) {
+        m_openTableBtn->setEnabled(false);
         m_flickerBtn->setEnabled(false);
         m_flickerSpeed->setEnabled(false);
         m_flickerBtn->setChecked(false);
@@ -354,6 +392,7 @@ void LayersDock::onCurrentRowChanged(int row)
     }
 
     Layer *layer = m_manager->layerAt(row);
+    m_openTableBtn->setEnabled(qobject_cast<PointLayer*>(layer) != nullptr);
     m_trackedLayer = layer;
     if (m_propertiesWidget)
         m_propertiesWidget->setLayer(layer);

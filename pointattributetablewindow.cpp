@@ -6,10 +6,10 @@
 #include <QAbstractItemView>
 #include <QHeaderView>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QTableView>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 
@@ -29,12 +29,10 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
     auto *layout = new QVBoxLayout(this);
     auto *toolbar = new QHBoxLayout();
-    auto *filter = new QLineEdit(this);
-    filter->setPlaceholderText("Filter all columns");
     auto *zoomButton = new QPushButton("Zoom", this);
     auto *clearButton = new QPushButton("Clear selection", this);
     m_counter = new QLabel(this);
-    toolbar->addWidget(filter, 1);
+    toolbar->addStretch(1);
     toolbar->addWidget(zoomButton);
     toolbar->addWidget(clearButton);
     toolbar->addWidget(m_counter);
@@ -43,8 +41,6 @@ PointAttributeTableWindow::PointAttributeTableWindow(
     m_model = new PointAttributeTableModel(layer, this);
     m_proxy = new QSortFilterProxyModel(this);
     m_proxy->setSourceModel(m_model);
-    m_proxy->setFilterKeyColumn(-1);
-    m_proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
     m_proxy->setSortRole(Qt::UserRole);
     m_proxy->setDynamicSortFilter(true);
 
@@ -55,16 +51,9 @@ PointAttributeTableWindow::PointAttributeTableWindow(
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSortingEnabled(true);
     m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->verticalHeader()->setDefaultSectionSize(22);
+    m_table->verticalHeader()->hide();
     layout->addWidget(m_table);
 
-    connect(filter, &QLineEdit::textChanged, this,
-            [this](const QString &text) {
-                m_syncingSelection = true;
-                m_proxy->setFilterFixedString(text);
-                m_syncingSelection = false;
-                syncSelectionFromLayer();
-            });
     connect(zoomButton, &QPushButton::clicked,
             this, &PointAttributeTableWindow::zoomToSelection);
     connect(clearButton, &QPushButton::clicked, this, [this]() {
@@ -73,10 +62,7 @@ PointAttributeTableWindow::PointAttributeTableWindow(
     });
     connect(m_table->selectionModel(),
             &QItemSelectionModel::selectionChanged,
-            this, [this]() { applyTableSelectionToLayer(); });
-    connect(m_table->selectionModel(),
-            &QItemSelectionModel::currentChanged,
-            this, [this]() { applyTableSelectionToLayer(); });
+            this, [this]() { scheduleTableSelectionSync(); });
 
     if (m_layer) {
         connect(m_layer, &PointLayer::selectionChanged,
@@ -98,7 +84,7 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
 void PointAttributeTableWindow::syncSelectionFromLayer()
 {
-    if (!m_layer || !m_table->selectionModel())
+    if (m_syncingSelection || !m_layer || !m_table->selectionModel())
         return;
 
     m_syncingSelection = true;
@@ -125,12 +111,31 @@ void PointAttributeTableWindow::syncSelectionFromLayer()
     updateCounter();
 }
 
+void PointAttributeTableWindow::scheduleTableSelectionSync()
+{
+    if (m_syncingSelection || m_selectionSyncPending)
+        return;
+
+    m_selectionSyncPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_selectionSyncPending = false;
+        applyTableSelectionToLayer();
+    });
+}
+
 void PointAttributeTableWindow::applyTableSelectionToLayer()
 {
     if (m_syncingSelection || !m_layer)
         return;
 
     QSet<int> indices;
+    for (int sourceRow : m_layer->selectedPointIndices()) {
+        const QModelIndex proxyIndex =
+            m_proxy->mapFromSource(m_model->index(sourceRow, 0));
+        if (!proxyIndex.isValid())
+            indices.insert(sourceRow);
+    }
+
     const QModelIndexList rows =
         m_table->selectionModel()->selectedRows(0);
     for (const QModelIndex &proxyIndex : rows) {
@@ -144,7 +149,10 @@ void PointAttributeTableWindow::applyTableSelectionToLayer()
     const QModelIndex current = m_table->currentIndex();
     if (current.isValid())
         primary = m_proxy->mapToSource(current).row();
+
+    m_syncingSelection = true;
     m_layer->setSelectedPointIndices(indices, primary);
+    m_syncingSelection = false;
     updateCounter();
 }
 

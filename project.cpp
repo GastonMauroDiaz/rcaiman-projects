@@ -582,7 +582,7 @@ QString Project::metadataFilePath(const QString &rootPath)
 
 QStringList Project::reservedDirectories()
 {
-    return {"raw_files", "sensor_data", "scripts"};
+    return {"raw_files", "sensor_data", "scripts", ".rcaiman"};
 }
 
 QStringList Project::projectSubdirectories()

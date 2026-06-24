@@ -175,7 +175,7 @@ QString PointLayer::labelTextForPoint(int index) const
     }
 
     if (m_style.labelField == QStringLiteral("__id__"))
-        return QString::number(index);
+        return QString::number(index + 1);
 
     const QStringList columns = m_collection.columnNames();
     const int csvColumn = columns.indexOf(m_style.labelField);

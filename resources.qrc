@@ -4,5 +4,8 @@
         <file alias="select-point.png">assets/icons/select-point.png</file>
         <file alias="edit-points-target.png">assets/icons/edit-points-target.png</file>
         <file alias="edit-points-target-cursor.png">assets/icons/edit-points-target_cursor.png</file>
+        <file alias="edit-points-target-cancel.png">assets/icons/edit-points-target-cancel.png</file>
+        <file alias="split.png">assets/icons/split.png</file>
+        <file alias="sync.png">assets/icons/sync.png</file>
     </qresource>
 </RCC>

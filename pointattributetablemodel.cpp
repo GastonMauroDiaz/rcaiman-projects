@@ -35,7 +35,7 @@ QVariant PointAttributeTableModel::data(const QModelIndex &index,
         m_layer->collection().points().at(index.row());
     QVariant value;
     if (index.column() == 0) {
-        value = index.row();
+        value = index.row() + 1;
     } else if (index.column() == 1) {
         value = record.row;
     } else if (index.column() == 2) {

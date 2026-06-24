@@ -28,7 +28,7 @@ public:
 
 signals:
     void activeLayerChanged(int index);
-    void pointLayerDoubleClicked(PointLayer *layer);
+    void pointAttributeTableRequested(PointLayer *layer);
 
 private slots:
     void updateList();
@@ -52,6 +52,7 @@ private:
 
     LayerManager *m_manager = nullptr;
     QListWidget *m_listWidget = nullptr;
+    QPushButton *m_openTableBtn = nullptr;
     QPushButton *m_flickerBtn = nullptr;
     QDoubleSpinBox *m_flickerSpeed = nullptr;
     LayerPropertiesWidget *m_propertiesWidget = nullptr;

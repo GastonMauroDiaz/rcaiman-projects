@@ -86,6 +86,10 @@
    </attribute>
     <addaction name="actionPan"/>
     <addaction name="actionEditPoints"/>
+    <addaction name="actionCancelEdit"/>
+    <addaction name="separator"/>
+    <addaction name="actionSplitViewer"/>
+    <addaction name="actionSyncSplitViews"/>
    </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">
@@ -255,7 +259,7 @@
      <string>(empty)</string>
     </property>
    </action>
-   <action name="actionPan">
+  <action name="actionPan">
    <property name="checkable">
     <bool>true</bool>
    </property>
@@ -265,6 +269,10 @@
    </property>
    <property name="text">
     <string>Pan</string>
+   </property>
+   <property name="toolTip">
+    <string>Pan view
+Hold Space for temporary pan from any interaction mode.</string>
    </property>
   </action>
   <action name="actionCreatePoints">
@@ -284,23 +292,38 @@
     <string>Edit</string>
    </property>
    <property name="toolTip">
-    <string>Edit points on the active point layer</string>
+    <string>Edit the active point layer.
+Click empty space to add, drag a point to move it, and Alt+click to delete.</string>
    </property>
   </action>
   <action name="actionCancelEdit">
    <property name="enabled">
     <bool>false</bool>
    </property>
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/icons/edit-points-target-cancel.png</normaloff>:/icons/edit-points-target-cancel.png</iconset>
+   </property>
    <property name="text">
     <string>Cancel edit</string>
    </property>
+   <property name="toolTip">
+    <string>Revert the point layer to its state before editing started.</string>
+   </property>
   </action>
   <action name="actionSplitViewer">
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/icons/split.png</normaloff>:/icons/split.png</iconset>
+   </property>
    <property name="text">
     <string>Split viewer</string>
    </property>
+   <property name="iconText">
+    <string>Split</string>
+   </property>
    <property name="toolTip">
-    <string>Split the current viewer horizontally</string>
+    <string>Split the current image viewer into two panels.</string>
    </property>
   </action>
   <action name="actionSyncSplitViews">
@@ -310,11 +333,18 @@
    <property name="enabled">
     <bool>false</bool>
    </property>
+   <property name="icon">
+    <iconset resource="resources.qrc">
+     <normaloff>:/icons/sync.png</normaloff>:/icons/sync.png</iconset>
+   </property>
    <property name="text">
     <string>Sync split views</string>
    </property>
+   <property name="iconText">
+    <string>Sync</string>
+   </property>
    <property name="toolTip">
-    <string>Synchronize pan and zoom between split viewers</string>
+    <string>Synchronize pan and zoom between split viewers.</string>
    </property>
   </action>
  </widget>
