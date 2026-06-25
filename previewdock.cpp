@@ -1,7 +1,7 @@
 #include "previewdock.h"
 
 #include <QLabel>
-#include <QPlainTextEdit>
+#include <QTextBrowser>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -19,9 +19,9 @@ PreviewDock::PreviewDock(QWidget *parent)
     m_stack = new QStackedWidget(this);
 
     // Page 0: text
-    m_textEdit = new QPlainTextEdit(this);
+    m_textEdit = new QTextBrowser(this);
     m_textEdit->setReadOnly(true);
-    m_textEdit->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    m_textEdit->setOpenExternalLinks(true);
     m_stack->addWidget(m_textEdit);  // index 0
 
     // Page 1: image
@@ -43,6 +43,12 @@ void PreviewDock::showText(const QString &text)
 {
     m_stack->setCurrentIndex(0);
     m_textEdit->setPlainText(text);
+}
+
+void PreviewDock::showMarkdown(const QString &markdown)
+{
+    m_stack->setCurrentIndex(0);
+    m_textEdit->setMarkdown(markdown);
 }
 
 void PreviewDock::showImage(const QPixmap &pixmap)

@@ -1,4 +1,5 @@
 #include "project.h"
+#include "collectionvalidation.h"
 
 #include <QDate>
 #include <QDateTime>
@@ -511,6 +512,46 @@ bool Project::writeReport(QString *errorMessage) const
     stream << "- Registered collections: " << collections.size() << "\n";
     stream << "- Scripts: " << scriptCount << "\n\n";
 
+    stream << "## Registry Validation\n\n";
+    bool hasEligibleCollection = false;
+    stream << "| Collection | Registry | Status | Validated | Exact | Accepted | Rejected | Problems |\n";
+    stream << "| --- | --- | --- | --- | ---: | ---: | ---: | ---: |\n";
+    for (const Collection &collection : collections) {
+        if (!CollectionValidation::isEligible(m_rootPath, collection))
+            continue;
+        hasEligibleCollection = true;
+        QString resolvedRegistry;
+        CollectionValidation::resolveRegistry(
+            m_rootPath, collection, &resolvedRegistry);
+        const CollectionValidationReportStatus validation =
+            CollectionValidation::latestReportStatus(
+                m_rootPath, collection);
+        QString status = "Not validated";
+        if (validation.exists) {
+            if (validation.stale) {
+                status = "Stale";
+            } else if (validation.result == "passed_exact") {
+                status = "Passed exact";
+            } else if (validation.result == "passed_with_reviews") {
+                status = "Passed with reviews";
+            } else {
+                status = "Failed";
+            }
+        }
+        stream << "| `" << collection.dirName << "` | `"
+               << portableReference(m_rootPath, resolvedRegistry)
+               << "` | " << status << " | "
+               << (validation.validatedAt.isEmpty()
+                       ? "-" : validation.validatedAt)
+               << " | " << validation.exactCount
+               << " | " << validation.reviewedCount
+               << " | " << validation.rejectedCount
+               << " | " << validation.problemCount << " |\n";
+    }
+    if (!hasEligibleCollection)
+        stream << "| - | - | No eligible collections | - | 0 | 0 | 0 | 0 |\n";
+    stream << "\n";
+
     stream << "## Project Structure\n\n";
     const QDir projectRoot(m_rootPath);
     const QStringList directories = projectRoot.entryList(
@@ -779,12 +820,19 @@ QString Project::metadataFilePath(const QString &rootPath)
 
 QStringList Project::reservedDirectories()
 {
-    return {"raw_files", "sensor_data", "scripts", ".rcaiman"};
+    return {
+        "raw_files", "sensor_data", "scripts",
+        "registry_drafts", "registry_reviews",
+        "registry_validations", ".rcaiman"
+    };
 }
 
 QStringList Project::projectSubdirectories()
 {
-    return {"raw_files", "sensor_data", "image_metadata", "scripts"};
+    return {
+        "raw_files", "sensor_data", "scripts",
+        "registry_drafts", "registry_reviews", "registry_validations"
+    };
 }
 
 bool Project::createDirectoryStructure(const QString &rootPath, QString *errorMessage)

@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.19)
 project(rcaiman_projects LANGUAGES CXX)
+include(CTest)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets LinguistTools)
+
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/yaml-cpp-0.8.0)
 
 # Locate a library installed via MSYS2 / MinGW64 on Windows.
 macro(find_msys2_library TARGET_NAME HEADER_FILE LIBRARY_FILE)
@@ -74,6 +80,11 @@ qt_add_executable(rcaiman_projects
     collectionstylefile.h collectionstylefile.cpp
     collectionstyledialog.h collectionstyledialog.cpp
     cursorutils.h cursorutils.cpp
+    metadataregistry.h metadataregistry.cpp
+    metadatarulesdialog.h metadatarulesdialog.cpp
+    registryvalidationdialog.h registryvalidationdialog.cpp
+    collectionvalidation.h collectionvalidation.cpp
+    collectionvalidationdialog.h collectionvalidationdialog.cpp
     resources.qrc
 )
 
@@ -97,13 +108,81 @@ target_link_libraries(rcaiman_projects
         Qt::Widgets
         TIFF
         LibRaw
+        yaml-cpp
 )
+
+add_custom_command(TARGET rcaiman_projects POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool"
+        "$<TARGET_FILE_DIR:rcaiman_projects>/tools/exiftool"
+)
+
+if(WIN32)
+    set(MSYS2_RUNTIME_DIR "C:/msys64/mingw64/bin")
+    set(MSYS2_RUNTIME_DLL_NAMES
+        libraw_r-25.dll
+        libtiff-6.dll
+        libdeflate.dll
+        libjbig-0.dll
+        libjpeg-8.dll
+        libLerc.dll
+        liblzma-5.dll
+        libwebp-7.dll
+        zlib1.dll
+        libzstd.dll
+        libgomp-1.dll
+        liblcms2-2.dll
+    )
+    set(MSYS2_RUNTIME_DLLS)
+    foreach(DLL_NAME IN LISTS MSYS2_RUNTIME_DLL_NAMES)
+        list(APPEND MSYS2_RUNTIME_DLLS
+            "${MSYS2_RUNTIME_DIR}/${DLL_NAME}")
+        add_custom_command(TARGET rcaiman_projects POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MSYS2_RUNTIME_DIR}/${DLL_NAME}"
+                "$<TARGET_FILE_DIR:rcaiman_projects>"
+        )
+    endforeach()
+endif()
+
+if(BUILD_TESTING)
+    add_executable(metadataregistry_tests
+        metadataregistry_tests.cpp
+        metadataregistry.h metadataregistry.cpp
+        collectionvalidation.h collectionvalidation.cpp
+        project.h project.cpp
+    )
+    target_link_libraries(metadataregistry_tests PRIVATE Qt::Core yaml-cpp)
+    target_compile_definitions(metadataregistry_tests PRIVATE
+        TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
+    )
+    add_custom_command(TARGET metadataregistry_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool"
+            "$<TARGET_FILE_DIR:metadataregistry_tests>/tools/exiftool"
+    )
+    add_test(NAME metadataregistry_tests COMMAND metadataregistry_tests)
+    if(WIN32)
+        set_tests_properties(metadataregistry_tests PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin"
+        )
+    endif()
+endif()
 
 install(TARGETS rcaiman_projects
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+install(DIRECTORY tools/exiftool
+    DESTINATION ${CMAKE_INSTALL_BINDIR}/tools
+)
+if(WIN32)
+    install(FILES ${MSYS2_RUNTIME_DLLS}
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
 qt_generate_deploy_app_script(
     TARGET rcaiman_projects

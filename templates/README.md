@@ -2,45 +2,9 @@
 
 This directory follows the rcaiman project convention.
 
-The application automatically discovers images, masks, point sets, and other resources based on folder names and file names.
+The application automatically discovers images, point sets, and other resources based on folder names and file names.
 
 Additional folders and files may be created as needed. However, renaming standard folders may prevent automatic discovery of project resources.
-
-## Standard folders
-
-### raw
-
-Original camera files as acquired in the field.
-
-### unprocessed_image
-
-Images generated from RAW files without scientific preprocessing.
-
-### preprocessed_image
-
-Scientifically calibrated images ready for analysis.
-
-Each image may be accompanied by metadata describing the preprocessing workflow and registry entries used.
-
-### skymask
-
-Candidate sky pixels identified by segmentation procedures.
-
-### points
-
-Sky samples represented as directional observations.
-
-### predictedsky
-
-Predicted sky radiance models and associated outputs.
-
-### ratio
-
-Intermediate products derived from observed and predicted radiance.
-
-### results
-
-Final products and derived variables.
 
 ## Design philosophy
 

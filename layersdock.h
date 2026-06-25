@@ -42,6 +42,11 @@ private slots:
     void onFlickerSpeedChanged(double seconds);
     void onCurrentRowChanged(int row);
     void onLayerStyleChanged();
+    void onRowsMoved(const QModelIndex &sourceParent,
+                     int sourceStart,
+                     int sourceEnd,
+                     const QModelIndex &destinationParent,
+                     int destinationRow);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;

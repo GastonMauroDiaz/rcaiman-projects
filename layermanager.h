@@ -28,6 +28,7 @@ public:
     void clearAll();                // remueve todas las capas
     void moveUp(int index);
     void moveDown(int index);
+    void moveLayer(int from, int to);
     void setVisibility(int index, bool visible);
 
     // Call after scene is ready or changes

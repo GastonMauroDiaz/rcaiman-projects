@@ -47,6 +47,7 @@
       <string>Image</string>
      </property>
      <addaction name="actionOpen_Image"/>
+     <addaction name="actionValidateImageMetadata"/>
     </widget>
     <widget class="QMenu" name="menuPoint">
      <property name="title">
@@ -65,9 +66,17 @@
      <addaction name="separator"/>
      <addaction name="actionResetWindowLayout"/>
     </widget>
+    <widget class="QMenu" name="menuRegistry">
+     <property name="title">
+      <string>Registry</string>
+     </property>
+     <addaction name="actionBuildMetadataRules"/>
+     <addaction name="actionValidateCollectionMetadata"/>
+    </widget>
     <addaction name="menuProject"/>
     <addaction name="menuImage"/>
     <addaction name="menuPoint"/>
+    <addaction name="menuRegistry"/>
     <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
@@ -245,6 +254,30 @@
    </property>
    <property name="text">
     <string>Report...</string>
+   </property>
+  </action>
+  <action name="actionBuildMetadataRules">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Build metadata rules...</string>
+   </property>
+  </action>
+  <action name="actionValidateImageMetadata">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Validate...</string>
+   </property>
+  </action>
+  <action name="actionValidateCollectionMetadata">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Validate collection...</string>
    </property>
   </action>
    <action name="actionImportRaw">

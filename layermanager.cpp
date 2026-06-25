@@ -127,6 +127,18 @@ void LayerManager::moveDown(int index)
     emit layersChanged();
 }
 
+void LayerManager::moveLayer(int from, int to)
+{
+    if (from < 0 || from >= m_layers.size()
+        || to < 0 || to >= m_layers.size() || from == to) {
+        return;
+    }
+
+    m_layers.move(from, to);
+    rebuildZOrder();
+    emit layersChanged();
+}
+
 void LayerManager::setVisibility(int index, bool visible)
 {
     Layer *layer = layerAt(index);

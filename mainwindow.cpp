@@ -15,6 +15,11 @@
 #include "collectionautoload.h"
 #include "collectionstyledialog.h"
 #include "newprojectdialog.h"
+#include "metadataregistry.h"
+#include "metadatarulesdialog.h"
+#include "registryvalidationdialog.h"
+#include "collectionvalidation.h"
+#include "collectionvalidationdialog.h"
 
 #include <QAction>
 #include <QApplication>
@@ -48,6 +53,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QDateTime>
 
 namespace {
 QJsonObject imageStyleToJson(const ImageLayerStyle &style)
@@ -117,6 +123,28 @@ PointLayerStyle pointStyleFromJson(const QJsonObject &object,
     style.labelSize =
         object.value("label_size").toDouble(style.labelSize);
     return style;
+}
+
+bool pathBelongsToProject(const QString &projectRoot, const QString &path)
+{
+    const QString relative =
+        QDir::fromNativeSeparators(
+            QDir(projectRoot).relativeFilePath(
+                QFileInfo(path).absoluteFilePath()));
+    return relative != ".." && !relative.startsWith("../");
+}
+
+bool samePath(const QString &left, const QString &right)
+{
+    const QString leftPath =
+        QDir::cleanPath(QFileInfo(left).absoluteFilePath());
+    const QString rightPath =
+        QDir::cleanPath(QFileInfo(right).absoluteFilePath());
+#ifdef Q_OS_WIN
+    return leftPath.compare(rightPath, Qt::CaseInsensitive) == 0;
+#else
+    return leftPath == rightPath;
+#endif
 }
 
 }
@@ -221,6 +249,21 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::registerCollection);
+
+    connect(ui->actionBuildMetadataRules,
+            &QAction::triggered,
+            this,
+            &MainWindow::buildMetadataRules);
+
+    connect(ui->actionValidateImageMetadata,
+            &QAction::triggered,
+            this,
+            &MainWindow::validateImageMetadata);
+
+    connect(ui->actionValidateCollectionMetadata,
+            &QAction::triggered,
+            this,
+            &MainWindow::validateCollectionMetadata);
 
     connect(ui->actionCreatePoints,
             &QAction::triggered,
@@ -691,7 +734,7 @@ void MainWindow::extractRawData()
             QStringLiteral("Extracting: %1").arg(fi.fileName()), 0);
 
         QString errorMsg;
-        if (RawReader::extractSensorData(rawPath, tiffPath, m_project.rootPath(), &errorMsg))
+        if (RawReader::extractSensorData(rawPath, tiffPath, &errorMsg))
             ++successCount;
         else
             ++failCount;
@@ -825,10 +868,13 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
     QAction *registerAction = nullptr;
     QAction *styleAction = nullptr;
+    QAction *validateCollectionAction = nullptr;
     if (info.isDir()) {
         menu.addSeparator();
         registerAction = menu.addAction("Register collection...");
         styleAction = menu.addAction("Edit collection style...");
+        validateCollectionAction =
+            menu.addAction("Validate collection...");
     }
 
     const bool isReserved =
@@ -851,8 +897,37 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     }
     const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
+    const bool supportsCollectionValidation =
+        info.isDir() && hasRegisteredCollection
+        && CollectionValidation::isEligible(
+            m_project.rootPath(), selectedCollection);
     if (styleAction)
         styleAction->setEnabled(supportsStyle);
+    if (validateCollectionAction)
+        validateCollectionAction->setEnabled(
+            supportsCollectionValidation);
+
+    QAction *validateImageAction = nullptr;
+    if (info.isFile()) {
+        const QString extension = info.suffix().toLower();
+        const bool rawFile =
+            QStringList{
+                "cr2", "cr3", "nef", "arw", "dng", "raf", "orf",
+                "rw2", "pef", "srw", "raw", "dcr", "kdc"
+            }.contains(extension);
+        const Collection fileCollection =
+            collectionForPath(info.absoluteFilePath());
+        const bool preprocessedImage =
+            CollectionValidation::isEligible(
+                m_project.rootPath(), fileCollection)
+            && CollectionValidation::preprocessedImageFilters().contains(
+                "*." + info.suffix(), Qt::CaseInsensitive);
+        if (rawFile || preprocessedImage) {
+            menu.addSeparator();
+            validateImageAction =
+                menu.addAction("Validate image...");
+        }
+    }
 
     connect(openDefaultAction, &QAction::triggered, this, [this, info]() {
         if (!QDesktopServices::openUrl(
@@ -927,6 +1002,62 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     if (dialog.exec() == QDialog::Accepted)
                         m_projectFileSystemModel->refreshDirectory(
                             selectedCollection.dirPath);
+                });
+    }
+    if (validateCollectionAction) {
+        connect(validateCollectionAction, &QAction::triggered,
+                this, &MainWindow::validateCollectionMetadata);
+    }
+    if (validateImageAction) {
+        connect(validateImageAction, &QAction::triggered,
+                this, [this, info]() {
+                    const Collection collection =
+                        collectionForPath(info.absoluteFilePath());
+                    if (CollectionValidation::isEligible(
+                            m_project.rootPath(), collection)) {
+                        const QList<CollectionFileValidation> pairs =
+                            CollectionValidation::resolveRawPairs(
+                                m_project.rootPath(), collection);
+                        for (const CollectionFileValidation &pair : pairs) {
+                            if (!samePath(
+                                    pair.preprocessedPath,
+                                    info.absoluteFilePath())) {
+                                continue;
+                            }
+                            if (pair.status
+                                == CollectionFileValidationStatus::MissingRaw) {
+                                QMessageBox::warning(
+                                    this, "Validate Image",
+                                    QString(
+                                        "No RAW with basename \"%1\" was "
+                                        "found in raw_files.")
+                                        .arg(pair.baseName));
+                                return;
+                            }
+                            if (pair.status
+                                == CollectionFileValidationStatus::AmbiguousRaw) {
+                                QMessageBox::warning(
+                                    this, "Validate Image",
+                                    QString(
+                                        "More than one RAW with basename "
+                                        "\"%1\" was found:\n%2")
+                                        .arg(pair.baseName,
+                                             pair.rawCandidates.join("\n")));
+                                return;
+                            }
+                            validateRawImage(
+                                pair.rawPath,
+                                [&]() {
+                                    QString registryPath;
+                                    CollectionValidation::resolveRegistry(
+                                        m_project.rootPath(),
+                                        collection, &registryPath);
+                                    return registryPath;
+                                }());
+                            return;
+                        }
+                    }
+                    validateRawImage(info.absoluteFilePath());
                 });
     }
 
@@ -1113,10 +1244,15 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
 
     if (textExts.contains(suffix)) {
         QFile file(filePath);
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text))
-            m_previewDock->showText(QString::fromUtf8(file.readAll()));
-        else
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QString text = QString::fromUtf8(file.readAll());
+            if (suffix == "md")
+                m_previewDock->showMarkdown(text);
+            else
+                m_previewDock->showText(text);
+        } else {
             m_previewDock->clear();
+        }
     } else if (imgExts.contains(suffix)) {
         QPixmap pix(filePath);
         if (!pix.isNull())
@@ -2081,6 +2217,9 @@ void MainWindow::updateProjectActions()
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
+    ui->actionBuildMetadataRules->setEnabled(hasProject);
+    ui->actionValidateImageMetadata->setEnabled(hasProject);
+    ui->actionValidateCollectionMetadata->setEnabled(hasProject);
     if (m_newFolderButton)
         m_newFolderButton->setEnabled(hasProject);
 
@@ -2101,6 +2240,364 @@ void MainWindow::updateProjectActions()
         }
     }
     ui->actionExtractRawData->setEnabled(hasRawFiles);
+}
+
+void MainWindow::buildMetadataRules()
+{
+    if (!m_project.isValid())
+        return;
+
+    QString errorMessage;
+    if (!ExifToolService::isAvailable(&errorMessage)) {
+        QMessageBox::critical(this, "ExifTool", errorMessage);
+        return;
+    }
+
+    const QString startDirectory =
+        QDir(m_project.rootPath()).filePath("raw_files");
+    const QStringList files = QFileDialog::getOpenFileNames(
+        this,
+        "Select Calibration Images",
+        QFileInfo::exists(startDirectory)
+            ? startDirectory : m_project.rootPath(),
+        "Images (*.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 *.arw *.ARW "
+        "*.dng *.DNG *.raf *.RAF *.orf *.ORF *.rw2 *.RW2 "
+        "*.tif *.tiff *.TIF *.TIFF *.jpg *.jpeg *.JPG *.JPEG);;"
+        "All files (*)");
+    if (files.isEmpty())
+        return;
+    for (const QString &file : files) {
+        if (!pathBelongsToProject(m_project.rootPath(), file)) {
+            QMessageBox::warning(
+                this, "Portable Metadata Draft",
+                "Calibration images must be inside the current project so "
+                "the draft remains portable.");
+            return;
+        }
+    }
+
+    if (files.size() == 1
+        && QMessageBox::question(
+               this, "Single Calibration Image",
+               "Using several calibration images makes constant metadata "
+               "easier to recognize. Continue with one image?",
+               QMessageBox::Yes | QMessageBox::No,
+               QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QList<MetadataObservation> observations;
+    const bool extracted =
+        ExifToolService::extract(files, &observations, &errorMessage);
+    const QString version = extracted
+        ? ExifToolService::version(&errorMessage) : QString();
+    QApplication::restoreOverrideCursor();
+    if (!extracted || version.isEmpty()) {
+        QMessageBox::critical(this, "Metadata Extraction", errorMessage);
+        return;
+    }
+
+    MetadataRulesDialog dialog(
+        MetadataRegistry::analyze(files, observations), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString draftPath =
+        QDir(m_project.rootPath()).filePath(
+            "registry_drafts/" + dialog.draftId() + ".yaml");
+    const QString snippetPath =
+        QFileInfo(draftPath).absolutePath() + "/"
+        + QFileInfo(draftPath).completeBaseName() + "_snippet.R";
+    if ((QFileInfo::exists(draftPath) || QFileInfo::exists(snippetPath))
+        && QMessageBox::question(
+            this, "Replace Draft",
+            "A draft or R snippet with this ID already exists. "
+            "Replace both artifacts?",
+               QMessageBox::Yes | QMessageBox::No,
+               QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+    if (!MetadataRegistry::writeDraft(
+            draftPath, m_project.rootPath(), files,
+            dialog.selectedRules(), version, &errorMessage)) {
+        QMessageBox::critical(this, "Save Metadata Rules", errorMessage);
+        return;
+    }
+    updateProjectExplorer();
+    QMessageBox::information(
+        this, "Metadata Rules",
+        QString("Draft and R snippet saved to:\n%1\n%2")
+            .arg(QDir::toNativeSeparators(draftPath),
+                 QDir::toNativeSeparators(snippetPath)));
+}
+
+void MainWindow::validateImageMetadata()
+{
+    if (!m_project.isValid())
+        return;
+
+    QString errorMessage;
+    if (!ExifToolService::isAvailable(&errorMessage)) {
+        QMessageBox::critical(this, "ExifTool", errorMessage);
+        return;
+    }
+
+    QString initialPath = selectedProjectPath();
+    if (!QFileInfo(initialPath).exists())
+        initialPath = m_project.rootPath();
+    const QString imagePath = QFileDialog::getOpenFileName(
+        this, "Select Image", initialPath,
+        "Images (*.nef *.NEF *.cr2 *.CR2 *.cr3 *.CR3 *.arw *.ARW "
+        "*.dng *.DNG *.raf *.RAF *.orf *.ORF *.rw2 *.RW2 "
+        "*.tif *.tiff *.TIF *.TIFF *.jpg *.jpeg *.JPG *.JPEG);;"
+        "All files (*)");
+    if (imagePath.isEmpty())
+        return;
+    if (!pathBelongsToProject(m_project.rootPath(), imagePath)) {
+        QMessageBox::warning(
+            this, "Portable Registry Review",
+            "The image must be inside the current project.");
+        return;
+    }
+
+    const Collection collection = collectionForPath(imagePath);
+    if (CollectionValidation::isEligible(
+            m_project.rootPath(), collection)) {
+        const QList<CollectionFileValidation> pairs =
+            CollectionValidation::resolveRawPairs(
+                m_project.rootPath(), collection);
+        for (const CollectionFileValidation &pair : pairs) {
+            if (!samePath(pair.preprocessedPath, imagePath)) {
+                continue;
+            }
+            if (pair.status
+                == CollectionFileValidationStatus::MissingRaw) {
+                QMessageBox::warning(
+                    this, "Validate Image",
+                    QString(
+                        "No RAW with basename \"%1\" was found in raw_files.")
+                        .arg(pair.baseName));
+                return;
+            }
+            if (pair.status
+                == CollectionFileValidationStatus::AmbiguousRaw) {
+                QMessageBox::warning(
+                    this, "Validate Image",
+                    QString(
+                        "More than one RAW with basename \"%1\" was found:\n%2")
+                        .arg(pair.baseName,
+                             pair.rawCandidates.join("\n")));
+                return;
+            }
+            validateRawImage(
+                pair.rawPath,
+                [&]() {
+                    QString registryPath;
+                    CollectionValidation::resolveRegistry(
+                        m_project.rootPath(),
+                        collection, &registryPath);
+                    return registryPath;
+                }());
+            return;
+        }
+    }
+    validateRawImage(imagePath);
+}
+
+bool MainWindow::validateRawImage(
+    const QString &rawPath,
+    const QString &providedRegistryPath)
+{
+    QString errorMessage;
+    if (!ExifToolService::isAvailable(&errorMessage)) {
+        QMessageBox::critical(this, "ExifTool", errorMessage);
+        return false;
+    }
+    QString registryPath = providedRegistryPath;
+    if (registryPath.isEmpty()) {
+        const QString rulesStart =
+            QDir(m_project.rootPath()).filePath("registry_drafts");
+        registryPath = QFileDialog::getOpenFileName(
+            this, "Select Registry Snapshot or Rules Draft", rulesStart,
+            "YAML files (*.yaml *.yml)");
+    }
+    if (registryPath.isEmpty())
+        return false;
+    if (!pathBelongsToProject(m_project.rootPath(), registryPath)) {
+        QMessageBox::warning(
+            this, "Portable Registry Review",
+            "The snapshot or draft must be inside the current project.");
+        return false;
+    }
+
+    QList<MetadataRule> rules;
+    if (!MetadataRegistry::readRules(
+            registryPath, &rules, &errorMessage)) {
+        QMessageBox::critical(this, "Registry Rules", errorMessage);
+        return false;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QList<MetadataObservation> observations;
+    const bool extracted = ExifToolService::extract(
+        {rawPath}, &observations, &errorMessage);
+    const QString version = extracted
+        ? ExifToolService::version(&errorMessage) : QString();
+    QApplication::restoreOverrideCursor();
+    if (!extracted || version.isEmpty()) {
+        QMessageBox::critical(this, "Metadata Extraction", errorMessage);
+        return false;
+    }
+
+    RegistryValidationDialog dialog(rules, observations, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    const QString stem =
+        MetadataRegistry::snakeCase(QFileInfo(rawPath).completeBaseName());
+    const QString timestamp =
+        QDateTime::currentDateTimeUtc().toString("yyyyMMdd_HHmmss");
+    const QString reviewPath =
+        QDir(m_project.rootPath()).filePath(
+            QString("registry_reviews/%1_%2.yaml").arg(stem, timestamp));
+    if (!MetadataRegistry::writeReview(
+            reviewPath, m_project.rootPath(), rawPath, registryPath,
+            version, dialog.decisions(), dialog.acceptedDecision(),
+            &errorMessage)) {
+        QMessageBox::critical(this, "Save Registry Review", errorMessage);
+        return false;
+    }
+    updateProjectExplorer();
+    QMessageBox::information(
+        this, "Registry Review",
+        QString("%1 review saved to:\n%2")
+            .arg(dialog.acceptedDecision() ? "Accepted" : "Rejected",
+                 QDir::toNativeSeparators(reviewPath)));
+    return true;
+}
+
+void MainWindow::validateCollectionMetadata()
+{
+    if (!m_project.isValid())
+        return;
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    QVector<Collection> eligible;
+    for (const Collection &collection : collections) {
+        if (CollectionValidation::isEligible(
+                m_project.rootPath(), collection)) {
+            eligible.append(collection);
+        }
+    }
+    if (eligible.isEmpty()) {
+        QStringList diagnostics;
+        for (const Collection &collection : collections) {
+            if (collection.collectionClass
+                != "preprocessed_image_collection") {
+                continue;
+            }
+            QString registryPath;
+            QString reason;
+            CollectionValidation::resolveRegistry(
+                m_project.rootPath(), collection,
+                &registryPath, &reason);
+            diagnostics.append(
+                QString("%1: %2").arg(collection.dirName, reason));
+        }
+        QMessageBox::information(
+            this, "Validate Collection",
+            diagnostics.isEmpty()
+                ? QString(
+                    "No preprocessed image collection was found.")
+                : QString(
+                    "No preprocessed image collection has a usable registry.\n\n%1")
+                    .arg(diagnostics.join("\n")));
+        return;
+    }
+
+    Collection selected = collectionForPath(selectedProjectPath());
+    if (!CollectionValidation::isEligible(
+            m_project.rootPath(), selected)) {
+        QStringList names;
+        for (const Collection &collection : eligible)
+            names.append(collection.dirName);
+        bool accepted = false;
+        const QString name = QInputDialog::getItem(
+            this, "Validate Collection", "Collection:",
+            names, 0, false, &accepted);
+        if (!accepted)
+            return;
+        for (const Collection &collection : eligible) {
+            if (collection.dirName == name) {
+                selected = collection;
+                break;
+            }
+        }
+    }
+
+    QString errorMessage;
+    if (!ExifToolService::isAvailable(&errorMessage)) {
+        QMessageBox::critical(this, "ExifTool", errorMessage);
+        return;
+    }
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    CollectionValidationRun run;
+    const bool validated = CollectionValidation::validate(
+        m_project.rootPath(), selected, &run, &errorMessage);
+    QApplication::restoreOverrideCursor();
+    if (!validated) {
+        QMessageBox::critical(
+            this, "Validate Collection", errorMessage);
+        return;
+    }
+
+    const QString manifestPath =
+        QDir(m_project.rootPath()).filePath(
+            QString("registry_validations/%1_%2.yaml")
+                .arg(MetadataRegistry::snakeCase(selected.dirName),
+                     QDateTime::currentDateTimeUtc().toString(
+                         "yyyyMMdd_HHmmss")));
+    if (!CollectionValidation::writeManifest(
+            manifestPath, m_project.rootPath(), run, &errorMessage)) {
+        QMessageBox::critical(
+            this, "Validate Collection", errorMessage);
+        return;
+    }
+    m_projectFileSystemModel->refreshDirectory(
+        QDir(m_project.rootPath()).filePath("registry_validations"));
+
+    CollectionValidationDialog dialog(run, this);
+    connect(&dialog, &CollectionValidationDialog::reviewRequested,
+            this, [this](const QString &rawPath,
+                         const QString &registryPath) {
+                validateRawImage(rawPath, registryPath);
+            });
+    dialog.exec();
+}
+
+Collection MainWindow::collectionForPath(const QString &path) const
+{
+    if (!m_project.isValid() || path.isEmpty())
+        return {};
+    const QString absolute = QFileInfo(path).isDir()
+        ? QFileInfo(path).absoluteFilePath()
+        : QFileInfo(path).absolutePath();
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    for (const Collection &collection : collections) {
+        if (QDir::cleanPath(collection.dirPath).compare(
+                QDir::cleanPath(absolute), sensitivity) == 0) {
+            return collection;
+        }
+    }
+    return {};
 }
 
 ImageViewer *MainWindow::currentImageViewer() const
@@ -2255,35 +2752,87 @@ void MainWindow::createPointsCsv()
     }
 
     const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
-    QStringList pointCollectionDirs;
+    QVector<Collection> pointCollections;
     for (const Collection &col : collections) {
         if (col.collectionClass == "point_collection")
-            pointCollectionDirs.append(col.dirPath);
+            pointCollections.append(col);
     }
 
-    if (pointCollectionDirs.isEmpty()) {
+    if (pointCollections.isEmpty()) {
         QMessageBox::information(this, "Create points",
                                  "No point collection is registered in this project.\n"
                                  "Register a point collection first using Project > Register collection...");
         return;
     }
 
-    QString selectedDir;
-    if (pointCollectionDirs.size() == 1) {
-        selectedDir = pointCollectionDirs.first();
+    Collection selectedCollection;
+    if (pointCollections.size() == 1) {
+        selectedCollection = pointCollections.first();
     } else {
+        QStringList collectionNames;
+        for (const Collection &collection : pointCollections)
+            collectionNames.append(collection.dirName);
         bool ok = false;
         const QString choice = QInputDialog::getItem(this, "Select point collection",
-                                                     "Point collection:", pointCollectionDirs, 0, false, &ok);
+                                                     "Point collection:", collectionNames, 0, false, &ok);
         if (!ok || choice.isEmpty())
             return;
-        selectedDir = choice;
+        for (const Collection &collection : pointCollections) {
+            if (collection.dirName == choice) {
+                selectedCollection = collection;
+                break;
+            }
+        }
     }
 
-    const QString defaultName = QDir(selectedDir).dirName() + ".csv";
-    const QString savePath = QFileDialog::getSaveFileName(this, "Create points CSV",
-                                                          QDir(selectedDir).filePath(defaultName),
-                                                          "CSV files (*.csv)");
+    const QString selectedDir = selectedCollection.dirPath;
+    QSet<QString> usedBaseNames;
+    const QFileInfoList existingPointFiles = QDir(selectedDir).entryInfoList(
+        {"*.csv", "*.CSV"}, QDir::Files | QDir::NoSymLinks);
+    for (const QFileInfo &file : existingPointFiles)
+        usedBaseNames.insert(file.completeBaseName().toCaseFolded());
+
+    QStringList availableBaseNames;
+    const QString parentPath = Project::resolveReference(
+        m_project.rootPath(), selectedCollection.parent);
+    if (QDir(parentPath).exists()) {
+        const QFileInfoList parentImages = QDir(parentPath).entryInfoList(
+            {"*.tif", "*.tiff", "*.TIF", "*.TIFF",
+             "*.png", "*.PNG", "*.jpg", "*.jpeg", "*.JPG", "*.JPEG",
+             "*.bmp", "*.BMP"},
+            QDir::Files | QDir::NoSymLinks, QDir::Name);
+        for (const QFileInfo &image : parentImages) {
+            const QString baseName = image.completeBaseName();
+            if (!usedBaseNames.contains(baseName.toCaseFolded())
+                && !availableBaseNames.contains(
+                    baseName, Qt::CaseInsensitive)) {
+                availableBaseNames.append(baseName);
+            }
+        }
+    }
+
+    QString savePath;
+    if (!availableBaseNames.isEmpty()) {
+        QStringList choices = availableBaseNames;
+        choices.append("Custom name...");
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(
+            this, "Create points CSV", "Image or filename:",
+            choices, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        if (choice != "Custom name...") {
+            savePath = QDir(selectedDir).filePath(choice + ".csv");
+        }
+    }
+    if (savePath.isEmpty()) {
+        const QString defaultName =
+            QDir(selectedDir).dirName() + ".csv";
+        savePath = QFileDialog::getSaveFileName(
+            this, "Create points CSV",
+            QDir(selectedDir).filePath(defaultName),
+            "CSV files (*.csv)");
+    }
     if (savePath.isEmpty())
         return;
 

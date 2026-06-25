@@ -73,8 +73,14 @@ QString CollectionDialog::related() const
 
 QString CollectionDialog::registry() const
 {
-    if (m_registryEdit && m_registryWidget && m_registryWidget->isVisible())
-        return m_registryEdit->text();
+    if (!m_registryEdit || !m_typeCombo)
+        return {};
+
+    const QString collectionClass = m_typeCombo->currentText();
+    if (collectionClass == "preprocessed_image_collection"
+        || collectionClass == "other") {
+        return m_registryEdit->text().trimmed();
+    }
     return {};
 }
 

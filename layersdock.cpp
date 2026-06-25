@@ -14,13 +14,41 @@
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QDir>
+#include <QDragMoveEvent>
 #include <QGroupBox>
 #include <QIcon>
 #include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QStyle>
+#include <QTimer>
 #include <QUrl>
+
+namespace {
+class LayerListWidget : public QListWidget
+{
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    void dragMoveEvent(QDragMoveEvent *event) override
+    {
+        QListWidget::dragMoveEvent(event);
+        if (dropIndicatorPosition() == QAbstractItemView::OnItem)
+            event->ignore();
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        if (dropIndicatorPosition() == QAbstractItemView::OnItem) {
+            event->ignore();
+            return;
+        }
+        QListWidget::dropEvent(event);
+    }
+};
+}
 
 LayersDock::LayersDock(QWidget *parent)
     : QWidget(parent)
@@ -32,9 +60,13 @@ LayersDock::LayersDock(QWidget *parent)
     mainLayout->setContentsMargins(4, 4, 4, 4);
     mainLayout->setSpacing(4);
 
-    m_listWidget = new QListWidget(this);
+    m_listWidget = new LayerListWidget(this);
     m_listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     m_listWidget->setIconSize(QSize(18, 18));
+    m_listWidget->setDragDropMode(QAbstractItemView::InternalMove);
+    m_listWidget->setDefaultDropAction(Qt::MoveAction);
+    m_listWidget->setDragDropOverwriteMode(false);
+    m_listWidget->setDropIndicatorShown(true);
     mainLayout->addWidget(m_listWidget);
 
     auto *btnLayout = new QHBoxLayout();
@@ -149,6 +181,8 @@ LayersDock::LayersDock(QWidget *parent)
                     emit pointAttributeTableRequested(pointLayer);
                 }
             });
+    connect(m_listWidget->model(), &QAbstractItemModel::rowsMoved,
+            this, &LayersDock::onRowsMoved);
 
     connect(m_flickerBtn, &QPushButton::toggled,
             this, &LayersDock::onFlickerToggled);
@@ -205,7 +239,11 @@ void LayersDock::updateList()
         Layer *layer = m_manager->layerAt(i);
         auto *item = new QListWidgetItem(layer->name());
         item->setIcon(pointLayerIcon(layer));
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setFlags(
+            item->flags()
+            | Qt::ItemIsUserCheckable
+            | Qt::ItemIsDragEnabled
+            | Qt::ItemIsDropEnabled);
         item->setCheckState(layer->isVisible() ? Qt::Checked : Qt::Unchecked);
         item->setData(Qt::UserRole, i);
         m_listWidget->addItem(item);
@@ -369,6 +407,27 @@ void LayersDock::moveDown()
         m_manager->moveDown(currentRow);
         m_listWidget->setCurrentRow(currentRow + 1);
     }
+}
+
+void LayersDock::onRowsMoved(
+    const QModelIndex &sourceParent,
+    int sourceStart,
+    int sourceEnd,
+    const QModelIndex &destinationParent,
+    int destinationRow)
+{
+    Q_UNUSED(sourceParent);
+    Q_UNUSED(destinationParent);
+    if (m_updatingList || !m_manager || sourceStart != sourceEnd)
+        return;
+
+    const int target = destinationRow > sourceStart
+        ? destinationRow - 1 : destinationRow;
+    QPointer<LayerManager> manager = m_manager;
+    QTimer::singleShot(0, this, [manager, sourceStart, target]() {
+        if (manager)
+            manager->moveLayer(sourceStart, target);
+    });
 }
 
 // --- Flicker ---

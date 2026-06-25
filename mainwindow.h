@@ -68,6 +68,9 @@ private slots:
     void onSyncSplitViewsToggled(bool checked);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
+    void buildMetadataRules();
+    void validateImageMetadata();
+    void validateCollectionMetadata();
 
 private:
     void openImageAtPath(const QString &filePath);
@@ -99,6 +102,9 @@ private:
     ImageViewer *viewerForLayer(PointLayer *layer) const;
     bool copyDroppedFiles(const QList<QUrl> &urls,
                           const QString &destinationDirectory);
+    bool validateRawImage(const QString &rawPath,
+                          const QString &registryPath = {});
+    Collection collectionForPath(const QString &path) const;
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
