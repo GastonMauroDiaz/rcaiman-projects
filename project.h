@@ -76,6 +76,10 @@ public:
     Project saveAs(const QString &newRootPath,
                    const QString &newProjectName,
                    QString *errorMessage = nullptr) const;
+    static Project copyExistingProject(const QString &sourceRootPath,
+                                       const QString &destinationRootPath,
+                                       const QString &newProjectName,
+                                       QString *errorMessage = nullptr);
     ProjectCleanupPlan buildCleanupPlan() const;
     bool applyCleanupPlan(const ProjectCleanupPlan &plan,
                           QString *errorMessage = nullptr) const;

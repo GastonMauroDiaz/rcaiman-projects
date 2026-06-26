@@ -1,5 +1,6 @@
 #include "metadataregistry.h"
 #include "collectionvalidation.h"
+#include "acquisitionmetadata.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -298,11 +299,26 @@ int main(int argc, char *argv[])
     projectFile.close();
     QFile collectionFile(
         QDir(collectionDirectory).filePath("collection.yaml"));
+    const QString scriptsDirectory =
+        QDir(projectRoot).filePath("scripts");
+    QDir().mkpath(scriptsDirectory);
+    QFile scriptFile(QDir(scriptsDirectory).filePath(
+        "01_preprocessing_foo.R"));
+    if (!scriptFile.open(QIODevice::WriteOnly | QIODevice::Text)
+        || scriptFile.write(
+            "# Preprocess calibration images.\n"
+            "# Produces the preprocessed image collection.\n"
+            "\n"
+            "message('ok')\n") < 0) {
+        return 58;
+    }
+    scriptFile.close();
     if (!collectionFile.open(QIODevice::WriteOnly | QIODevice::Text)
         || collectionFile.write(
             "schema_version: 1\n"
             "class: preprocessed_image_collection\n"
-            "registry: registry_drafts/reviewed.yaml\n") < 0) {
+            "registry: registry_drafts/reviewed.yaml\n"
+            "script: scripts/01_preprocessing_foo.R\n") < 0) {
         return 32;
     }
     collectionFile.close();
@@ -310,9 +326,18 @@ int main(int argc, char *argv[])
     if (!project.isValid() || !project.writeReport(&error))
         return 33;
     QFile reportFile(project.reportFilePath());
-    if (!reportFile.open(QIODevice::ReadOnly)
-        || !reportFile.readAll().contains("Passed with reviews")) {
+    if (!reportFile.open(QIODevice::ReadOnly)) {
         return 34;
+    }
+    const QByteArray reportText = reportFile.readAll();
+    if (!reportText.contains("Passed with reviews")) {
+        return 34;
+    }
+    if (!reportText.contains("## Processing Story")
+        || !reportText.contains("Preprocess calibration images.")
+        || !reportText.contains("`preprocessed_images`")
+        || reportText.contains("## Collection Details")) {
+        return 59;
     }
     reportFile.close();
     QFile orphan(QDir(rawDirectory).filePath("orphan.NEF"));
@@ -356,6 +381,157 @@ int main(int argc, char *argv[])
             != CollectionFileValidationStatus::RejectedReview
         || rejectedRun.files.first().reviewPath != rejectedReview) {
         return 45;
+    }
+
+    const QList<MetadataObservation> acquisitionObservations = {
+        {"ExifIFD", "FNumber", "3.2", rawPath},
+        {"ExifIFD", "ExposureTime", "1/200", rawPath},
+        {"ExifIFD", "ExposureCompensation", "-1/3", rawPath},
+        {"Nikon", "ISO", "0", rawPath}
+    };
+    const AcquisitionMetadataValues parsedValues =
+        AcquisitionMetadata::valuesFromObservations(
+            acquisitionObservations);
+    if (!parsedValues.hasAperture
+        || qAbs(parsedValues.aperture - 3.2) > 0.000001
+        || !parsedValues.hasExposureTime
+        || qAbs(parsedValues.exposureTimeSeconds - 0.005) > 0.000001
+        || !parsedValues.hasExposureCompensation
+        || qAbs(parsedValues.exposureCompensationEv + (1.0 / 3.0)) > 0.000001
+        || parsedValues.hasIso) {
+        return 46;
+    }
+
+    const QString sidecarProject =
+        QDir(directory.path()).filePath("sidecar_project");
+    const QString sidecarSensorDirectory =
+        QDir(sidecarProject).filePath("sensor_data");
+    const QString sidecarRawDirectory =
+        QDir(sidecarProject).filePath("raw_files");
+    QDir().mkpath(sidecarSensorDirectory);
+    QDir().mkpath(sidecarRawDirectory);
+    const QString directSensor =
+        QDir(sidecarSensorDirectory).filePath("with spaces.tif");
+    QFile directSensorFile(directSensor);
+    if (!directSensorFile.open(QIODevice::WriteOnly)
+        || directSensorFile.write("image") < 0) {
+        return 47;
+    }
+    directSensorFile.close();
+    const QString directRaw =
+        QDir(sidecarRawDirectory).filePath("with spaces.NEF");
+    if (!QFile::copy(executable, directRaw))
+        return 48;
+    AcquisitionMetadataValues directValues;
+    directValues.hasAperture = true;
+    directValues.aperture = 3.2;
+    directValues.hasExposureTime = true;
+    directValues.exposureTimeSeconds = 0.005;
+    directValues.hasExposureCompensation = true;
+    directValues.exposureCompensationEv = -0.3333333333333333;
+    const QString directSidecar =
+        QDir(sidecarSensorDirectory).filePath("with spaces.tsv");
+    if (!AcquisitionMetadata::writeSidecar(
+            directSidecar, sidecarProject, directRaw, directSensor,
+            directValues, "error",
+            "tab\tquote \"value\"\nsecond line", &error)) {
+        return 49;
+    }
+    QFile directSidecarFile(directSidecar);
+    if (!directSidecarFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 50;
+    }
+    const QByteArray directText = directSidecarFile.readAll();
+    directSidecarFile.close();
+    if (!directText.startsWith(
+            "basename\traw_file\tsensor_file\taperture\t"
+            "exposure_time_seconds\tiso\texposure_compensation_ev\tmetadata_status\t"
+            "metadata_error\n")
+        || !directText.contains("raw_files/with spaces.NEF")
+        || !directText.contains("\t3.2\t0.005\t\t-0.3333333333333333\terror\t")
+        || !directText.contains("\"tab\tquote \"\"value\"\"\n"
+                                "second line\"")) {
+        return 51;
+    }
+    if (!rscript.isEmpty()) {
+        const QString expression =
+            "p<-commandArgs(trailingOnly=TRUE)[1];"
+            "a<-read.delim(p,na.strings='',check.names=FALSE);"
+            "b<-read.table(p,header=TRUE,sep='\\t',na.strings='',"
+            "check.names=FALSE);"
+            "stopifnot(nrow(a)==1,nrow(b)==1,"
+            "is.numeric(a$aperture),"
+            "abs(a$exposure_time_seconds-0.005)<1e-12,"
+            "abs(a$exposure_compensation_ev+1/3)<1e-12,"
+            "is.na(a$iso))";
+        QProcess parser;
+        parser.start(rscript, {"-e", expression, directSidecar});
+        if (!parser.waitForFinished(30000)
+            || parser.exitStatus() != QProcess::NormalExit
+            || parser.exitCode() != 0) {
+            return 52;
+        }
+    }
+
+    const QString exactSensor =
+        QDir(sidecarSensorDirectory).filePath("exact.tif");
+    const QString missingSensor =
+        QDir(sidecarSensorDirectory).filePath("missing.tif");
+    const QString ambiguousSensor =
+        QDir(sidecarSensorDirectory).filePath("ambiguous.tif");
+    for (const QString &path :
+         {exactSensor, missingSensor, ambiguousSensor}) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly)
+            || file.write("image") < 0) {
+            return 53;
+        }
+    }
+    if (!QFile::copy(
+            executable,
+            QDir(sidecarRawDirectory).filePath("EXACT.NEF"))
+        || !QFile::copy(
+            executable,
+            QDir(sidecarRawDirectory).filePath("ambiguous.NEF"))
+        || !QFile::copy(
+            executable,
+            QDir(sidecarRawDirectory).filePath("AMBIGUOUS.DNG"))) {
+        return 54;
+    }
+    const QString orphanSidecar =
+        QDir(sidecarSensorDirectory).filePath("orphan.tsv");
+    QFile orphanSidecarFile(orphanSidecar);
+    if (!orphanSidecarFile.open(QIODevice::WriteOnly)
+        || orphanSidecarFile.write("orphan") < 0) {
+        return 55;
+    }
+    orphanSidecarFile.close();
+
+    AcquisitionMetadataSummary acquisitionSummary;
+    if (!AcquisitionMetadata::regenerate(
+            sidecarProject, &acquisitionSummary, &error)
+        || acquisitionSummary.sidecarsWritten != 4
+        || acquisitionSummary.metadataErrors != 2
+        || acquisitionSummary.orphanSidecarsRemoved != 1
+        || QFileInfo::exists(orphanSidecar)) {
+        return 56;
+    }
+    QFile exactSidecar(
+        QDir(sidecarSensorDirectory).filePath("exact.tsv"));
+    QFile missingSidecar(
+        QDir(sidecarSensorDirectory).filePath("missing.tsv"));
+    QFile ambiguousSidecar(
+        QDir(sidecarSensorDirectory).filePath("ambiguous.tsv"));
+    if (!exactSidecar.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !exactSidecar.readAll().contains("\tok\t\n")
+        || !missingSidecar.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !missingSidecar.readAll().contains(
+            "\terror\tNo RAW with basename")
+        || !ambiguousSidecar.open(
+            QIODevice::ReadOnly | QIODevice::Text)
+        || !ambiguousSidecar.readAll().contains(
+            "\terror\tMultiple RAW files with basename")) {
+        return 57;
     }
     return 0;
 }

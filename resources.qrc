@@ -8,4 +8,9 @@
         <file alias="split.png">assets/icons/split.png</file>
         <file alias="sync.png">assets/icons/sync.png</file>
     </qresource>
+    <qresource prefix="/branding">
+        <file alias="rcaiman-projects-logo.png">assets/branding/rcaiman-projects-logo.png</file>
+        <file alias="rcaiman-icon.png">assets/branding/rcaiman-icon/7x/icon@7x.png</file>
+        <file alias="about.md">assets/branding/about.md</file>
+    </qresource>
 </RCC>

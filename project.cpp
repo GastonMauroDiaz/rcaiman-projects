@@ -7,9 +7,11 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
 #include <QSet>
 #include <QTextStream>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -132,6 +134,57 @@ QStringList allRelativeFiles(const QString &projectRoot,
 {
     return matchingRelativeFiles(
         projectRoot, directoryPath, {"*"}, true);
+}
+
+QString markdownEscaped(const QString &text)
+{
+    QString result = text;
+    result.replace('|', "\\|");
+    return result;
+}
+
+QString initialCommentHeader(const QString &scriptPath)
+{
+    QFile file(scriptPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+
+    QTextStream stream(&file);
+    QStringList lines;
+    bool started = false;
+    while (!stream.atEnd()) {
+        QString line = stream.readLine();
+        if (!started && line.trimmed().isEmpty())
+            continue;
+
+        const QString trimmed = line.trimmed();
+        if (!trimmed.startsWith('#'))
+            break;
+
+        started = true;
+        line = trimmed.mid(1);
+        if (line.startsWith(' '))
+            line.remove(0, 1);
+        lines.append(line);
+    }
+
+    while (!lines.isEmpty() && lines.first().trimmed().isEmpty())
+        lines.removeFirst();
+    while (!lines.isEmpty() && lines.last().trimmed().isEmpty())
+        lines.removeLast();
+
+    return lines.join('\n').trimmed();
+}
+
+QString scriptReferenceKey(const QString &projectRoot,
+                           const QString &scriptReference)
+{
+    const QString resolved =
+        Project::resolveReference(projectRoot, scriptReference);
+    if (resolved.isEmpty())
+        return {};
+    return QDir::fromNativeSeparators(
+        QDir(projectRoot).relativeFilePath(resolved));
 }
 
 }
@@ -454,6 +507,53 @@ Project Project::saveAs(const QString &newRootPath,
     return copy;
 }
 
+Project Project::copyExistingProject(const QString &sourceRootPath,
+                                     const QString &destinationRootPath,
+                                     const QString &newProjectName,
+                                     QString *errorMessage)
+{
+    Project source = Project::open(sourceRootPath, errorMessage);
+    if (!source.isValid())
+        return {};
+
+    if (newProjectName.trimmed().isEmpty()) {
+        if (errorMessage)
+            *errorMessage = "A new project name is required.";
+        return {};
+    }
+
+    const QString destination =
+        QDir::cleanPath(QFileInfo(destinationRootPath).absoluteFilePath());
+    if (QFileInfo::exists(destination)) {
+        if (errorMessage)
+            *errorMessage = "The destination project folder already exists.";
+        return {};
+    }
+
+    if (pathIsInsideRoot(destination, source.rootPath())) {
+        if (errorMessage)
+            *errorMessage = "The new project cannot be created inside the example project.";
+        return {};
+    }
+
+    if (!copyDirectoryRecursively(source.rootPath(), destination, errorMessage)) {
+        QDir(destination).removeRecursively();
+        return {};
+    }
+
+    Project copy(destination,
+                 newProjectName.trimmed(),
+                 QDate::currentDate().toString(Qt::ISODate),
+                 source.description());
+    QFile::remove(copy.reportFilePath());
+    if (!copy.save(errorMessage)) {
+        QDir(destination).removeRecursively();
+        return {};
+    }
+
+    return copy;
+}
+
 bool Project::writeReport(QString *errorMessage) const
 {
     if (!isValid()) {
@@ -610,23 +710,66 @@ bool Project::writeReport(QString *errorMessage) const
         }
     }
 
-    stream << "\n## Collection Details\n";
+    stream << "\n## Processing Story\n\n";
+    QMap<QString, QVector<Collection>> collectionsByScript;
     for (const Collection &collection : collections) {
-        stream << "\n### " << collection.dirName << "\n\n";
-        stream << "- Class: `" << collection.collectionClass << "`\n";
-        if (!collection.parent.isEmpty())
-            stream << "- Parent: `" << collection.parent << "`\n";
-        if (!collection.related.isEmpty())
-            stream << "- Related: `" << collection.related << "`\n";
-        if (!collection.registry.isEmpty())
-            stream << "- Registry: `" << collection.registry << "`\n";
-        if (!collection.script.isEmpty())
-            stream << "- Script: `" << collection.script << "`\n";
-        stream << "- Custom style: "
-               << (QFileInfo::exists(
-                       QDir(collection.dirPath).filePath("style.yaml"))
-                       ? "yes" : "no")
-               << "\n";
+        if (collection.script.trimmed().isEmpty())
+            continue;
+
+        const QString scriptKey =
+            scriptReferenceKey(m_rootPath, collection.script);
+        if (!scriptKey.isEmpty())
+            collectionsByScript[scriptKey].append(collection);
+    }
+
+    if (collectionsByScript.isEmpty()) {
+        stream << "No collection declares a script.\n";
+    } else {
+        for (auto it = collectionsByScript.cbegin();
+             it != collectionsByScript.cend();
+             ++it) {
+            const QString scriptRelativePath = it.key();
+            const QString scriptPath =
+                QDir(m_rootPath).filePath(scriptRelativePath);
+            stream << "### `" << scriptRelativePath << "`\n\n";
+
+            const QString header = initialCommentHeader(scriptPath);
+            if (!header.isEmpty()) {
+                const QStringList lines = header.split('\n');
+                for (const QString &line : lines)
+                    stream << markdownEscaped(line) << "\n";
+                stream << "\n";
+            } else if (!QFileInfo::exists(scriptPath)) {
+                stream << "_Script file not found._\n\n";
+            } else {
+                stream << "_No leading comment header._\n\n";
+            }
+
+            stream << "| Collection | Class | Parent | Related | Registry |\n";
+            stream << "| --- | --- | --- | --- | --- |\n";
+            QVector<Collection> scriptCollections = it.value();
+            std::sort(
+                scriptCollections.begin(), scriptCollections.end(),
+                [](const Collection &left, const Collection &right) {
+                    return left.dirName.compare(
+                        right.dirName, Qt::CaseInsensitive) < 0;
+                });
+            for (const Collection &collection : scriptCollections) {
+                stream << "| `" << collection.dirName << "` | "
+                       << collection.collectionClass << " | "
+                       << (collection.parent.isEmpty()
+                               ? "-" : markdownEscaped(collection.parent))
+                       << " | "
+                       << (collection.related.isEmpty()
+                               ? "-" : markdownEscaped(collection.related))
+                       << " | "
+                       << (collection.registry.isEmpty()
+                               ? "-" : QStringLiteral("`%1`").arg(
+                                     markdownEscaped(collection.registry)))
+                       << " |\n";
+            }
+            stream << "\n";
+        }
     }
 
     if (stream.status() != QTextStream::Ok) {
@@ -672,9 +815,10 @@ ProjectCleanupPlan Project::buildCleanupPlan() const
             m_rootPath, QDir(m_rootPath).filePath("raw_files"), rawFilters));
     addGroup(
         ProjectCleanupCategory::SensorImages,
-        "Sensor images",
+        "Sensor images and metadata",
         matchingRelativeFiles(
-            m_rootPath, QDir(m_rootPath).filePath("sensor_data"), imageFilters));
+            m_rootPath, QDir(m_rootPath).filePath("sensor_data"),
+            imageFilters + QStringList{"*.tsv", "*.TSV"}));
 
     QStringList collectionImages;
     QStringList segmentations;

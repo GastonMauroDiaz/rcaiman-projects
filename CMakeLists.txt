@@ -85,6 +85,8 @@ qt_add_executable(rcaiman_projects
     registryvalidationdialog.h registryvalidationdialog.cpp
     collectionvalidation.h collectionvalidation.cpp
     collectionvalidationdialog.h collectionvalidationdialog.cpp
+    acquisitionmetadata.h acquisitionmetadata.cpp
+    exampleprojectsdialog.h exampleprojectsdialog.cpp
     resources.qrc
 )
 
@@ -95,6 +97,7 @@ target_include_directories(rcaiman_projects
 
 target_compile_definitions(rcaiman_projects PRIVATE
     TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
+    EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/examples"
 )
 
 qt_add_translations(
@@ -115,6 +118,11 @@ add_custom_command(TARGET rcaiman_projects POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool"
         "$<TARGET_FILE_DIR:rcaiman_projects>/tools/exiftool"
+)
+add_custom_command(TARGET rcaiman_projects POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/examples"
+        "$<TARGET_FILE_DIR:rcaiman_projects>/examples"
 )
 
 if(WIN32)
@@ -151,6 +159,7 @@ if(BUILD_TESTING)
         metadataregistry.h metadataregistry.cpp
         collectionvalidation.h collectionvalidation.cpp
         project.h project.cpp
+        acquisitionmetadata.h acquisitionmetadata.cpp
     )
     target_link_libraries(metadataregistry_tests PRIVATE Qt::Core yaml-cpp)
     target_compile_definitions(metadataregistry_tests PRIVATE
@@ -177,6 +186,9 @@ install(TARGETS rcaiman_projects
 )
 install(DIRECTORY tools/exiftool
     DESTINATION ${CMAKE_INSTALL_BINDIR}/tools
+)
+install(DIRECTORY assets/examples
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 if(WIN32)
     install(FILES ${MSYS2_RUNTIME_DLLS}

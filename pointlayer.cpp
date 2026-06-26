@@ -11,6 +11,9 @@
 #include <QColor>
 #include <QtGlobal>
 
+#include <algorithm>
+#include <functional>
+
 PointLayer::PointLayer(const QString &path, QGraphicsScene *scene, QObject *parent)
     : Layer(QFileInfo(path).fileName(), path, parent)
     , m_scene(scene)
@@ -479,23 +482,59 @@ void PointLayer::onPointDeleted(int index)
     const QSet<int> backupSelection = m_selectedPointIndices;
     const int backupPrimary = m_primarySelectedPointIndex;
 
-    // Adjust selection index BEFORE removing
-    QSet<int> adjustedSelection;
-    for (int selectedIndex : std::as_const(m_selectedPointIndices)) {
-        if (selectedIndex == index)
-            continue;
-        adjustedSelection.insert(
-            selectedIndex > index ? selectedIndex - 1 : selectedIndex);
-    }
-    m_selectedPointIndices = adjustedSelection;
-    if (m_primarySelectedPointIndex == index) {
-        m_primarySelectedPointIndex = adjustedSelection.isEmpty()
-            ? -1 : *adjustedSelection.constBegin();
-    } else if (m_primarySelectedPointIndex > index) {
-        --m_primarySelectedPointIndex;
+    QVector<int> indicesToRemove;
+    if (m_selectedPointIndices.contains(index)) {
+        indicesToRemove.reserve(m_selectedPointIndices.size());
+        for (int selectedIndex : std::as_const(m_selectedPointIndices)) {
+            if (selectedIndex >= 0
+                && selectedIndex < m_collection.recordCount())
+                indicesToRemove.append(selectedIndex);
+        }
+    } else {
+        indicesToRemove.append(index);
     }
 
-    m_collection.removePoint(index);
+    std::sort(indicesToRemove.begin(), indicesToRemove.end());
+    indicesToRemove.erase(
+        std::unique(indicesToRemove.begin(), indicesToRemove.end()),
+        indicesToRemove.end());
+
+    QSet<int> removedSet;
+    for (int removeIndex : std::as_const(indicesToRemove))
+        removedSet.insert(removeIndex);
+
+    QSet<int> adjustedSelection;
+    for (int selectedIndex : std::as_const(m_selectedPointIndices)) {
+        if (removedSet.contains(selectedIndex))
+            continue;
+
+        int shift = 0;
+        for (int removeIndex : std::as_const(indicesToRemove)) {
+            if (removeIndex < selectedIndex)
+                ++shift;
+        }
+        adjustedSelection.insert(selectedIndex - shift);
+    }
+    m_selectedPointIndices = adjustedSelection;
+    if (removedSet.contains(m_primarySelectedPointIndex)) {
+        m_primarySelectedPointIndex = adjustedSelection.isEmpty()
+            ? -1 : *adjustedSelection.constBegin();
+    } else {
+        int shift = 0;
+        for (int removeIndex : std::as_const(indicesToRemove)) {
+            if (removeIndex < m_primarySelectedPointIndex)
+                ++shift;
+        }
+        m_primarySelectedPointIndex =
+            m_primarySelectedPointIndex >= 0
+                ? m_primarySelectedPointIndex - shift : -1;
+    }
+
+    std::sort(indicesToRemove.begin(), indicesToRemove.end(),
+              std::greater<int>());
+    for (int removeIndex : std::as_const(indicesToRemove))
+        m_collection.removePoint(removeIndex);
+
 
     QString errorMsg;
     if (!saveCsv(&errorMsg)) {

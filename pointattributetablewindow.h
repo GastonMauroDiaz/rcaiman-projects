@@ -7,8 +7,8 @@
 class ImageViewer;
 class QLabel;
 class PointAttributeTableModel;
+class PointAttributeSortProxyModel;
 class PointLayer;
-class QSortFilterProxyModel;
 class QTableView;
 
 class PointAttributeTableWindow : public QWidget
@@ -30,7 +30,7 @@ private:
     QPointer<PointLayer> m_layer;
     QPointer<ImageViewer> m_viewer;
     PointAttributeTableModel *m_model = nullptr;
-    QSortFilterProxyModel *m_proxy = nullptr;
+    PointAttributeSortProxyModel *m_proxy = nullptr;
     QTableView *m_table = nullptr;
     QLabel *m_counter = nullptr;
     bool m_syncingSelection = false;

@@ -13,6 +13,60 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 
+class PointAttributeSortProxyModel : public QSortFilterProxyModel
+{
+public:
+    explicit PointAttributeSortProxyModel(PointLayer *layer,
+                                          QObject *parent = nullptr)
+        : QSortFilterProxyModel(parent)
+        , m_layer(layer)
+    {
+    }
+
+    void setSelectedFirst(bool enabled)
+    {
+        if (m_selectedFirst == enabled)
+            return;
+        m_selectedFirst = enabled;
+        invalidate();
+    }
+
+    bool selectedFirst() const { return m_selectedFirst; }
+
+    void refreshSelectionOrder()
+    {
+        if (m_selectedFirst)
+            invalidate();
+    }
+
+protected:
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override
+    {
+        m_sortOrder = order;
+        QSortFilterProxyModel::sort(column, order);
+    }
+
+    bool lessThan(const QModelIndex &left,
+                  const QModelIndex &right) const override
+    {
+        if (m_selectedFirst && m_layer) {
+            const bool leftSelected =
+                m_layer->selectedPointIndices().contains(left.row());
+            const bool rightSelected =
+                m_layer->selectedPointIndices().contains(right.row());
+            if (leftSelected != rightSelected)
+                return m_sortOrder == Qt::AscendingOrder
+                    ? leftSelected : !leftSelected;
+        }
+        return QSortFilterProxyModel::lessThan(left, right);
+    }
+
+private:
+    QPointer<PointLayer> m_layer;
+    bool m_selectedFirst = false;
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+};
+
 PointAttributeTableWindow::PointAttributeTableWindow(
     PointLayer *layer,
     ImageViewer *viewer,
@@ -29,17 +83,20 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
     auto *layout = new QVBoxLayout(this);
     auto *toolbar = new QHBoxLayout();
+    auto *selectedFirstButton = new QPushButton("Selected first", this);
+    selectedFirstButton->setCheckable(true);
     auto *zoomButton = new QPushButton("Zoom", this);
     auto *clearButton = new QPushButton("Clear selection", this);
     m_counter = new QLabel(this);
     toolbar->addStretch(1);
+    toolbar->addWidget(selectedFirstButton);
     toolbar->addWidget(zoomButton);
     toolbar->addWidget(clearButton);
     toolbar->addWidget(m_counter);
     layout->addLayout(toolbar);
 
     m_model = new PointAttributeTableModel(layer, this);
-    m_proxy = new QSortFilterProxyModel(this);
+    m_proxy = new PointAttributeSortProxyModel(layer, this);
     m_proxy->setSourceModel(m_model);
     m_proxy->setSortRole(Qt::UserRole);
     m_proxy->setDynamicSortFilter(true);
@@ -49,6 +106,7 @@ PointAttributeTableWindow::PointAttributeTableWindow(
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setFocusPolicy(Qt::NoFocus);
     m_table->setSortingEnabled(true);
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->verticalHeader()->hide();
@@ -56,6 +114,18 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
     connect(zoomButton, &QPushButton::clicked,
             this, &PointAttributeTableWindow::zoomToSelection);
+    connect(selectedFirstButton, &QPushButton::toggled,
+            this, [this](bool checked) {
+                if (m_proxy)
+                    m_proxy->setSelectedFirst(checked);
+                const int sortColumn =
+                    m_table->horizontalHeader()->sortIndicatorSection() >= 0
+                        ? m_table->horizontalHeader()->sortIndicatorSection()
+                        : 0;
+                m_table->sortByColumn(
+                    sortColumn,
+                    m_table->horizontalHeader()->sortIndicatorOrder());
+            });
     connect(clearButton, &QPushButton::clicked, this, [this]() {
         if (m_layer)
             m_layer->clearSelection();
@@ -66,7 +136,23 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
     if (m_layer) {
         connect(m_layer, &PointLayer::selectionChanged,
-                this, &PointAttributeTableWindow::syncSelectionFromLayer);
+                this, [this]() {
+                    if (m_proxy)
+                        m_proxy->refreshSelectionOrder();
+                    if (m_proxy && m_proxy->selectedFirst()) {
+                        const int sortColumn =
+                            m_table->horizontalHeader()
+                                ->sortIndicatorSection() >= 0
+                                ? m_table->horizontalHeader()
+                                      ->sortIndicatorSection()
+                                : 0;
+                        m_table->sortByColumn(
+                            sortColumn,
+                            m_table->horizontalHeader()
+                                ->sortIndicatorOrder());
+                    }
+                    syncSelectionFromLayer();
+                });
         connect(m_layer, &PointLayer::collectionChanged, this, [this]() {
             m_syncingSelection = true;
             m_model->refresh();
@@ -106,7 +192,8 @@ void PointAttributeTableWindow::syncSelectionFromLayer()
     const QModelIndex primaryProxy =
         m_proxy->mapFromSource(m_model->index(primary, 0));
     if (primaryProxy.isValid())
-        m_table->setCurrentIndex(primaryProxy);
+        m_table->selectionModel()->setCurrentIndex(
+            primaryProxy, QItemSelectionModel::NoUpdate);
     m_syncingSelection = false;
     updateCounter();
 }

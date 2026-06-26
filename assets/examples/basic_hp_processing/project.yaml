@@ -1,0 +1,5 @@
+version: 1
+project_name: basic_hp_processing
+description: "Process from raw to transmittance following the same steps as the HSP software"
+created: 2026-06-26
+rcaiman_projects_version: 0.1

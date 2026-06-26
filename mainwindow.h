@@ -66,11 +66,14 @@ private slots:
     void splitViewer();
     void resetWindowLayout();
     void onSyncSplitViewsToggled(bool checked);
+    void onSyncSplitZoomToggled(bool checked);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
     void buildMetadataRules();
     void validateImageMetadata();
     void validateCollectionMetadata();
+    void showAboutDialog();
+    void createProjectFromExample();
 
 private:
     void openImageAtPath(const QString &filePath);

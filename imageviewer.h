@@ -8,6 +8,7 @@
 #include <QMutex>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QRubberBand>
 #include <QResizeEvent>
 #include <QSet>
 #include <QWheelEvent>
@@ -40,6 +41,8 @@ public:
     void zoomToPointIndices(PointLayer *layer, const QSet<int> &indices);
     void setPanModeEnabled(bool enabled);
     bool panModeEnabled() const;
+    void setZoomModeEnabled(bool enabled);
+    bool zoomModeEnabled() const;
 
     void setPointEditEnabled(bool enabled);
     bool pointEditEnabled() const { return m_pointEditEnabled; }
@@ -61,6 +64,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
     void mousePressEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
@@ -71,6 +75,8 @@ protected:
 public:
     static void setSyncEnabled(bool enabled);
     static bool syncEnabled();
+    static void setSyncZoomEnabled(bool enabled);
+    static bool syncZoomEnabled();
 
 private slots:
     void onActiveLayerChanged(Layer *layer);
@@ -80,11 +86,22 @@ private:
     void updateDragMode();
     void syncToSiblings(int dx, int dy);
     bool panInteractionActive() const;
+    bool zoomInteractionActive() const;
     bool handleSpacePanKeyEvent(QEvent *event);
+    bool handleTemporaryZoomKeyEvent(QEvent *event);
     void setPointItemsInteractionBlocked(bool blocked);
+    void applyDragZoom(const QPoint &pos);
+    PointLayer *boxSelectionPointLayer() const;
+    void beginPointBoxSelection(const QPoint &pos);
+    void updatePointBoxSelection(const QPoint &pos);
+    void finishPointBoxSelection(const QPoint &pos);
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
+    bool m_zoomModeEnabled = false;
+    bool m_temporaryZoomActive = false;
+    bool m_zoomDragging = false;
+    bool m_pointBoxSelecting = false;
     bool m_autoFitImage = false;
     bool m_pointEditEnabled = false;
     PixelInfo m_lastPixelInfo;
@@ -94,7 +111,13 @@ private:
     ImageLayer *m_imageLayer = nullptr;
     QString m_primarySourcePath;
     QPointer<PointLayer> m_editingPointLayer;
+    QPoint m_zoomDragLastPos;
+    QPoint m_pointBoxOrigin;
+    QRect m_pointBoxRect;
+    Qt::KeyboardModifiers m_pointBoxModifiers;
+    QPointer<QRubberBand> m_pointBoxRubberBand;
     static bool ms_syncEnabled;
+    static bool ms_syncZoomEnabled;
     bool m_syncingScroll = false;
     QMutex m_syncMutex;
 };

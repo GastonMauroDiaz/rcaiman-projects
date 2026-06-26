@@ -1,6 +1,7 @@
 #include "previewdock.h"
 
 #include <QLabel>
+#include <QResizeEvent>
 #include <QTextBrowser>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -59,13 +60,29 @@ void PreviewDock::showImage(const QPixmap &pixmap)
     }
 
     m_stack->setCurrentIndex(1);
+    m_originalPixmap = pixmap;
+    updateImagePreview();
+}
 
-    // Scale to fit width, preserving aspect ratio
+void PreviewDock::resizeEvent(QResizeEvent *event)
+{
+    QDockWidget::resizeEvent(event);
+    if (m_stack && m_stack->currentIndex() == 1)
+        updateImagePreview();
+}
+
+void PreviewDock::updateImagePreview()
+{
+    if (m_originalPixmap.isNull() || !m_imageLabel)
+        return;
+
     const int dockWidth = width() - 20; // some margin
-    if (dockWidth > 0 && pixmap.width() > dockWidth) {
-        m_imageLabel->setPixmap(pixmap.scaledToWidth(dockWidth, Qt::SmoothTransformation));
+    if (dockWidth > 0 && m_originalPixmap.width() > dockWidth) {
+        m_imageLabel->setPixmap(
+            m_originalPixmap.scaledToWidth(
+                dockWidth, Qt::SmoothTransformation));
     } else {
-        m_imageLabel->setPixmap(pixmap);
+        m_imageLabel->setPixmap(m_originalPixmap);
     }
 }
 
@@ -73,5 +90,6 @@ void PreviewDock::clear()
 {
     m_textEdit->clear();
     m_imageLabel->clear();
+    m_originalPixmap = QPixmap();
     m_stack->setCurrentIndex(0);
 }

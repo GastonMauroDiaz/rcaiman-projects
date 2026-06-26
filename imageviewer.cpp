@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QContextMenuEvent>
+#include <QApplication>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -19,9 +20,12 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMutexLocker>
+#include <QRubberBand>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QUrl>
+
+#include <cmath>
 
 namespace {
 QCursor editPointsCursor()
@@ -32,6 +36,27 @@ QCursor editPointsCursor()
         Qt::CrossCursor);
 }
 
+QCursor zoomCursor()
+{
+    QPixmap pixmap(64, 64);
+    pixmap.setDevicePixelRatio(2.0);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor(35, 35, 35));
+    pen.setWidthF(4.0);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(QPointF(13.5, 13.5), 7.0, 7.0);
+    painter.drawLine(QPointF(19.0, 19.0), QPointF(27.0, 27.0));
+    painter.drawLine(QPointF(13.5, 9.5), QPointF(13.5, 17.5));
+    painter.drawLine(QPointF(9.5, 13.5), QPointF(17.5, 13.5));
+    return QCursor(pixmap, 13, 13);
+}
+
 bool belongsToPointItem(QGraphicsItem *item)
 {
     for (QGraphicsItem *current = item; current; current = current->parentItem()) {
@@ -40,6 +65,7 @@ bool belongsToPointItem(QGraphicsItem *item)
     }
     return false;
 }
+
 }
 
 ImageViewer::ImageViewer(QWidget *parent)
@@ -166,6 +192,19 @@ void ImageViewer::setPanModeEnabled(bool enabled)
     updateDragMode();
 }
 
+bool ImageViewer::zoomModeEnabled() const
+{
+    return m_zoomModeEnabled;
+}
+
+void ImageViewer::setZoomModeEnabled(bool enabled)
+{
+    m_zoomModeEnabled = enabled;
+    if (!zoomInteractionActive())
+        m_zoomDragging = false;
+    updateDragMode();
+}
+
 void ImageViewer::setPointEditEnabled(bool enabled)
 {
     if (enabled) {
@@ -192,6 +231,8 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
 {
     if (handleSpacePanKeyEvent(event))
         return;
+    if (handleTemporaryZoomKeyEvent(event))
+        return;
 
     QGraphicsView::keyPressEvent(event);
 }
@@ -199,6 +240,8 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
 void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 {
     if (handleSpacePanKeyEvent(event))
+        return;
+    if (handleTemporaryZoomKeyEvent(event))
         return;
 
     QGraphicsView::keyReleaseEvent(event);
@@ -221,7 +264,7 @@ void ImageViewer::wheelEvent(QWheelEvent *event)
     else
         scale(1.0 / zoomFactor, 1.0 / zoomFactor);
 
-    if (ms_syncEnabled) {
+    if (ms_syncEnabled && ms_syncZoomEnabled) {
         const QTransform t = transform();
         if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
             for (int i = 0; i < splitter->count(); ++i) {
@@ -249,9 +292,11 @@ void ImageViewer::updateDragMode()
 {
     const bool shouldPan = panInteractionActive();
     setDragMode(shouldPan ? QGraphicsView::ScrollHandDrag : QGraphicsView::NoDrag);
-    setPointItemsInteractionBlocked(shouldPan);
+    setPointItemsInteractionBlocked(shouldPan || zoomInteractionActive());
     if (shouldPan) {
         viewport()->setCursor(Qt::OpenHandCursor);
+    } else if (zoomInteractionActive()) {
+        viewport()->setCursor(zoomCursor());
     } else if (m_pointEditEnabled) {
         viewport()->setCursor(editPointsCursor());
     } else {
@@ -264,6 +309,15 @@ bool ImageViewer::panInteractionActive() const
     return m_panModeEnabled || m_spacePanActive;
 }
 
+bool ImageViewer::zoomInteractionActive() const
+{
+    const bool controlDown =
+        QApplication::keyboardModifiers().testFlag(Qt::ControlModifier);
+    return !controlDown
+        && !panInteractionActive()
+        && (m_zoomModeEnabled || m_temporaryZoomActive);
+}
+
 bool ImageViewer::handleSpacePanKeyEvent(QEvent *event)
 {
     if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
@@ -274,6 +328,23 @@ bool ImageViewer::handleSpacePanKeyEvent(QEvent *event)
         return false;
 
     m_spacePanActive = (event->type() == QEvent::KeyPress);
+    updateDragMode();
+    keyEvent->accept();
+    return true;
+}
+
+bool ImageViewer::handleTemporaryZoomKeyEvent(QEvent *event)
+{
+    if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+        return false;
+
+    auto *keyEvent = static_cast<QKeyEvent*>(event);
+    if (keyEvent->key() != Qt::Key_Z || keyEvent->isAutoRepeat())
+        return false;
+
+    m_temporaryZoomActive = (event->type() == QEvent::KeyPress);
+    if (!zoomInteractionActive())
+        m_zoomDragging = false;
     updateDragMode();
     keyEvent->accept();
     return true;
@@ -301,6 +372,28 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
     emit activatedByClick();
     m_lastMousePos = event->pos();
 
+    if (zoomInteractionActive() && event->button() == Qt::LeftButton) {
+        m_zoomDragging = true;
+        m_zoomDragLastPos = event->pos();
+        m_autoFitImage = false;
+        viewport()->setCursor(zoomCursor());
+        event->accept();
+        return;
+    }
+
+    if (!panInteractionActive()
+        && !zoomInteractionActive()
+        && event->button() == Qt::LeftButton
+        && event->modifiers().testFlag(Qt::ControlModifier)) {
+        const QPointF scenePos = mapToScene(event->pos());
+        QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, transform()) : nullptr;
+        if (!belongsToPointItem(itemUnder) && boxSelectionPointLayer()) {
+            beginPointBoxSelection(event->pos());
+            event->accept();
+            return;
+        }
+    }
+
     if (m_pointEditEnabled && !panInteractionActive() && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
         QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
@@ -317,9 +410,50 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
     QGraphicsView::mousePressEvent(event);
 }
 
+void ImageViewer::applyDragZoom(const QPoint &pos)
+{
+    const QPoint delta = pos - m_zoomDragLastPos;
+    const int zoomDelta = delta.x() - delta.y();
+    if (zoomDelta == 0)
+        return;
+
+    const QPointF center = viewCenter();
+    const double factor = std::pow(1.01, zoomDelta);
+    scale(factor, factor);
+    centerOn(center);
+    m_zoomDragLastPos = pos;
+
+    if (ms_syncEnabled && ms_syncZoomEnabled) {
+        const QTransform t = transform();
+        if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
+            for (int i = 0; i < splitter->count(); ++i) {
+                if (ImageViewer *sib = qobject_cast<ImageViewer*>(splitter->widget(i))) {
+                    if (sib != this) {
+                        sib->m_syncingScroll = true;
+                        sib->setTransform(t);
+                        sib->m_syncingScroll = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
+    if (m_pointBoxSelecting) {
+        updatePointBoxSelection(event->pos());
+        event->accept();
+        return;
+    }
+
+    if (m_zoomDragging && zoomInteractionActive()) {
+        applyDragZoom(event->pos());
+        event->accept();
+        return;
+    }
+
     PixelInfo info;
     info.row = -1;
     info.col = -1;
@@ -356,6 +490,85 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
     QGraphicsView::mouseMoveEvent(event);
 }
 
+void ImageViewer::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_pointBoxSelecting && event->button() == Qt::LeftButton) {
+        finishPointBoxSelection(event->pos());
+        event->accept();
+        return;
+    }
+
+    if (m_zoomDragging && event->button() == Qt::LeftButton) {
+        m_zoomDragging = false;
+        updateDragMode();
+        event->accept();
+        return;
+    }
+
+    QGraphicsView::mouseReleaseEvent(event);
+}
+
+PointLayer *ImageViewer::boxSelectionPointLayer() const
+{
+    if (m_pointEditEnabled && m_editingPointLayer)
+        return m_editingPointLayer;
+
+    Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
+    return qobject_cast<PointLayer*>(active);
+}
+
+void ImageViewer::beginPointBoxSelection(const QPoint &pos)
+{
+    if (!m_pointBoxRubberBand)
+        m_pointBoxRubberBand = new QRubberBand(QRubberBand::Rectangle, viewport());
+
+    m_pointBoxSelecting = true;
+    m_pointBoxOrigin = pos;
+    m_pointBoxModifiers = QApplication::keyboardModifiers();
+    m_pointBoxRect = QRect(pos, QSize());
+    m_pointBoxRubberBand->setGeometry(m_pointBoxRect);
+    m_pointBoxRubberBand->show();
+}
+
+void ImageViewer::updatePointBoxSelection(const QPoint &pos)
+{
+    if (!m_pointBoxSelecting || !m_pointBoxRubberBand)
+        return;
+
+    m_pointBoxRect = QRect(m_pointBoxOrigin, pos).normalized();
+    m_pointBoxRubberBand->setGeometry(m_pointBoxRect);
+}
+
+void ImageViewer::finishPointBoxSelection(const QPoint &pos)
+{
+    updatePointBoxSelection(pos);
+    if (m_pointBoxRubberBand)
+        m_pointBoxRubberBand->hide();
+    m_pointBoxSelecting = false;
+
+    PointLayer *layer = boxSelectionPointLayer();
+    if (!layer)
+        return;
+
+    if (m_pointBoxRect.width() < 4 && m_pointBoxRect.height() < 4)
+        return;
+
+    const QRectF sceneRect = mapToScene(m_pointBoxRect).boundingRect();
+    QSet<int> selected;
+    const QVector<PointRecord> &points = layer->collection().points();
+    for (int i = 0; i < points.size(); ++i) {
+        const QPointF point(points[i].col, points[i].row);
+        if (sceneRect.contains(point))
+            selected.insert(i);
+    }
+
+    if (m_pointBoxModifiers.testFlag(Qt::ShiftModifier))
+        selected.unite(layer->selectedPointIndices());
+
+    const int primary = selected.isEmpty() ? -1 : *selected.constBegin();
+    layer->setSelectedPointIndices(selected, primary);
+}
+
 // --- Drag & Drop ---
 // QGraphicsView's viewport() receives drop events first.
 // We use an event filter on the viewport to intercept them,
@@ -370,6 +583,8 @@ bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
             viewport()->setFocus(Qt::MouseFocusReason);
         }
         if (handleSpacePanKeyEvent(event))
+            return true;
+        if (handleTemporaryZoomKeyEvent(event))
             return true;
         if (event->type() == QEvent::DragEnter) {
             auto *de = static_cast<QDragEnterEvent*>(event);
@@ -412,6 +627,7 @@ void ImageViewer::dragEnterEvent(QDragEnterEvent *event)
 }
 
 bool ImageViewer::ms_syncEnabled = false;
+bool ImageViewer::ms_syncZoomEnabled = true;
 
 void ImageViewer::setSyncEnabled(bool enabled)
 {
@@ -421,6 +637,16 @@ void ImageViewer::setSyncEnabled(bool enabled)
 bool ImageViewer::syncEnabled()
 {
     return ms_syncEnabled;
+}
+
+void ImageViewer::setSyncZoomEnabled(bool enabled)
+{
+    ms_syncZoomEnabled = enabled;
+}
+
+bool ImageViewer::syncZoomEnabled()
+{
+    return ms_syncZoomEnabled;
 }
 
 void ImageViewer::scrollContentsBy(int dx, int dy)

@@ -20,10 +20,16 @@
 #include "registryvalidationdialog.h"
 #include "collectionvalidation.h"
 #include "collectionvalidationdialog.h"
+#include "acquisitionmetadata.h"
+#include "tiffreader.h"
+#include "rasterrenderer.h"
+#include "exampleprojectsdialog.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
@@ -32,7 +38,9 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QIcon>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -41,6 +49,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMimeData>
+#include <QPainter>
 #include <QPixmap>
 #include <QProcess>
 #include <QSizePolicy>
@@ -50,6 +59,7 @@
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTabWidget>
+#include <QTextBrowser>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -147,6 +157,75 @@ bool samePath(const QString &left, const QString &right)
 #endif
 }
 
+QIcon zoomToolIcon()
+{
+    QPixmap pixmap(64, 64);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor(35, 35, 35));
+    pen.setWidthF(5.0);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(QPointF(27.0, 27.0), 14.0, 14.0);
+    painter.drawLine(QPointF(38.0, 38.0), QPointF(52.0, 52.0));
+    painter.drawLine(QPointF(27.0, 19.0), QPointF(27.0, 35.0));
+    painter.drawLine(QPointF(19.0, 27.0), QPointF(35.0, 27.0));
+    return QIcon(pixmap);
+}
+
+QStringList exampleProjectRoots()
+{
+    QStringList roots;
+    roots << QDir(QCoreApplication::applicationDirPath()).filePath("examples");
+#ifdef EXAMPLES_DIR
+    roots << QString::fromUtf8(EXAMPLES_DIR);
+#endif
+    roots.removeDuplicates();
+    return roots;
+}
+
+QString readTextFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+    return QString::fromUtf8(file.readAll());
+}
+
+QVector<ExampleProjectInfo> discoverExampleProjects()
+{
+    QVector<ExampleProjectInfo> examples;
+    for (const QString &rootPath : exampleProjectRoots()) {
+        QDir root(rootPath);
+        if (!root.exists())
+            continue;
+
+        const QFileInfoList entries =
+            root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot,
+                               QDir::Name);
+        for (const QFileInfo &entry : entries) {
+            QString errorMessage;
+            const Project project = Project::open(entry.absoluteFilePath(),
+                                                  &errorMessage);
+            if (!project.isValid())
+                continue;
+
+            ExampleProjectInfo info;
+            info.path = project.rootPath();
+            info.name = project.name();
+            info.description = project.description();
+            info.readme = readTextFile(
+                QDir(project.rootPath()).filePath("README.md"));
+            examples.append(info);
+        }
+    }
+    return examples;
+}
+
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -155,6 +234,9 @@ MainWindow::MainWindow(QWidget *parent)
     , m_projectFileSystemModel(new ProjectFileSystemModel(this))
 {
     ui->setupUi(this);
+    setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
+    qApp->setWindowIcon(windowIcon());
+    ui->actionZoom->setIcon(zoomToolIcon());
 
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     ui->projectTree->setModel(m_projectFileSystemModel);
@@ -274,9 +356,22 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::toggled,
             this,
             [this](bool enabled) {
+                if (enabled && ui->actionZoom->isChecked())
+                    ui->actionZoom->setChecked(false);
                 ImageViewer *viewer = currentImageViewer();
                 if (viewer)
                     viewer->setPanModeEnabled(enabled);
+            });
+
+    connect(ui->actionZoom,
+            &QAction::toggled,
+            this,
+            [this](bool enabled) {
+                if (enabled && ui->actionPan->isChecked())
+                    ui->actionPan->setChecked(false);
+                ImageViewer *viewer = currentImageViewer();
+                if (viewer)
+                    viewer->setZoomModeEnabled(enabled);
             });
 
     connect(ui->actionEditPoints,
@@ -299,10 +394,23 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::onSyncSplitViewsToggled);
 
+    connect(ui->actionSyncSplitZoom,
+            &QAction::toggled,
+            this,
+            &MainWindow::onSyncSplitZoomToggled);
+
     connect(ui->actionResetWindowLayout,
             &QAction::triggered,
             this,
             &MainWindow::resetWindowLayout);
+    connect(ui->actionAboutRcaimanProjects,
+            &QAction::triggered,
+            this,
+            &MainWindow::showAboutDialog);
+    connect(ui->actionExampleProjects,
+            &QAction::triggered,
+            this,
+            &MainWindow::createProjectFromExample);
 
     connect(ui->projectTree,
             &QTreeView::doubleClicked,
@@ -313,6 +421,12 @@ MainWindow::MainWindow(QWidget *parent)
             &QTreeView::clicked,
             this,
             &MainWindow::onProjectTreeItemClicked);
+    connect(ui->projectTree->selectionModel(),
+            &QItemSelectionModel::currentChanged,
+            this,
+            [this](const QModelIndex &current, const QModelIndex &) {
+                onProjectTreeItemClicked(current);
+            });
 
     connect(ui->projectTree,
             &QWidget::customContextMenuRequested,
@@ -378,6 +492,37 @@ MainWindow::MainWindow(QWidget *parent)
     resizeDocks({ui->dockProjectExplorer, ui->dockViewer, ui->dockLayers},
                 {420, 600, 260}, Qt::Horizontal);
 
+    connect(ui->dockProperties, &QDockWidget::topLevelChanged,
+            this, [this](bool floating) {
+                if (floating) {
+                    ui->dockProperties->setMaximumWidth(QWIDGETSIZE_MAX);
+                    if (QWidget *contents = ui->dockProperties->widget())
+                        contents->setMaximumWidth(QWIDGETSIZE_MAX);
+                } else {
+                    ui->dockProperties->setMinimumWidth(220);
+                    ui->dockProperties->setMaximumWidth(320);
+                    if (QWidget *contents = ui->dockProperties->widget()) {
+                        contents->setMinimumWidth(220);
+                        contents->setMaximumWidth(320);
+                    }
+                }
+            });
+    connect(m_previewDock, &QDockWidget::topLevelChanged,
+            this, [this](bool floating) {
+                if (floating) {
+                    m_previewDock->setMaximumWidth(QWIDGETSIZE_MAX);
+                    if (QWidget *contents = m_previewDock->widget())
+                        contents->setMaximumWidth(QWIDGETSIZE_MAX);
+                } else {
+                    m_previewDock->setMinimumWidth(260);
+                    m_previewDock->setMaximumWidth(460);
+                    if (QWidget *contents = m_previewDock->widget()) {
+                        contents->setMinimumWidth(260);
+                        contents->setMaximumWidth(460);
+                    }
+                }
+            });
+
     m_defaultWindowState = saveState(1);
     updateProjectActions();
     updateRecentProjectsMenu();
@@ -387,6 +532,98 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::showAboutDialog()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle("About rcaiman.projects");
+    dialog.setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    QPixmap iconPixmap(":/branding/rcaiman-icon.png");
+    if (!iconPixmap.isNull()) {
+        auto *iconLabel = new QLabel(&dialog);
+        iconLabel->setAlignment(Qt::AlignCenter);
+        iconLabel->setPixmap(
+            iconPixmap.scaled(96, 96,
+                              Qt::KeepAspectRatio,
+                              Qt::SmoothTransformation));
+        layout->addWidget(iconLabel);
+    }
+
+    QPixmap logoPixmap(":/branding/rcaiman-projects-logo.png");
+    if (!logoPixmap.isNull()) {
+        auto *logoLabel = new QLabel(&dialog);
+        logoLabel->setAlignment(Qt::AlignCenter);
+        logoLabel->setPixmap(
+            logoPixmap.scaledToWidth(420, Qt::SmoothTransformation));
+        layout->addWidget(logoLabel);
+    }
+
+    QString aboutText;
+    QFile aboutFile(":/branding/about.md");
+    if (aboutFile.open(QIODevice::ReadOnly | QIODevice::Text))
+        aboutText = QString::fromUtf8(aboutFile.readAll());
+    if (aboutText.trimmed().isEmpty())
+        aboutText = "rcaiman.projects";
+
+    auto *textBrowser = new QTextBrowser(&dialog);
+    textBrowser->setOpenExternalLinks(true);
+    textBrowser->setMarkdown(aboutText);
+    textBrowser->setMinimumSize(460, 180);
+    layout->addWidget(textBrowser);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted,
+            &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    dialog.exec();
+}
+
+void MainWindow::createProjectFromExample()
+{
+    const QVector<ExampleProjectInfo> examples = discoverExampleProjects();
+    ExampleProjectsDialog dialog(examples, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const ExampleProjectInfo example = dialog.selectedExample();
+    if (example.path.isEmpty())
+        return;
+
+    const QString parentPath = QFileDialog::getExistingDirectory(
+        this, "Select Destination Parent Folder");
+    if (parentPath.isEmpty())
+        return;
+
+    bool accepted = false;
+    const QString projectName = QInputDialog::getText(
+        this,
+        "Create Example Project",
+        "New project name:",
+        QLineEdit::Normal,
+        example.name,
+        &accepted).trimmed();
+    if (!accepted || projectName.isEmpty())
+        return;
+
+    const QString destination = QDir(parentPath).filePath(projectName);
+    QString errorMessage;
+    const Project project = Project::copyExistingProject(
+        example.path, destination, projectName, &errorMessage);
+    if (!project.isValid()) {
+        QMessageBox::warning(this, "Example Project", errorMessage);
+        return;
+    }
+
+    loadProject(project);
+    statusBar()->showMessage(
+        QStringLiteral("Example project created: %1").arg(destination),
+        5000);
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -714,12 +951,6 @@ void MainWindow::extractRawData()
             rawFiles.append(path);
     }
 
-    if (rawFiles.isEmpty()) {
-        QMessageBox::information(this, "Extract raw data",
-                                 "No raw files found in raw_files folder.");
-        return;
-    }
-
     int successCount = 0;
     int failCount = 0;
 
@@ -740,10 +971,42 @@ void MainWindow::extractRawData()
             ++failCount;
     }
 
+    statusBar()->showMessage("Writing acquisition metadata sidecars...", 0);
+    AcquisitionMetadataSummary metadataSummary;
+    QString metadataError;
+    const bool metadataWritten = AcquisitionMetadata::regenerate(
+        m_project.rootPath(), &metadataSummary, &metadataError);
+
     statusBar()->showMessage(
-        QStringLiteral("Extraction complete: %1 succeeded, %2 failed")
-            .arg(successCount).arg(failCount), 8000);
+        QStringLiteral(
+            "Extraction complete: %1 TIFF(s) created, %2 failed; "
+            "%3 metadata sidecar(s) written")
+            .arg(successCount)
+            .arg(failCount)
+            .arg(metadataSummary.sidecarsWritten),
+        8000);
     m_projectFileSystemModel->refreshDirectory(sensorDir);
+
+    if (!metadataWritten || metadataSummary.metadataErrors > 0) {
+        QStringList details;
+        if (metadataSummary.metadataErrors > 0) {
+            details.append(
+                QStringLiteral(
+                    "%1 sidecar(s) record a metadata error.")
+                    .arg(metadataSummary.metadataErrors));
+        }
+        if (metadataSummary.writeErrors > 0) {
+            details.append(
+                QStringLiteral("%1 sidecar(s) could not be written.")
+                    .arg(metadataSummary.writeErrors));
+        }
+        if (!metadataError.isEmpty())
+            details.append(metadataError);
+        details.append(
+            "Inspect the TSV files in sensor_data for per-image details.");
+        QMessageBox::warning(
+            this, "Extract raw data", details.join("\n"));
+    }
 
     updateProjectActions();
 }
@@ -1239,7 +1502,9 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
     }
 
     const QString suffix = fi.suffix().toLower();
-    const QStringList textExts = {"yaml", "yml", "json", "csv", "txt", "log", "md"};
+    const QStringList textExts = {
+        "yaml", "yml", "json", "csv", "tsv", "txt", "log", "md"
+    };
     const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
 
     if (textExts.contains(suffix)) {
@@ -1254,7 +1519,18 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
             m_previewDock->clear();
         }
     } else if (imgExts.contains(suffix)) {
-        QPixmap pix(filePath);
+        QPixmap pix;
+        if (suffix == "tif" || suffix == "tiff") {
+            QString errorMessage;
+            const RasterData raster = TiffReader::load(filePath, &errorMessage);
+            if (!raster.isNull()) {
+                const QImage image = RasterRenderer().renderAuto(raster);
+                if (!image.isNull())
+                    pix = QPixmap::fromImage(image);
+            }
+        } else {
+            pix.load(filePath);
+        }
         if (!pix.isNull())
             m_previewDock->showImage(pix);
         else
@@ -1345,9 +1621,76 @@ void MainWindow::onPointSelectionChanged()
         m_currentPointLayer->selectedPointIndices().size();
     const int index = m_currentPointLayer->primarySelectedPointIndex();
     const int sectionARows = 4;
+    QVector<QPair<QString, QString>> selectionSummary;
+    if (selectionCount > 1) {
+        const QStringList colNames = col.columnNames();
+        const QSet<int> selectedIndices =
+            m_currentPointLayer->selectedPointIndices();
+        const int attributeCount = qMax(0, colNames.size() - 2);
+        for (int attr = 0; attr < attributeCount; ++attr) {
+            int validCount = 0;
+            bool allNumeric = true;
+            double sum = 0.0;
+            double minValue = 0.0;
+            double maxValue = 0.0;
+            QSet<QString> distinctValues;
+
+            for (int selectedIndex : selectedIndices) {
+                if (selectedIndex < 0 || selectedIndex >= col.points().size())
+                    continue;
+
+                const QVector<QVariant> &attributes =
+                    col.points().at(selectedIndex).attributes;
+                if (attr >= attributes.size()
+                    || !attributes.at(attr).isValid()) {
+                    continue;
+                }
+
+                const QVariant value = attributes.at(attr);
+                ++validCount;
+                bool numericOk = false;
+                const double numericValue = value.toDouble(&numericOk);
+                if (numericOk) {
+                    sum += numericValue;
+                    if (validCount == 1) {
+                        minValue = numericValue;
+                        maxValue = numericValue;
+                    } else {
+                        minValue = qMin(minValue, numericValue);
+                        maxValue = qMax(maxValue, numericValue);
+                    }
+                } else {
+                    allNumeric = false;
+                }
+                distinctValues.insert(value.toString());
+            }
+
+            const QString attrName = (attr + 2 < colNames.size())
+                ? colNames.at(attr + 2)
+                : QStringLiteral("Attr %1").arg(attr);
+            QString summary;
+            if (validCount == 0) {
+                summary = "all NA";
+            } else if (allNumeric) {
+                summary = QStringLiteral("mean %1; range %2 - %3")
+                              .arg(sum / validCount, 0, 'g', 6)
+                              .arg(minValue, 0, 'g', 6)
+                              .arg(maxValue, 0, 'g', 6);
+            } else {
+                summary = QStringLiteral("%1 distinct")
+                              .arg(distinctValues.size());
+                if (distinctValues.size() <= 3) {
+                    QStringList values = distinctValues.values();
+                    values.sort(Qt::CaseInsensitive);
+                    summary += QStringLiteral(": %1").arg(values.join(", "));
+                }
+            }
+            selectionSummary.append({attrName, summary});
+        }
+    }
     const int sectionBRows = selectionCount == 1 && index >= 0
         ? 3 + col.points()[index].attributes.size()
-        : (selectionCount > 1 ? 1 : 0);
+        : (selectionCount > 1 ? 1 + selectionSummary.size() : 0);
 
     ui->propertiesTable->setRowCount(sectionARows + sectionBRows);
 
@@ -1363,11 +1706,20 @@ void MainWindow::onPointSelectionChanged()
 
     // Section B — Selected point detail
     if (selectionCount > 1) {
+        int row = sectionARows;
         ui->propertiesTable->setItem(
-            sectionARows, 0, new QTableWidgetItem("Selected"));
+            row, 0, new QTableWidgetItem("Selected"));
         ui->propertiesTable->setItem(
-            sectionARows, 1,
+            row, 1,
             new QTableWidgetItem(QString::number(selectionCount)));
+        ++row;
+        for (const auto &summary : std::as_const(selectionSummary)) {
+            ui->propertiesTable->setItem(
+                row, 0, new QTableWidgetItem(summary.first));
+            ui->propertiesTable->setItem(
+                row, 1, new QTableWidgetItem(summary.second));
+            ++row;
+        }
     } else if (selectionCount == 1
                && index >= 0 && index < col.points().size()) {
         const PointRecord &rec = col.points()[index];
@@ -1458,9 +1810,16 @@ void MainWindow::onWorkspaceTabChanged(int index)
 void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 {
     if (!viewer) {
-        ui->actionPan->setChecked(false);
+        {
+            const QSignalBlocker panBlocker(ui->actionPan);
+            const QSignalBlocker zoomBlocker(ui->actionZoom);
+            ui->actionPan->setChecked(false);
+            ui->actionZoom->setChecked(false);
+        }
         ui->actionPan->setEnabled(false);
+        ui->actionZoom->setEnabled(false);
         ui->actionSyncSplitViews->setEnabled(false);
+        ui->actionSyncSplitZoom->setEnabled(false);
         ui->actionEditPoints->setChecked(false);
         ui->actionEditPoints->setEnabled(false);
         ui->actionCancelEdit->setEnabled(false);
@@ -1470,12 +1829,20 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         return;
     }
 
-    ui->actionPan->setChecked(viewer->panModeEnabled());
+    {
+        const QSignalBlocker panBlocker(ui->actionPan);
+        const QSignalBlocker zoomBlocker(ui->actionZoom);
+        ui->actionPan->setChecked(viewer->panModeEnabled());
+        ui->actionZoom->setChecked(viewer->zoomModeEnabled());
+    }
     ui->actionPan->setEnabled(true);
+    ui->actionZoom->setEnabled(true);
 
     // Enable sync only if the viewer is inside a QSplitter with siblings
     auto *splitter = qobject_cast<QSplitter*>(viewer->parentWidget());
-    ui->actionSyncSplitViews->setEnabled(splitter && splitter->count() > 1);
+    const bool hasSplitSiblings = splitter && splitter->count() > 1;
+    ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
+    ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
 
     LayerManager *mgr = viewer->layerManager();
     Layer *active = mgr ? mgr->activeLayer() : nullptr;
@@ -1557,6 +1924,21 @@ void MainWindow::splitViewer()
 
     int idx = splitter->indexOf(viewer);
     splitter->insertWidget(idx + 1, newViewer);
+    newViewer->restoreView(viewer->viewTransform(), viewer->viewCenter());
+
+    const int totalWidth = splitter->width();
+    if (totalWidth > 0) {
+        QList<int> sizes;
+        sizes.reserve(splitter->count());
+        const int baseSize = totalWidth / splitter->count();
+        for (int i = 0; i < splitter->count(); ++i)
+            sizes.append(baseSize);
+        splitter->setSizes(sizes);
+    }
+
+    m_activeViewer = newViewer;
+    onActiveViewerChanged(newViewer);
+    updateProjectActions();
     newViewer->setFocus();
 }
 
@@ -1962,6 +2344,7 @@ void MainWindow::saveProjectSession()
     session["schema_version"] = 2;
     session["current_tab"] = ui->workspaceTabs->currentIndex();
     session["sync_split_views"] = ImageViewer::syncEnabled();
+    session["sync_split_zoom"] = ImageViewer::syncZoomEnabled();
     session["tabs"] = tabs;
 
     const QString sessionDirectory =
@@ -2190,6 +2573,10 @@ void MainWindow::restoreProjectSession()
         session.value("sync_split_views").toBool(false);
     ui->actionSyncSplitViews->setChecked(sync);
     ImageViewer::setSyncEnabled(sync);
+    const bool syncZoom =
+        session.value("sync_split_zoom").toBool(true);
+    ui->actionSyncSplitZoom->setChecked(syncZoom);
+    ImageViewer::setSyncZoomEnabled(syncZoom);
     updateProjectActions();
 }
 
@@ -2213,7 +2600,15 @@ void MainWindow::updateProjectActions()
     ui->actionSaveProjectAsCleanCopy->setEnabled(hasProject);
     ui->actionProjectReport->setEnabled(hasProject);
     ui->actionCloseProject->setEnabled(hasProject);
-    ui->actionPan->setEnabled(currentImageViewer() != nullptr);
+    ImageViewer *viewer = currentImageViewer();
+    ui->actionPan->setEnabled(viewer != nullptr);
+    ui->actionZoom->setEnabled(viewer != nullptr);
+    auto *splitter = viewer
+        ? qobject_cast<QSplitter*>(viewer->parentWidget())
+        : nullptr;
+    const bool hasSplitSiblings = splitter && splitter->count() > 1;
+    ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
+    ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
@@ -2649,6 +3044,11 @@ void MainWindow::updatePropertiesForPointLayer(PointLayer *layer)
 void MainWindow::onSyncSplitViewsToggled(bool checked)
 {
     ImageViewer::setSyncEnabled(checked);
+}
+
+void MainWindow::onSyncSplitZoomToggled(bool checked)
+{
+    ImageViewer::setSyncZoomEnabled(checked);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)

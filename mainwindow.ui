@@ -61,8 +61,12 @@
      <property name="title">
       <string>View</string>
      </property>
+     <addaction name="actionPan"/>
+     <addaction name="actionZoom"/>
+     <addaction name="separator"/>
      <addaction name="actionSplitViewer"/>
      <addaction name="actionSyncSplitViews"/>
+     <addaction name="actionSyncSplitZoom"/>
      <addaction name="separator"/>
      <addaction name="actionResetWindowLayout"/>
     </widget>
@@ -73,11 +77,19 @@
      <addaction name="actionBuildMetadataRules"/>
      <addaction name="actionValidateCollectionMetadata"/>
     </widget>
+    <widget class="QMenu" name="menuHelp">
+     <property name="title">
+      <string>Help</string>
+     </property>
+     <addaction name="actionExampleProjects"/>
+     <addaction name="actionAboutRcaimanProjects"/>
+    </widget>
     <addaction name="menuProject"/>
     <addaction name="menuImage"/>
     <addaction name="menuPoint"/>
     <addaction name="menuRegistry"/>
     <addaction name="menuView"/>
+    <addaction name="menuHelp"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QMenu" name="menuRecentProjects">
@@ -97,6 +109,7 @@
     <bool>false</bool>
    </attribute>
     <addaction name="actionPan"/>
+    <addaction name="actionZoom"/>
     <addaction name="actionEditPoints"/>
     <addaction name="actionCancelEdit"/>
     <addaction name="separator"/>
@@ -319,6 +332,18 @@
 Hold Space for temporary pan from any interaction mode.</string>
    </property>
   </action>
+  <action name="actionZoom">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Zoom</string>
+   </property>
+   <property name="toolTip">
+    <string>Zoom view
+Hold Z for temporary zoom from any interaction mode.</string>
+   </property>
+  </action>
   <action name="actionCreatePoints">
    <property name="text">
     <string>Create...</string>
@@ -388,12 +413,39 @@ Click empty space to add, drag a point to move it, and Alt+click to delete.</str
     <string>Sync</string>
    </property>
    <property name="toolTip">
-    <string>Synchronize pan and zoom between split viewers.</string>
+    <string>Synchronize pan between split viewers.</string>
+   </property>
+  </action>
+  <action name="actionSyncSplitZoom">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Sync zoom</string>
+   </property>
+   <property name="toolTip">
+    <string>Synchronize zoom between split viewers.</string>
    </property>
   </action>
   <action name="actionResetWindowLayout">
    <property name="text">
     <string>Reset window layout</string>
+   </property>
+  </action>
+  <action name="actionAboutRcaimanProjects">
+   <property name="text">
+    <string>About rcaiman.projects</string>
+   </property>
+  </action>
+  <action name="actionExampleProjects">
+   <property name="text">
+    <string>Example projects...</string>
    </property>
   </action>
  </widget>
