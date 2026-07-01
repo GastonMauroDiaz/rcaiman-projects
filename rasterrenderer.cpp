@@ -5,49 +5,30 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include <vector>
+
+constexpr qsizetype MaxRenderRangeSamples = 262144;
 
 // ============================================================================
 // Range computation — template definitions come FIRST
 // ============================================================================
 
 template<typename T>
-static void computeMinMaxForBand(const RasterData &data, int band,
-                                  double &outMin, double &outMax)
-{
-    const T *ptr = data.bandPointer<T>(band);
-    if (!ptr) {
-        outMin = 0.0;
-        outMax = 1.0;
-        return;
-    }
-
-    const qsizetype n = static_cast<qsizetype>(data.width()) * data.height();
-    double mn = std::numeric_limits<double>::infinity();
-    double mx = -std::numeric_limits<double>::infinity();
-
-    for (qsizetype i = 0; i < n; ++i) {
-        const double v = static_cast<double>(ptr[i]);
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
-    }
-
-    outMin = mn;
-    outMax = mx;
-}
-
-template<typename T>
-static void collectFiniteValuesForBand(const RasterData &data, int band,
-                                       std::vector<double> &values)
+static void collectSampledValuesForBand(const RasterData &data, int band,
+                                        std::vector<double> &values)
 {
     const T *ptr = data.bandPointer<T>(band);
     if (!ptr)
         return;
 
     const qsizetype n = static_cast<qsizetype>(data.width()) * data.height();
-    values.reserve(static_cast<size_t>(n));
+    const qsizetype stride =
+        std::max<qsizetype>(1, (n + MaxRenderRangeSamples - 1)
+                                   / MaxRenderRangeSamples);
+    values.reserve(static_cast<size_t>(std::min(n, MaxRenderRangeSamples)));
 
-    for (qsizetype i = 0; i < n; ++i) {
+    for (qsizetype i = 0; i < n; i += stride) {
         const double v = static_cast<double>(ptr[i]);
         if (!std::isfinite(v))
             continue;
@@ -414,41 +395,79 @@ void RasterRenderer::renderRange(const RasterData &data, int band,
     computeRenderRange(data, band, style, outMin, outMax);
 }
 
-void RasterRenderer::computeRange(const RasterData &data, int band,
-                                   double &outMin, double &outMax) const
+const RasterRenderer::BandStats &RasterRenderer::bandStats(
+    const RasterData &data, int band) const
 {
     const int b = std::clamp(band, 0, data.bands() - 1);
+    for (const BandStats &stats : m_bandStatsCache) {
+        if (stats.data == &data
+            && stats.band == b
+            && stats.dataType == data.dataType()
+            && stats.width == data.width()
+            && stats.height == data.height()) {
+            return stats;
+        }
+    }
+
+    BandStats stats;
+    stats.data = &data;
+    stats.band = b;
+    stats.dataType = data.dataType();
+    stats.width = data.width();
+    stats.height = data.height();
 
     switch (data.dataType()) {
     case RasterData::DataType::UInt8:
-        computeMinMaxForBand<uint8_t>(data, b, outMin, outMax);
+        collectSampledValuesForBand<uint8_t>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::UInt16:
-        computeMinMaxForBand<uint16_t>(data, b, outMin, outMax);
+        collectSampledValuesForBand<uint16_t>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::Int16:
-        computeMinMaxForBand<int16_t>(data, b, outMin, outMax);
+        collectSampledValuesForBand<int16_t>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::UInt32:
-        computeMinMaxForBand<uint32_t>(data, b, outMin, outMax);
+        collectSampledValuesForBand<uint32_t>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::Int32:
-        computeMinMaxForBand<int32_t>(data, b, outMin, outMax);
+        collectSampledValuesForBand<int32_t>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::Float32:
-        computeMinMaxForBand<float>(data, b, outMin, outMax);
+        collectSampledValuesForBand<float>(data, b, stats.sortedSamples);
         break;
     case RasterData::DataType::Float64:
-        computeMinMaxForBand<double>(data, b, outMin, outMax);
+        collectSampledValuesForBand<double>(data, b, stats.sortedSamples);
         break;
     default:
+        break;
+    }
+
+    if (!stats.sortedSamples.empty()) {
+        std::sort(stats.sortedSamples.begin(), stats.sortedSamples.end());
+        stats.min = stats.sortedSamples.front();
+        stats.max = stats.sortedSamples.back();
+        if (std::abs(stats.max - stats.min) < 1e-10)
+            stats.max = stats.min + 1.0;
+    }
+
+    m_bandStatsCache.push_back(std::move(stats));
+    constexpr size_t MaximumStatsEntries = 16;
+    while (m_bandStatsCache.size() > MaximumStatsEntries)
+        m_bandStatsCache.erase(m_bandStatsCache.begin());
+    return m_bandStatsCache.back();
+}
+
+void RasterRenderer::computeRange(const RasterData &data, int band,
+                                   double &outMin, double &outMax) const
+{
+    const BandStats &stats = bandStats(data, band);
+    if (stats.sortedSamples.empty()) {
         outMin = 0.0;
         outMax = 1.0;
         return;
     }
-
-    if (std::abs(outMax - outMin) < 1e-10)
-        outMax = outMin + 1.0;
+    outMin = stats.min;
+    outMax = stats.max;
 }
 
 void RasterRenderer::computeRenderRange(const RasterData &data, int band,
@@ -474,44 +493,20 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
         return;
     }
 
-    std::vector<double> values;
-    switch (data.dataType()) {
-    case RasterData::DataType::UInt8:
-        collectFiniteValuesForBand<uint8_t>(data, b, values);
-        break;
-    case RasterData::DataType::UInt16:
-        collectFiniteValuesForBand<uint16_t>(data, b, values);
-        break;
-    case RasterData::DataType::Int16:
-        collectFiniteValuesForBand<int16_t>(data, b, values);
-        break;
-    case RasterData::DataType::UInt32:
-        collectFiniteValuesForBand<uint32_t>(data, b, values);
-        break;
-    case RasterData::DataType::Int32:
-        collectFiniteValuesForBand<int32_t>(data, b, values);
-        break;
-    case RasterData::DataType::Float32:
-        collectFiniteValuesForBand<float>(data, b, values);
-        break;
-    case RasterData::DataType::Float64:
-        collectFiniteValuesForBand<double>(data, b, values);
-        break;
-    default:
-        break;
-    }
+    const BandStats &stats = bandStats(data, b);
+    const std::vector<double> &values = stats.sortedSamples;
 
     if (values.empty()) {
-        computeRange(data, b, outMin, outMax);
+        outMin = 0.0;
+        outMax = 1.0;
         return;
     }
 
-    std::sort(values.begin(), values.end());
     if (!style.tailTrim
         || style.trimPercent <= 0.0
         || (!style.trimLeftTail && !style.trimRightTail)) {
-        outMin = values.front();
-        outMax = values.back();
+        outMin = stats.min;
+        outMax = stats.max;
     } else {
         const double trim = std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
         const double lastIndex = static_cast<double>(values.size() - 1);
@@ -525,9 +520,9 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
             outMax = values[highIndex];
         } else if (style.trimLeftTail) {
             outMin = values[lowIndex];
-            outMax = values.back();
+            outMax = stats.max;
         } else {
-            outMin = values.front();
+            outMin = stats.min;
             outMax = values[highIndex];
         }
     }

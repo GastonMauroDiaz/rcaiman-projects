@@ -198,12 +198,16 @@ void LayersDock::setProjectPath(const QString &path)
 void LayersDock::setLayerManager(LayerManager *manager)
 {
     if (m_manager) {
+        for (int i = 0; i < m_manager->layerCount(); ++i) {
+            if (Layer *layer = m_manager->layerAt(i))
+                disconnect(layer, nullptr, this, nullptr);
+        }
         disconnect(m_manager, nullptr, this, nullptr);
     }
 
     // Disconnect tracked layer
     if (m_trackedLayer) {
-        disconnect(m_trackedLayer, nullptr, this, nullptr);
+        disconnect(m_trackedFlickerConnection);
         m_trackedLayer = nullptr;
     }
     if (m_propertiesWidget)
@@ -253,6 +257,9 @@ void LayersDock::updateList()
                     this, &LayersDock::onLayerStyleChanged,
                     Qt::UniqueConnection);
         }
+        connect(layer, &Layer::visibilityChanged,
+                this, &LayersDock::onLayerVisibilityChanged,
+                Qt::UniqueConnection);
     }
 
     if (m_manager->activeLayer()) {
@@ -283,6 +290,23 @@ void LayersDock::onLayerStyleChanged()
 
     if (QListWidgetItem *item = m_listWidget->item(index))
         item->setIcon(pointLayerIcon(layer));
+}
+
+void LayersDock::onLayerVisibilityChanged(bool visible)
+{
+    if (!m_manager || m_updatingList)
+        return;
+
+    auto *layer = qobject_cast<Layer*>(sender());
+    const int index = m_manager->indexOf(layer);
+    if (index < 0)
+        return;
+
+    if (QListWidgetItem *item = m_listWidget->item(index)) {
+        m_listWidget->blockSignals(true);
+        item->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
+        m_listWidget->blockSignals(false);
+    }
 }
 
 QIcon LayersDock::pointLayerIcon(const Layer *layer) const
@@ -436,7 +460,7 @@ void LayersDock::onCurrentRowChanged(int row)
 {
     // Disconnect previous tracked layer
     if (m_trackedLayer) {
-        disconnect(m_trackedLayer, nullptr, this, nullptr);
+        disconnect(m_trackedFlickerConnection);
         m_trackedLayer = nullptr;
     }
 
@@ -457,11 +481,12 @@ void LayersDock::onCurrentRowChanged(int row)
         m_propertiesWidget->setLayer(layer);
 
     // Connect to flickerChanged to sync button state
-    connect(layer, &Layer::flickerChanged, this, [this](bool enabled) {
-        m_flickerBtn->blockSignals(true);
-        m_flickerBtn->setChecked(enabled);
-        m_flickerBtn->blockSignals(false);
-    });
+    m_trackedFlickerConnection =
+        connect(layer, &Layer::flickerChanged, this, [this](bool enabled) {
+            m_flickerBtn->blockSignals(true);
+            m_flickerBtn->setChecked(enabled);
+            m_flickerBtn->blockSignals(false);
+        });
 
     // Update controls to match current layer state
     m_flickerBtn->blockSignals(true);

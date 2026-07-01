@@ -3,6 +3,7 @@
 
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QMetaObject>
 #include <QWidget>
 
 class QListWidget;
@@ -42,6 +43,7 @@ private slots:
     void onFlickerSpeedChanged(double seconds);
     void onCurrentRowChanged(int row);
     void onLayerStyleChanged();
+    void onLayerVisibilityChanged(bool visible);
     void onRowsMoved(const QModelIndex &sourceParent,
                      int sourceStart,
                      int sourceEnd,
@@ -64,6 +66,7 @@ private:
     bool m_updatingList = false;
     QString m_projectPath;
     Layer *m_trackedLayer = nullptr;
+    QMetaObject::Connection m_trackedFlickerConnection;
 };
 
 #endif // LAYERSDOCK_H

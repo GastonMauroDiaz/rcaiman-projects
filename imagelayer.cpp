@@ -6,6 +6,7 @@
 #include <QGraphicsScene>
 #include <QImage>
 #include <QMessageBox>
+#include <QTimer>
 #include <QWidget>
 #include <QtGlobal>
 
@@ -13,7 +14,13 @@
 
 ImageLayer::ImageLayer(const QString &filePath, QObject *parent)
     : Layer(QFileInfo(filePath).fileName(), filePath, parent)
+    , m_renderRefreshTimer(new QTimer(this))
 {
+    m_renderRefreshTimer->setSingleShot(true);
+    m_renderRefreshTimer->setInterval(60);
+    connect(m_renderRefreshTimer, &QTimer::timeout,
+            this, &ImageLayer::refreshRenderedImageNow);
+
     QString errorMessage;
     m_rasterData = TiffReader::load(filePath, &errorMessage);
     if (m_rasterData.isNull()) {
@@ -70,6 +77,7 @@ bool ImageLayer::reloadFromDisk(QString *errorMessage)
     }
 
     m_rasterData = std::move(reloaded);
+    ++m_dataRevision;
     if (m_pixmapItem) {
         m_pixmapItem->setPixmap(QPixmap::fromImage(image));
         applyStyleToItem();
@@ -80,6 +88,12 @@ bool ImageLayer::reloadFromDisk(QString *errorMessage)
 }
 
 void ImageLayer::setStyle(const ImageLayerStyle &style)
+{
+    setStyleInternal(style, false);
+}
+
+void ImageLayer::setStyleInternal(const ImageLayerStyle &style,
+                                  bool deferRender)
 {
     const bool opacityChanged = !qFuzzyCompare(m_style.opacity, style.opacity);
     const bool renderChanged =
@@ -103,10 +117,14 @@ void ImageLayer::setStyle(const ImageLayerStyle &style)
         return;
 
     m_style = style;
-    if (renderChanged)
-        refreshRenderedImage();
-    else
+    if (renderChanged) {
+        if (deferRender)
+            scheduleRenderRefresh();
+        else
+            refreshRenderedImageNow();
+    } else {
         applyStyleToItem();
+    }
     emit styleChanged();
 }
 
@@ -163,7 +181,9 @@ void ImageLayer::setTrimPercent(double percent)
 {
     RasterRenderStyle next = m_style.render;
     next.trimPercent = qBound(0.0, percent, 49.0);
-    setRenderStyle(next);
+    ImageLayerStyle style = m_style;
+    style.render = next;
+    setStyleInternal(style, true);
 }
 
 void ImageLayer::setManualRangeEnabled(bool enabled)
@@ -181,6 +201,16 @@ void ImageLayer::setManualRange(double minValue, double maxValue)
     setRenderStyle(next);
 }
 
+void ImageLayer::setManualRangeDeferred(double minValue, double maxValue)
+{
+    RasterRenderStyle next = m_style.render;
+    next.manualMin = minValue;
+    next.manualMax = maxValue;
+    ImageLayerStyle style = m_style;
+    style.render = next;
+    setStyleInternal(style, true);
+}
+
 void ImageLayer::setManualRange(bool enabled, double minValue, double maxValue)
 {
     RasterRenderStyle next = m_style.render;
@@ -194,7 +224,14 @@ void ImageLayer::setGamma(double gamma)
 {
     RasterRenderStyle next = m_style.render;
     next.gamma = qBound(1.0, gamma, 4.0);
-    setRenderStyle(next);
+    ImageLayerStyle style = m_style;
+    style.render = next;
+    setStyleInternal(style, true);
+}
+
+void ImageLayer::setGammaDeferred(double gamma)
+{
+    setGamma(gamma);
 }
 
 void ImageLayer::setRenderBand(int band)
@@ -225,6 +262,21 @@ void ImageLayer::applyStyleToItem()
 {
     if (m_pixmapItem)
         m_pixmapItem->setOpacity(m_style.opacity);
+}
+
+void ImageLayer::scheduleRenderRefresh()
+{
+    m_renderRefreshPending = true;
+    if (m_renderRefreshTimer)
+        m_renderRefreshTimer->start();
+}
+
+void ImageLayer::refreshRenderedImageNow()
+{
+    if (m_renderRefreshTimer)
+        m_renderRefreshTimer->stop();
+    m_renderRefreshPending = false;
+    refreshRenderedImage();
 }
 
 void ImageLayer::refreshRenderedImage()

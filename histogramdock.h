@@ -39,6 +39,7 @@ private:
         QString label;
         QColor color;
         QVector<quint64> bins;
+        QVector<double> sortedSamples;
         int band = 0;
         double rawMin = 0.0;
         double rawMax = 1.0;
@@ -46,9 +47,40 @@ private:
         double renderMax = 1.0;
     };
 
+    struct CacheKey {
+        QPointer<ImageLayer> layer;
+        quint64 dataRevision = 0;
+        int mode = 0;
+        int band0 = -1;
+        int band1 = -1;
+        int band2 = -1;
+    };
+
+    struct CacheEntry {
+        CacheKey key;
+        QVector<Series> series;
+        double displayMin = 0.0;
+        double displayMax = 1.0;
+    };
+
     void rebuild();
-    void addSeries(const QString &label, const QColor &color, int band);
-    void rebuildBins();
+    void rebuildNow();
+    void addSeries(QVector<Series> *series,
+                   const QString &label,
+                   const QColor &color,
+                   int band);
+    void rebuildBins(QVector<Series> *series,
+                     double *displayMin,
+                     double *displayMax) const;
+    CacheKey currentCacheKey() const;
+    bool cacheKeyMatches(const CacheKey &left, const CacheKey &right) const;
+    bool loadFromCache(const CacheKey &key);
+    void storeInCache(const CacheKey &key,
+                      const QVector<Series> &series,
+                      double displayMin,
+                      double displayMax);
+    void trimCache();
+    void updateRenderRanges();
     QString summaryText() const;
     QRect plotRectForSummary(const QString &summary) const;
     Handle handleAtPosition(const QPoint &position) const;
@@ -59,9 +91,12 @@ private:
 
     QPointer<ImageLayer> m_layer;
     QVector<Series> m_series;
+    QVector<CacheEntry> m_cache;
     Handle m_dragHandle = Handle::None;
     double m_displayMin = 0.0;
     double m_displayMax = 1.0;
+    bool m_computing = false;
+    bool m_rebuildQueued = false;
 };
 
 class HistogramDock : public QDockWidget

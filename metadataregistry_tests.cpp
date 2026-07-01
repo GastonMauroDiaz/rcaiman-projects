@@ -544,5 +544,17 @@ int main(int argc, char *argv[])
             "\terror\tMultiple RAW files with basename")) {
         return 57;
     }
+    QFile extractionDoc(
+        QDir(sidecarSensorDirectory).filePath("metadata_extraction.md"));
+    if (!extractionDoc.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 58;
+    }
+    const QByteArray extractionDocText = extractionDoc.readAll();
+    if (!extractionDocText.contains("Metadata extraction")
+        || !extractionDocText.contains("sensor_metadata_sidecar_tsv_v1")
+        || !extractionDocText.contains("read.delim")
+        || !extractionDocText.contains("LibRaw version")) {
+        return 59;
+    }
     return 0;
 }

@@ -6,6 +6,8 @@
 #include "rasterdata.h"
 #include "rasterrenderer.h"
 
+class QTimer;
+
 class ImageLayer : public Layer
 {
     Q_OBJECT
@@ -19,6 +21,7 @@ public:
     RasterRenderer &renderer() { return m_renderer; }
     QGraphicsPixmapItem *pixmapItem() const { return m_pixmapItem; }
     ImageLayerStyle style() const { return m_style; }
+    quint64 dataRevision() const { return m_dataRevision; }
     bool supportsReloadFromDisk() const override;
     bool reloadFromDisk(QString *errorMessage = nullptr) override;
     void setStyle(const ImageLayerStyle &style);
@@ -33,12 +36,17 @@ public:
     void setManualRangeEnabled(bool enabled);
     void setManualRange(double minValue, double maxValue);
     void setManualRange(bool enabled, double minValue, double maxValue);
+    void setManualRangeDeferred(double minValue, double maxValue);
     void setGamma(double gamma);
+    void setGammaDeferred(double gamma);
     void setRenderBand(int band);
     void setRenderMode(RasterRenderMode mode);
     void setRgbBands(int redBand, int greenBand, int blueBand);
+    void refreshRenderedImageNow();
 
 private:
+    void setStyleInternal(const ImageLayerStyle &style, bool deferRender);
+    void scheduleRenderRefresh();
     void applyStyleToItem();
     void refreshRenderedImage();
 
@@ -46,6 +54,9 @@ private:
     RasterRenderer m_renderer;
     ImageLayerStyle m_style;
     QGraphicsPixmapItem *m_pixmapItem = nullptr;
+    quint64 m_dataRevision = 0;
+    QTimer *m_renderRefreshTimer = nullptr;
+    bool m_renderRefreshPending = false;
 };
 
 #endif // IMAGELAYER_H
