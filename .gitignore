@@ -73,6 +73,13 @@ CMakeLists.txt.user*
 # --------
 *.dll
 *.exe
+*.pkg
+
+# Bundled third-party binaries prepared locally for official builds.
+/tools/exiftool/windows/**
+/tools/exiftool/unix/**
+!/tools/exiftool/windows/.gitkeep
+!/tools/exiftool/unix/.gitkeep
 
 # Directories with generated files
 .moc/
@@ -83,3 +90,4 @@ CMakeLists.txt.user*
 /build*/
 /.qtcreator/
 .aider*
+.Rproj.user

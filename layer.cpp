@@ -70,6 +70,18 @@ void Layer::setZOrder(int zOrder)
         item->setZValue(m_zOrder);
 }
 
+bool Layer::supportsReloadFromDisk() const
+{
+    return false;
+}
+
+bool Layer::reloadFromDisk(QString *errorMessage)
+{
+    if (errorMessage)
+        *errorMessage = QStringLiteral("This layer does not support reload from disk.");
+    return false;
+}
+
 void Layer::addToScene(QGraphicsScene *scene)
 {
     if (!scene)

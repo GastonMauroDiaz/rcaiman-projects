@@ -1,17 +1,33 @@
 # rcaiman project
 
-This directory follows the rcaiman project convention.
+This directory contains a project of the rcaiman suite.
 
-The application automatically discovers images, point sets, and other resources based on folder names and file names.
+Projects are managed with **rcaiman-projects**, a desktop application for 
+organizing canopy image analysis workflows.
 
-Additional folders and files may be created as needed. However, renaming standard folders may prevent automatic discovery of project resources.
+**Project homepage**
+
+https://github.com/GastonMauroDiaz/rcaiman-projects
+
+## Working with this project
+
+The application automatically discovers images, point sets and other project
+resources using documented folder and file naming conventions.
+
+You are free to add your own folders and files to this project whenever needed.
+
+Standard project folders and file names, however, have semantic meaning. Renaming or
+reorganizing them may prevent the application from automatically discovering 
+related resources.
 
 ## Design philosophy
 
 An rcaiman project is primarily a directory structure.
 
-The filesystem is considered the source of truth.
+The filesystem is the source of truth.
 
-The application interprets project contents but does not require a database or proprietary storage format.
+Rather than relying on databases or proprietary project formats, rcaiman-projects 
+interprets project contents through simple, documented conventions whenever possible.
 
-Project resources are discovered through documented conventions whenever possible.
+This makes projects easy to inspect, archive, version, share and understand using 
+standard filesystem tools.

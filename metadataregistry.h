@@ -47,6 +47,8 @@ public:
     static constexpr const char *Profile = "exiftool_g1_short_v1";
 
     static QString executablePath();
+    static QStringList candidateExecutablePaths();
+    static QString diagnostics();
     static bool isAvailable(QString *errorMessage = nullptr);
     static QString version(QString *errorMessage = nullptr);
     static bool extract(const QStringList &files,

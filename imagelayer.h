@@ -19,6 +19,8 @@ public:
     RasterRenderer &renderer() { return m_renderer; }
     QGraphicsPixmapItem *pixmapItem() const { return m_pixmapItem; }
     ImageLayerStyle style() const { return m_style; }
+    bool supportsReloadFromDisk() const override;
+    bool reloadFromDisk(QString *errorMessage = nullptr) override;
     void setStyle(const ImageLayerStyle &style);
     void setOpacity(double opacity);
     void setRenderStyle(const RasterRenderStyle &renderStyle);

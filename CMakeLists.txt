@@ -79,7 +79,6 @@ qt_add_executable(rcaiman_projects
     collectionautoload.h collectionautoload.cpp
     collectionstylefile.h collectionstylefile.cpp
     collectionstyledialog.h collectionstyledialog.cpp
-    cursorutils.h cursorutils.cpp
     metadataregistry.h metadataregistry.cpp
     metadatarulesdialog.h metadatarulesdialog.cpp
     registryvalidationdialog.h registryvalidationdialog.cpp
@@ -87,7 +86,12 @@ qt_add_executable(rcaiman_projects
     collectionvalidationdialog.h collectionvalidationdialog.cpp
     acquisitionmetadata.h acquisitionmetadata.cpp
     exampleprojectsdialog.h exampleprojectsdialog.cpp
+    shortcuttext.h shortcuttext.cpp
     resources.qrc
+)
+
+set_target_properties(rcaiman_projects PROPERTIES
+    OUTPUT_NAME "rcaiman-projects"
 )
 
 target_include_directories(rcaiman_projects
@@ -114,10 +118,24 @@ target_link_libraries(rcaiman_projects
         yaml-cpp
 )
 
+if(WIN32)
+    set(EXIFTOOL_BUNDLE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool/windows")
+elseif(APPLE)
+    set(EXIFTOOL_BUNDLE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool/unix")
+else()
+    set(EXIFTOOL_BUNDLE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool/unix")
+endif()
+
+if(APPLE)
+    set(EXIFTOOL_RUNTIME_DIR "$<TARGET_BUNDLE_DIR:rcaiman_projects>/Contents/Resources/exiftool")
+else()
+    set(EXIFTOOL_RUNTIME_DIR "$<TARGET_FILE_DIR:rcaiman_projects>/tools/exiftool")
+endif()
+
 add_custom_command(TARGET rcaiman_projects POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool"
-        "$<TARGET_FILE_DIR:rcaiman_projects>/tools/exiftool"
+        "${EXIFTOOL_BUNDLE_SOURCE_DIR}"
+        "${EXIFTOOL_RUNTIME_DIR}"
 )
 add_custom_command(TARGET rcaiman_projects POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -160,21 +178,27 @@ if(BUILD_TESTING)
         collectionvalidation.h collectionvalidation.cpp
         project.h project.cpp
         acquisitionmetadata.h acquisitionmetadata.cpp
+        rawreader.h rawreader.cpp
     )
-    target_link_libraries(metadataregistry_tests PRIVATE Qt::Core yaml-cpp)
+    target_link_libraries(metadataregistry_tests PRIVATE
+        Qt::Core
+        TIFF
+        LibRaw
+        yaml-cpp
+    )
     target_compile_definitions(metadataregistry_tests PRIVATE
         TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
     )
     add_custom_command(TARGET metadataregistry_tests POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/exiftool"
+            "${EXIFTOOL_BUNDLE_SOURCE_DIR}"
             "$<TARGET_FILE_DIR:metadataregistry_tests>/tools/exiftool"
     )
     add_test(NAME metadataregistry_tests COMMAND metadataregistry_tests)
     if(WIN32)
         set_tests_properties(metadataregistry_tests PROPERTIES
             ENVIRONMENT_MODIFICATION
-                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin"
+                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin;PATH=path_list_prepend:C:/msys64/mingw64/bin"
         )
     endif()
 endif()
@@ -184,10 +208,19 @@ install(TARGETS rcaiman_projects
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(DIRECTORY tools/exiftool
-    DESTINATION ${CMAKE_INSTALL_BINDIR}/tools
-)
+if(APPLE)
+    install(DIRECTORY ${EXIFTOOL_BUNDLE_SOURCE_DIR}/
+        DESTINATION rcaiman_projects.app/Contents/Resources/exiftool
+    )
+else()
+    install(DIRECTORY ${EXIFTOOL_BUNDLE_SOURCE_DIR}/
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/tools/exiftool
+    )
+endif()
 install(DIRECTORY assets/examples
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(FILES THIRD_PARTY_NOTICES.md
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 if(WIN32)

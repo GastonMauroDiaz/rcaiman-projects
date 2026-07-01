@@ -1,0 +1,4 @@
+schema_version: 1
+class: preprocessed_image_collection
+registry: preprocessed_images/entry_Nikon_Coolpix4500_FCE8_TO_raw.yaml
+script: scripts/01_preprocess_sensor_data.R

@@ -1,0 +1,104 @@
+schema_version: 1
+artifact: embedded_metadata_rules_draft
+created_with:
+  application: rcaiman.projects
+  exiftool_version: 13.59
+metadata_profile: exiftool_g1_short_v1
+source_images:
+  - raw_files/DSCN4666.NEF
+rules:
+  cfapattern:
+    group: Composite
+    tag: CFAPattern
+    label: CFAPattern
+    expected: "[Yellow,Cyan][Green,Magenta]"
+  exif_version:
+    group: ExifIFD
+    tag: ExifVersion
+    label: ExifVersion
+    expected: 0220
+  flash:
+    group: ExifIFD
+    tag: Flash
+    label: Flash
+    expected: Off, Did not fire
+  gain_control:
+    group: ExifIFD
+    tag: GainControl
+    label: GainControl
+    expected: None
+  exif_tool_version:
+    group: ExifTool
+    tag: ExifToolVersion
+    label: ExifToolVersion
+    expected: 13.59
+  file_type:
+    group: File
+    tag: FileType
+    label: FileType
+    expected: NEF
+  file_type_extension:
+    group: File
+    tag: FileTypeExtension
+    label: FileTypeExtension
+    expected: nef
+  compression:
+    group: IFD0
+    tag: Compression
+    label: Compression
+    expected: Uncompressed
+  make:
+    group: IFD0
+    tag: Make
+    label: Make
+    expected: NIKON
+  model:
+    group: IFD0
+    tag: Model
+    label: Model
+    expected: E5700
+  software:
+    group: IFD0
+    tag: Software
+    label: Software
+    expected: E4500v1.2
+  auxiliary_lens:
+    group: Nikon
+    tag: AuxiliaryLens
+    label: AuxiliaryLens
+    expected: Fisheye 1
+  digital_zoom:
+    group: Nikon
+    tag: DigitalZoom
+    label: DigitalZoom
+    expected: 1
+  focus_mode:
+    group: Nikon
+    tag: FocusMode
+    label: FocusMode
+    expected: AF-S
+  noise_reduction:
+    group: Nikon
+    tag: NoiseReduction
+    label: NoiseReduction
+    expected: Off
+  quality:
+    group: Nikon
+    tag: Quality
+    label: Quality
+    expected: RAW
+  bits_per_sample:
+    group: SubIFD
+    tag: BitsPerSample
+    label: BitsPerSample
+    expected: 12
+  image_height:
+    group: SubIFD
+    tag: ImageHeight
+    label: ImageHeight
+    expected: 1708
+  image_width:
+    group: SubIFD
+    tag: ImageWidth
+    label: ImageWidth
+    expected: 2288

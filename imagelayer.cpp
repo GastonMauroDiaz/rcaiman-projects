@@ -9,6 +9,8 @@
 #include <QWidget>
 #include <QtGlobal>
 
+#include <utility>
+
 ImageLayer::ImageLayer(const QString &filePath, QObject *parent)
     : Layer(QFileInfo(filePath).fileName(), filePath, parent)
 {
@@ -41,6 +43,40 @@ const QVector<QGraphicsItem*> &ImageLayer::buildItems(QGraphicsScene *scene)
 
     m_itemsBuilt = true;
     return m_items;
+}
+
+bool ImageLayer::supportsReloadFromDisk() const
+{
+    return true;
+}
+
+bool ImageLayer::reloadFromDisk(QString *errorMessage)
+{
+    QString loadError;
+    RasterData reloaded = TiffReader::load(sourcePath(), &loadError);
+    if (reloaded.isNull()) {
+        if (errorMessage)
+            *errorMessage = loadError.isEmpty()
+                ? QStringLiteral("Could not reload image.")
+                : loadError;
+        return false;
+    }
+
+    const QImage image = m_renderer.render(reloaded, m_style.render);
+    if (image.isNull()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Could not render reloaded image.");
+        return false;
+    }
+
+    m_rasterData = std::move(reloaded);
+    if (m_pixmapItem) {
+        m_pixmapItem->setPixmap(QPixmap::fromImage(image));
+        applyStyleToItem();
+    }
+
+    emit dataChanged();
+    return true;
 }
 
 void ImageLayer::setStyle(const ImageLayerStyle &style)

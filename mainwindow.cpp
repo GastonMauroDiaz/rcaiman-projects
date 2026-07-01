@@ -24,6 +24,7 @@
 #include "tiffreader.h"
 #include "rasterrenderer.h"
 #include "exampleprojectsdialog.h"
+#include "shortcuttext.h"
 
 #include <QAction>
 #include <QApplication>
@@ -38,6 +39,8 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
 #include <QItemSelectionModel>
@@ -50,6 +53,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QProcess>
 #include <QSizePolicy>
@@ -57,6 +61,7 @@
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QSet>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QTextBrowser>
@@ -66,6 +71,19 @@
 #include <QDateTime>
 
 namespace {
+QString normalizedArtifactPath(const QString &path)
+{
+    if (path.isEmpty())
+        return {};
+
+    QString normalized = QDir::cleanPath(
+        QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
 QJsonObject imageStyleToJson(const ImageLayerStyle &style)
 {
     const RasterRenderStyle &render = style.render;
@@ -157,26 +175,6 @@ bool samePath(const QString &left, const QString &right)
 #endif
 }
 
-QIcon zoomToolIcon()
-{
-    QPixmap pixmap(64, 64);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor(35, 35, 35));
-    pen.setWidthF(5.0);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(QPointF(27.0, 27.0), 14.0, 14.0);
-    painter.drawLine(QPointF(38.0, 38.0), QPointF(52.0, 52.0));
-    painter.drawLine(QPointF(27.0, 19.0), QPointF(27.0, 35.0));
-    painter.drawLine(QPointF(19.0, 27.0), QPointF(35.0, 27.0));
-    return QIcon(pixmap);
-}
-
 QStringList exampleProjectRoots()
 {
     QStringList roots;
@@ -226,17 +224,58 @@ QVector<ExampleProjectInfo> discoverExampleProjects()
     return examples;
 }
 
+QPixmap circularThumbnail(const QString &resourcePath, int size)
+{
+    const QPixmap original(resourcePath);
+    if (original.isNull())
+        return {};
+
+    QPixmap scaled =
+        original.scaled(size, size,
+                        Qt::KeepAspectRatioByExpanding,
+                        Qt::SmoothTransformation);
+    const QRect cropRect(
+        (scaled.width() - size) / 2,
+        (scaled.height() - size) / 2,
+        size,
+        size);
+    scaled = scaled.copy(cropRect);
+
+    QPixmap thumbnail(size, size);
+    thumbnail.fill(Qt::transparent);
+
+    QPainter painter(&thumbnail);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPainterPath clipPath;
+    clipPath.addEllipse(QRectF(0.5, 0.5, size - 1.0, size - 1.0));
+    painter.setClipPath(clipPath);
+    painter.drawPixmap(0, 0, scaled);
+    painter.setClipping(false);
+    painter.setPen(QPen(QColor(220, 220, 220), 1.0));
+    painter.drawEllipse(QRectF(0.5, 0.5, size - 1.0, size - 1.0));
+
+    return thumbnail;
+}
+
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , m_projectFileSystemModel(new ProjectFileSystemModel(this))
+    , m_artifactWatcher(new QFileSystemWatcher(this))
 {
     ui->setupUi(this);
     setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
     qApp->setWindowIcon(windowIcon());
-    ui->actionZoom->setIcon(zoomToolIcon());
+    ui->actionPan->setToolTip(ShortcutText::panTooltip());
+    ui->actionZoom->setToolTip(ShortcutText::zoomTooltip());
+    ui->actionEditPoints->setToolTip(ShortcutText::editPointsTooltip());
+
+    connect(m_artifactWatcher, &QFileSystemWatcher::fileChanged,
+            this, [this](const QString &path) {
+                scheduleArtifactReload(path);
+            });
 
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     ui->projectTree->setModel(m_projectFileSystemModel);
@@ -407,6 +446,10 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::showAboutDialog);
+    connect(ui->actionInteractionShortcuts,
+            &QAction::triggered,
+            this,
+            &MainWindow::showInteractionShortcutsDialog);
     connect(ui->actionExampleProjects,
             &QAction::triggered,
             this,
@@ -537,21 +580,42 @@ MainWindow::~MainWindow()
 void MainWindow::showAboutDialog()
 {
     QDialog dialog(this);
-    dialog.setWindowTitle("About rcaiman.projects");
+    dialog.setWindowTitle("About rcaiman-projects");
     dialog.setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
 
     auto *layout = new QVBoxLayout(&dialog);
 
+    auto *brandSceneLayout = new QHBoxLayout();
+    brandSceneLayout->setSpacing(14);
+    brandSceneLayout->addStretch();
+    const QStringList hemisphericImages = {
+        ":/branding/hemispheric-1.jpg",
+        ":/branding/hemispheric-2.jpg",
+        ":/branding/hemispheric-3.jpg"
+    };
+    for (const QString &imagePath : hemisphericImages) {
+        const QPixmap thumbnail = circularThumbnail(imagePath, 56);
+        if (thumbnail.isNull())
+            continue;
+        auto *imageLabel = new QLabel(&dialog);
+        imageLabel->setFixedSize(56, 56);
+        imageLabel->setPixmap(thumbnail);
+        brandSceneLayout->addWidget(imageLabel);
+    }
+
     QPixmap iconPixmap(":/branding/rcaiman-icon.png");
     if (!iconPixmap.isNull()) {
         auto *iconLabel = new QLabel(&dialog);
+        iconLabel->setFixedSize(88, 88);
         iconLabel->setAlignment(Qt::AlignCenter);
         iconLabel->setPixmap(
-            iconPixmap.scaled(96, 96,
+            iconPixmap.scaled(88, 88,
                               Qt::KeepAspectRatio,
                               Qt::SmoothTransformation));
-        layout->addWidget(iconLabel);
+        brandSceneLayout->addWidget(iconLabel);
     }
+    brandSceneLayout->addStretch();
+    layout->addLayout(brandSceneLayout);
 
     QPixmap logoPixmap(":/branding/rcaiman-projects-logo.png");
     if (!logoPixmap.isNull()) {
@@ -567,12 +631,34 @@ void MainWindow::showAboutDialog()
     if (aboutFile.open(QIODevice::ReadOnly | QIODevice::Text))
         aboutText = QString::fromUtf8(aboutFile.readAll());
     if (aboutText.trimmed().isEmpty())
-        aboutText = "rcaiman.projects";
+        aboutText = "rcaiman-projects";
 
     auto *textBrowser = new QTextBrowser(&dialog);
     textBrowser->setOpenExternalLinks(true);
     textBrowser->setMarkdown(aboutText);
     textBrowser->setMinimumSize(460, 180);
+    layout->addWidget(textBrowser);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted,
+            &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    dialog.exec();
+}
+
+void MainWindow::showInteractionShortcutsDialog()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle("Interaction shortcuts");
+    dialog.setWindowIcon(windowIcon());
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *textBrowser = new QTextBrowser(&dialog);
+    textBrowser->setMarkdown(ShortcutText::interactionShortcutsMarkdown());
+    textBrowser->setMinimumSize(520, 420);
     layout->addWidget(textBrowser);
 
     auto *buttons =
@@ -1009,6 +1095,7 @@ void MainWindow::extractRawData()
     }
 
     updateProjectActions();
+    refreshReloadableArtifactWatchers();
 }
 
 void MainWindow::registerCollection()
@@ -1130,11 +1217,14 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     QAction *deleteAction = menu.addAction("Delete");
 
     QAction *registerAction = nullptr;
+    QAction *createPointsAction = nullptr;
     QAction *styleAction = nullptr;
     QAction *validateCollectionAction = nullptr;
     if (info.isDir()) {
         menu.addSeparator();
         registerAction = menu.addAction("Register collection...");
+        createPointsAction =
+            menu.addAction("Create empty point layer...");
         styleAction = menu.addAction("Edit collection style...");
         validateCollectionAction =
             menu.addAction("Validate collection...");
@@ -1160,10 +1250,14 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     }
     const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
+    const bool supportsCreatePoints = info.isDir() && hasRegisteredCollection
+        && selectedCollection.collectionClass == "point_collection";
     const bool supportsCollectionValidation =
         info.isDir() && hasRegisteredCollection
         && CollectionValidation::isEligible(
             m_project.rootPath(), selectedCollection);
+    if (createPointsAction)
+        createPointsAction->setEnabled(supportsCreatePoints);
     if (styleAction)
         styleAction->setEnabled(supportsStyle);
     if (validateCollectionAction)
@@ -1255,6 +1349,10 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (registerAction) {
         connect(registerAction, &QAction::triggered,
                 this, &MainWindow::registerCollection);
+    }
+    if (createPointsAction) {
+        connect(createPointsAction, &QAction::triggered,
+                this, &MainWindow::createPointsCsv);
     }
     if (styleAction) {
         connect(styleAction, &QAction::triggered,
@@ -1567,6 +1665,7 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
     onActiveViewerChanged(viewer);
 
     updateProjectActions();
+    refreshReloadableArtifactWatchers();
 }
 
 void MainWindow::onLayerSelectionChanged(int index)
@@ -1756,6 +1855,14 @@ void MainWindow::onEditPointsToggled(bool enabled)
     ImageViewer *viewer = currentImageViewer();
     if (!viewer)
         return;
+
+    if (enabled) {
+        if (ui->actionPan->isChecked())
+            ui->actionPan->setChecked(false);
+        if (ui->actionZoom->isChecked())
+            ui->actionZoom->setChecked(false);
+    }
+
     viewer->setPointEditEnabled(enabled);
 
     // Update Cancel edit button state
@@ -2081,6 +2188,8 @@ void MainWindow::configureViewer(ImageViewer *viewer)
 
     connect(viewer, &ImageViewer::pixelInfoChanged,
             this, &MainWindow::updatePropertiesTable);
+    connect(viewer->layerManager(), &LayerManager::layersChanged,
+            this, &MainWindow::refreshReloadableArtifactWatchers);
     connect(viewer, &ImageViewer::activatedByClick, this, [this, viewer]() {
         if (m_activeViewer == viewer)
             return;
@@ -2121,6 +2230,7 @@ void MainWindow::configureViewer(ImageViewer *viewer)
         v->hide();
         v->setParent(nullptr);
         v->deleteLater();
+        refreshReloadableArtifactWatchers();
 
         if (m_activeViewer == v) {
             auto *remainingViewer = qobject_cast<ImageViewer*>(splitter->widget(0));
@@ -2130,6 +2240,167 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                 remainingViewer->setFocus();
         }
     });
+    refreshReloadableArtifactWatchers();
+}
+
+QList<Layer*> MainWindow::reloadableLayersForPath(const QString &path) const
+{
+    const QString target = normalizedArtifactPath(path);
+    QList<Layer*> result;
+    if (target.isEmpty())
+        return result;
+
+    for (int tabIndex = 0; tabIndex < ui->workspaceTabs->count(); ++tabIndex) {
+        auto *splitter =
+            qobject_cast<QSplitter*>(ui->workspaceTabs->widget(tabIndex));
+        if (!splitter)
+            continue;
+
+        for (int panelIndex = 0; panelIndex < splitter->count(); ++panelIndex) {
+            auto *viewer =
+                qobject_cast<ImageViewer*>(splitter->widget(panelIndex));
+            if (!viewer || !viewer->layerManager())
+                continue;
+
+            LayerManager *manager = viewer->layerManager();
+            for (int layerIndex = 0; layerIndex < manager->layerCount(); ++layerIndex) {
+                Layer *layer = manager->layerAt(layerIndex);
+                if (!layer || !layer->supportsReloadFromDisk())
+                    continue;
+                if (normalizedArtifactPath(layer->sourcePath()) == target)
+                    result.append(layer);
+            }
+        }
+    }
+
+    return result;
+}
+
+void MainWindow::refreshReloadableArtifactWatchers()
+{
+    if (!m_artifactWatcher)
+        return;
+
+    QHash<QString, QString> desiredPaths;
+    for (int tabIndex = 0; tabIndex < ui->workspaceTabs->count(); ++tabIndex) {
+        auto *splitter =
+            qobject_cast<QSplitter*>(ui->workspaceTabs->widget(tabIndex));
+        if (!splitter)
+            continue;
+
+        for (int panelIndex = 0; panelIndex < splitter->count(); ++panelIndex) {
+            auto *viewer =
+                qobject_cast<ImageViewer*>(splitter->widget(panelIndex));
+            if (!viewer || !viewer->layerManager())
+                continue;
+
+            LayerManager *manager = viewer->layerManager();
+            for (int layerIndex = 0; layerIndex < manager->layerCount(); ++layerIndex) {
+                Layer *layer = manager->layerAt(layerIndex);
+                if (!layer || !layer->supportsReloadFromDisk())
+                    continue;
+
+                const QString path = QFileInfo(layer->sourcePath()).absoluteFilePath();
+                if (QFileInfo::exists(path))
+                    desiredPaths.insert(normalizedArtifactPath(path), path);
+            }
+        }
+    }
+
+    const QStringList watched = m_artifactWatcher->files();
+    for (const QString &path : watched) {
+        if (!desiredPaths.contains(normalizedArtifactPath(path)))
+            m_artifactWatcher->removePath(path);
+    }
+
+    QSet<QString> watchedKeys;
+    for (const QString &path : m_artifactWatcher->files())
+        watchedKeys.insert(normalizedArtifactPath(path));
+
+    for (auto it = desiredPaths.cbegin(); it != desiredPaths.cend(); ++it) {
+        if (!watchedKeys.contains(it.key()))
+            m_artifactWatcher->addPath(it.value());
+    }
+}
+
+void MainWindow::scheduleArtifactReload(const QString &path, int delayMs)
+{
+    const QString key = normalizedArtifactPath(path);
+    if (key.isEmpty())
+        return;
+
+    if (!m_pendingReloadAttempts.contains(key))
+        m_pendingReloadAttempts.insert(key, 0);
+
+    if (m_scheduledArtifactReloads.contains(key))
+        return;
+    m_scheduledArtifactReloads.insert(key);
+
+    QTimer::singleShot(delayMs, this, [this, key]() {
+        m_scheduledArtifactReloads.remove(key);
+        reloadArtifactFromDisk(key);
+    });
+}
+
+void MainWindow::reloadArtifactFromDisk(const QString &path)
+{
+    const QString key = normalizedArtifactPath(path);
+    if (key.isEmpty())
+        return;
+
+    QList<Layer*> layers = reloadableLayersForPath(key);
+    if (layers.isEmpty()) {
+        m_pendingReloadAttempts.remove(key);
+        refreshReloadableArtifactWatchers();
+        return;
+    }
+
+    const QString sourcePath = layers.first()->sourcePath();
+    const QFileInfo info(sourcePath);
+    QString errorMessage;
+    bool ok = info.exists() && info.isFile();
+    if (ok) {
+        for (Layer *layer : std::as_const(layers)) {
+            if (!layer->reloadFromDisk(&errorMessage)) {
+                ok = false;
+                break;
+            }
+        }
+    } else {
+        errorMessage = QStringLiteral("File is not available yet.");
+    }
+
+    if (!ok) {
+        const int attempts = m_pendingReloadAttempts.value(key, 0) + 1;
+        m_pendingReloadAttempts.insert(key, attempts);
+        if (attempts <= 8) {
+            statusBar()->showMessage(
+                QStringLiteral("Waiting for stable image: %1")
+                    .arg(info.fileName()),
+                1500);
+            scheduleArtifactReload(sourcePath, 500);
+            refreshReloadableArtifactWatchers();
+            return;
+        }
+
+        m_pendingReloadAttempts.remove(key);
+        statusBar()->showMessage(
+            QStringLiteral("Could not reload image: %1")
+                .arg(info.fileName()),
+            5000);
+        qWarning() << "Hot reload failed for" << sourcePath << errorMessage;
+        refreshReloadableArtifactWatchers();
+        return;
+    }
+
+    m_pendingReloadAttempts.remove(key);
+    refreshReloadableArtifactWatchers();
+    statusBar()->showMessage(
+        QStringLiteral("Reloaded image: %1").arg(info.fileName()),
+        3000);
+
+    if (m_activeViewer)
+        onActiveViewerChanged(m_activeViewer);
 }
 
 void MainWindow::loadProject(const Project &project)
@@ -2139,7 +2410,7 @@ void MainWindow::loadProject(const Project &project)
     m_project = project;
     updateProjectExplorer();
     updateProjectActions();
-    setWindowTitle(QString("%1 - rcaiman_projects").arg(m_project.name()));
+    setWindowTitle(QString("%1 - rcaiman-projects").arg(m_project.name()));
     if (m_layersDock)
         m_layersDock->setProjectPath(m_project.rootPath());
     if (m_previewDock)
@@ -2168,6 +2439,10 @@ void MainWindow::closeCurrentProject()
     }
 
     m_openImageTabs.clear();
+    m_pendingReloadAttempts.clear();
+    m_scheduledArtifactReloads.clear();
+    if (m_artifactWatcher)
+        m_artifactWatcher->removePaths(m_artifactWatcher->files());
     m_activeViewer.clear();
     onActiveViewerChanged(nullptr);
 
@@ -2185,7 +2460,7 @@ void MainWindow::closeCurrentProject()
     ui->projectTree->setRootIndex(
         m_projectFileSystemModel->setRootPath(QString()));
     clearPropertiesTable();
-    setWindowTitle("rcaiman_projects");
+    setWindowTitle("rcaiman-projects");
     updateProjectActions();
 }
 
@@ -2578,6 +2853,7 @@ void MainWindow::restoreProjectSession()
     ui->actionSyncSplitZoom->setChecked(syncZoom);
     ImageViewer::setSyncZoomEnabled(syncZoom);
     updateProjectActions();
+    refreshReloadableArtifactWatchers();
 }
 
 void MainWindow::updateProjectExplorer()
@@ -3165,10 +3441,15 @@ void MainWindow::createPointsCsv()
         return;
     }
 
-    Collection selectedCollection;
-    if (pointCollections.size() == 1) {
+    Collection selectedCollection = collectionForPath(selectedProjectPath());
+    if (selectedCollection.collectionClass != "point_collection") {
+        selectedCollection = {};
+    }
+
+    if (selectedCollection.collectionClass != "point_collection"
+        && pointCollections.size() == 1) {
         selectedCollection = pointCollections.first();
-    } else {
+    } else if (selectedCollection.collectionClass != "point_collection") {
         QStringList collectionNames;
         for (const Collection &collection : pointCollections)
             collectionNames.append(collection.dirName);

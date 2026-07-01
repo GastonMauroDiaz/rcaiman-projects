@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>rcaiman-projects</string>
   </property>
   <widget class="QWidget" name="centralwidget"/>
   <widget class="QMenuBar" name="menubar">
@@ -42,54 +42,55 @@
     <addaction name="separator"/>
     <addaction name="menuRecentProjects"/>
    </widget>
-    <widget class="QMenu" name="menuImage">
-     <property name="title">
-      <string>Image</string>
-     </property>
-     <addaction name="actionOpen_Image"/>
-     <addaction name="actionValidateImageMetadata"/>
-    </widget>
-    <widget class="QMenu" name="menuPoint">
-     <property name="title">
-      <string>Point</string>
-     </property>
-     <addaction name="actionCreatePoints"/>
-     <addaction name="actionEditPoints"/>
-     <addaction name="actionCancelEdit"/>
-    </widget>
-    <widget class="QMenu" name="menuView">
-     <property name="title">
-      <string>View</string>
-     </property>
-     <addaction name="actionPan"/>
-     <addaction name="actionZoom"/>
-     <addaction name="separator"/>
-     <addaction name="actionSplitViewer"/>
-     <addaction name="actionSyncSplitViews"/>
-     <addaction name="actionSyncSplitZoom"/>
-     <addaction name="separator"/>
-     <addaction name="actionResetWindowLayout"/>
-    </widget>
-    <widget class="QMenu" name="menuRegistry">
-     <property name="title">
-      <string>Registry</string>
-     </property>
-     <addaction name="actionBuildMetadataRules"/>
-     <addaction name="actionValidateCollectionMetadata"/>
-    </widget>
-    <widget class="QMenu" name="menuHelp">
-     <property name="title">
-      <string>Help</string>
-     </property>
-     <addaction name="actionExampleProjects"/>
-     <addaction name="actionAboutRcaimanProjects"/>
-    </widget>
-    <addaction name="menuProject"/>
-    <addaction name="menuImage"/>
-    <addaction name="menuPoint"/>
-    <addaction name="menuRegistry"/>
-    <addaction name="menuView"/>
-    <addaction name="menuHelp"/>
+   <widget class="QMenu" name="menuImage">
+    <property name="title">
+     <string>Image</string>
+    </property>
+    <addaction name="actionOpen_Image"/>
+    <addaction name="actionValidateImageMetadata"/>
+   </widget>
+   <widget class="QMenu" name="menuPoint">
+    <property name="title">
+     <string>Point</string>
+    </property>
+    <addaction name="actionCreatePoints"/>
+    <addaction name="actionEditPoints"/>
+    <addaction name="actionCancelEdit"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>View</string>
+    </property>
+    <addaction name="actionPan"/>
+    <addaction name="actionZoom"/>
+    <addaction name="separator"/>
+    <addaction name="actionSplitViewer"/>
+    <addaction name="actionSyncSplitViews"/>
+    <addaction name="actionSyncSplitZoom"/>
+    <addaction name="separator"/>
+    <addaction name="actionResetWindowLayout"/>
+   </widget>
+   <widget class="QMenu" name="menuRegistry">
+    <property name="title">
+     <string>Registry</string>
+    </property>
+    <addaction name="actionBuildMetadataRules"/>
+    <addaction name="actionValidateCollectionMetadata"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>Help</string>
+    </property>
+    <addaction name="actionExampleProjects"/>
+    <addaction name="actionInteractionShortcuts"/>
+    <addaction name="actionAboutRcaimanProjects"/>
+   </widget>
+   <addaction name="menuProject"/>
+   <addaction name="menuImage"/>
+   <addaction name="menuPoint"/>
+   <addaction name="menuRegistry"/>
+   <addaction name="menuView"/>
+   <addaction name="menuHelp"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
   <widget class="QMenu" name="menuRecentProjects">
@@ -108,14 +109,14 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-    <addaction name="actionPan"/>
-    <addaction name="actionZoom"/>
-    <addaction name="actionEditPoints"/>
-    <addaction name="actionCancelEdit"/>
-    <addaction name="separator"/>
-    <addaction name="actionSplitViewer"/>
-    <addaction name="actionSyncSplitViews"/>
-   </widget>
+   <addaction name="actionPan"/>
+   <addaction name="actionZoom"/>
+   <addaction name="actionEditPoints"/>
+   <addaction name="actionCancelEdit"/>
+   <addaction name="separator"/>
+   <addaction name="actionSplitViewer"/>
+   <addaction name="actionSyncSplitViews"/>
+  </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">
     <string>Project Explorer</string>
@@ -180,7 +181,7 @@
    <widget class="QWidget" name="dockLayersContents">
     <layout class="QVBoxLayout" name="dockLayersLayout">
      <item>
-      <widget class="LayersDock" name="layersDock"/>
+      <widget class="LayersDock" name="layersDock" native="true"/>
      </item>
     </layout>
    </widget>
@@ -293,29 +294,29 @@
     <string>Validate collection...</string>
    </property>
   </action>
-   <action name="actionImportRaw">
-    <property name="text">
-     <string>Import raw...</string>
-    </property>
-   </action>
-   <action name="actionExtractRawData">
-    <property name="text">
-     <string>Extract raw data</string>
-    </property>
-    <property name="enabled">
-     <bool>false</bool>
-    </property>
-   </action>
-   <action name="actionRegisterCollection">
-    <property name="text">
-     <string>Register collection...</string>
-    </property>
-   </action>
-   <action name="actionRecentDummy">
-    <property name="text">
-     <string>(empty)</string>
-    </property>
-   </action>
+  <action name="actionImportRaw">
+   <property name="text">
+    <string>Import raw...</string>
+   </property>
+  </action>
+  <action name="actionExtractRawData">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Extract raw data</string>
+   </property>
+  </action>
+  <action name="actionRegisterCollection">
+   <property name="text">
+    <string>Register collection...</string>
+   </property>
+  </action>
+  <action name="actionRecentDummy">
+   <property name="text">
+    <string>(empty)</string>
+   </property>
+  </action>
   <action name="actionPan">
    <property name="checkable">
     <bool>true</bool>
@@ -336,6 +337,9 @@ Hold Space for temporary pan from any interaction mode.</string>
    <property name="checkable">
     <bool>true</bool>
    </property>
+   <property name="icon">
+    <iconset theme="QIcon::ThemeIcon::ZoomIn"/>
+   </property>
    <property name="text">
     <string>Zoom</string>
    </property>
@@ -346,7 +350,7 @@ Hold Z for temporary zoom from any interaction mode.</string>
   </action>
   <action name="actionCreatePoints">
    <property name="text">
-    <string>Create...</string>
+    <string>Create empty point layer...</string>
    </property>
   </action>
   <action name="actionEditPoints">
@@ -362,7 +366,7 @@ Hold Z for temporary zoom from any interaction mode.</string>
    </property>
    <property name="toolTip">
     <string>Edit the active point layer.
-Click empty space to add, drag a point to move it, and Alt+click to delete.</string>
+Click empty space to add, drag a point to move it, and use the platform delete modifier to delete.</string>
    </property>
   </action>
   <action name="actionCancelEdit">
@@ -440,7 +444,7 @@ Click empty space to add, drag a point to move it, and Alt+click to delete.</str
   </action>
   <action name="actionAboutRcaimanProjects">
    <property name="text">
-    <string>About rcaiman.projects</string>
+    <string>About rcaiman-projects</string>
    </property>
   </action>
   <action name="actionExampleProjects">
@@ -448,13 +452,13 @@ Click empty space to add, drag a point to move it, and Alt+click to delete.</str
     <string>Example projects...</string>
    </property>
   </action>
+  <action name="actionInteractionShortcuts">
+   <property name="text">
+    <string>Interaction shortcuts...</string>
+   </property>
+  </action>
  </widget>
  <customwidgets>
-  <customwidget>
-   <class>ImageViewer</class>
-   <extends>QGraphicsView</extends>
-   <header>imageviewer.h</header>
-  </customwidget>
   <customwidget>
    <class>LayersDock</class>
    <extends>QWidget</extends>

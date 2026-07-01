@@ -1,16 +1,17 @@
 <RCC>
     <qresource prefix="/icons">
         <file alias="hand-pan.png">assets/icons/hand-gloves_13387215.png</file>
-        <file alias="select-point.png">assets/icons/select-point.png</file>
-        <file alias="edit-points-target.png">assets/icons/edit-points-target.png</file>
-        <file alias="edit-points-target-cursor.png">assets/icons/edit-points-target_cursor.png</file>
-        <file alias="edit-points-target-cancel.png">assets/icons/edit-points-target-cancel.png</file>
-        <file alias="split.png">assets/icons/split.png</file>
-        <file alias="sync.png">assets/icons/sync.png</file>
+        <file alias="edit-points-target.png">assets/icons/edit-icon-64.png</file>
+        <file alias="edit-points-target-cancel.png">assets/icons/edit-cancel-icon-64.png</file>
+        <file alias="split.png">assets/icons/split-view-64.png</file>
+        <file alias="sync.png">assets/icons/split-view-sync-64.png</file>
     </qresource>
     <qresource prefix="/branding">
         <file alias="rcaiman-projects-logo.png">assets/branding/rcaiman-projects-logo.png</file>
         <file alias="rcaiman-icon.png">assets/branding/rcaiman-icon/7x/icon@7x.png</file>
+        <file alias="hemispheric-1.jpg">assets/branding/DSCN4347.JPG</file>
+        <file alias="hemispheric-2.jpg">assets/branding/DSCN4357.JPG</file>
+        <file alias="hemispheric-3.jpg">assets/branding/DSCN4487.JPG</file>
         <file alias="about.md">assets/branding/about.md</file>
     </qresource>
 </RCC>

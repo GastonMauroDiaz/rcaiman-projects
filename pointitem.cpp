@@ -1,5 +1,4 @@
 #include "pointitem.h"
-#include "cursorutils.h"
 
 #include <QCursor>
 #include <QGraphicsSceneHoverEvent>
@@ -10,10 +9,12 @@
 namespace {
 QCursor pointInteractionCursor()
 {
-    return highDpiCursor(
-        QStringLiteral(":/icons/select-point.png"),
-        QPoint(16, 2),
-        Qt::PointingHandCursor);
+    return QCursor(Qt::PointingHandCursor);
+}
+
+QCursor pointDragCursor()
+{
+    return QCursor(Qt::ClosedHandCursor);
 }
 }
 
@@ -176,7 +177,7 @@ void PointItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
         if (flags() & QGraphicsItem::ItemIsMovable) {
             m_dragging = true;
             m_dragStartPos = pos();
-            setCursor(pointInteractionCursor());
+            setCursor(pointDragCursor());
         }
     }
 
@@ -186,6 +187,7 @@ void PointItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 void PointItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
     if (m_dragging) {
+        setCursor(pointDragCursor());
         QGraphicsEllipseItem::mouseMoveEvent(event);
     }
 }

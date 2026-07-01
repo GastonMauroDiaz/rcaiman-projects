@@ -19,6 +19,11 @@ class LayerManager;
 class ImageLayer;
 class PointLayer;
 
+enum class ZoomCursorDirection {
+    In,
+    Out
+};
+
 struct PixelInfo {
     int row = -1;
     int col = -1;
@@ -95,6 +100,7 @@ private:
     void beginPointBoxSelection(const QPoint &pos);
     void updatePointBoxSelection(const QPoint &pos);
     void finishPointBoxSelection(const QPoint &pos);
+    void setZoomCursorDirection(ZoomCursorDirection direction);
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
@@ -112,6 +118,7 @@ private:
     QString m_primarySourcePath;
     QPointer<PointLayer> m_editingPointLayer;
     QPoint m_zoomDragLastPos;
+    ZoomCursorDirection m_zoomCursorDirection = ZoomCursorDirection::In;
     QPoint m_pointBoxOrigin;
     QRect m_pointBoxRect;
     Qt::KeyboardModifiers m_pointBoxModifiers;

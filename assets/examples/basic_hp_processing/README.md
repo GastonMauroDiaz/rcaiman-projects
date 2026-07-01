@@ -1,17 +1,15 @@
-# rcaiman project
+Raw file courtesy of Mait Lang (lang@to.ee)
 
-This directory follows the rcaiman project convention.
+# Pasos
 
-The application automatically discovers images, point sets, and other resources based on folder names and file names.
+1) Import raw files via Project>Import raw
+2) Extract sensor data via Project>Extract raw data (Resulta obvia la necesidad de renombrar a Extract sensor data)
+3) Extract rules for the embedded metadata signature via Registry>Build metadata rules...
+4) create folder preprocess_images in project via New folder
+5) run 01_preprocess in RStudio
+6) register the folder as collection preprocess image via Registry>Register collection
+7) create sky_points and sun_marks folders via New folder
+8) Register these folders as point collection via Registry>Register collection
+9) create a poins file in each folder with the name of the image via Point>Create...
 
-Additional folders and files may be created as needed. However, renaming standard folders may prevent automatic discovery of project resources.
 
-## Design philosophy
-
-An rcaiman project is primarily a directory structure.
-
-The filesystem is considered the source of truth.
-
-The application interprets project contents but does not require a database or proprietary storage format.
-
-Project resources are discovered through documented conventions whenever possible.

@@ -1,8 +1,82 @@
 {
-    "current_tab": -1,
+    "current_tab": 0,
     "schema_version": 2,
     "sync_split_views": false,
     "sync_split_zoom": true,
     "tabs": [
+        {
+            "active_panel": 0,
+            "panels": [
+                {
+                    "center": [
+                        369.7712606195994,
+                        338.17768059400134
+                    ],
+                    "layers": [
+                        {
+                            "name": "sky_points/dscn4666.csv",
+                            "point_style": {
+                                "color": "#ffff00ff",
+                                "label_field": "",
+                                "label_size": 10,
+                                "size": 10,
+                                "symbol": 1
+                            },
+                            "source": "sky_points/dscn4666.csv",
+                            "type": "points",
+                            "visible": true
+                        },
+                        {
+                            "name": "sun_marks/dscn4666.csv",
+                            "point_style": {
+                                "color": "#ffffff00",
+                                "label_field": "",
+                                "label_size": 10,
+                                "size": 20,
+                                "symbol": 0
+                            },
+                            "source": "sun_marks/dscn4666.csv",
+                            "type": "points",
+                            "visible": true
+                        },
+                        {
+                            "image_style": {
+                                "band": 0,
+                                "blue_band": 2,
+                                "gamma": 2.2,
+                                "green_band": 1,
+                                "mode": 1,
+                                "opacity": 1,
+                                "ramp": 0,
+                                "red_band": 0,
+                                "stretch": 1,
+                                "tail_trim": false,
+                                "trim_percent": 2
+                            },
+                            "name": "preprocessed_images/dscn4666.tif",
+                            "source": "preprocessed_images/dscn4666.tif",
+                            "type": "image",
+                            "visible": true
+                        }
+                    ],
+                    "source": "preprocessed_images/dscn4666.tif",
+                    "transform": [
+                        3.956500019900289,
+                        0,
+                        0,
+                        0,
+                        3.956500019900289,
+                        0,
+                        0,
+                        0,
+                        1
+                    ]
+                }
+            ],
+            "split_sizes": [
+                1132
+            ],
+            "title": "dscn4666.tif"
+        }
     ]
 }

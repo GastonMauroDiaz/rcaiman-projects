@@ -1,5 +1,4 @@
 #include "imageviewer.h"
-#include "cursorutils.h"
 #include "imagelayer.h"
 #include "layermanager.h"
 #include "layer.h"
@@ -16,6 +15,7 @@
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
+#include <QIcon>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -30,14 +30,20 @@
 namespace {
 QCursor editPointsCursor()
 {
-    return highDpiCursor(
-        QStringLiteral(":/icons/edit-points-target-cursor.png"),
-        QPoint(16, 16),
-        Qt::CrossCursor);
+    return QCursor(Qt::CrossCursor);
 }
 
-QCursor zoomCursor()
+QCursor zoomCursor(ZoomCursorDirection direction)
 {
+    QPixmap themePixmap =
+        QIcon::fromTheme(
+            direction == ZoomCursorDirection::Out
+                ? QIcon::ThemeIcon::ZoomOut
+                : QIcon::ThemeIcon::ZoomIn)
+            .pixmap(32, 32);
+    if (!themePixmap.isNull())
+        return QCursor(themePixmap, 15, 15);
+
     QPixmap pixmap(64, 64);
     pixmap.setDevicePixelRatio(2.0);
     pixmap.fill(Qt::transparent);
@@ -52,7 +58,8 @@ QCursor zoomCursor()
     painter.setBrush(Qt::NoBrush);
     painter.drawEllipse(QPointF(13.5, 13.5), 7.0, 7.0);
     painter.drawLine(QPointF(19.0, 19.0), QPointF(27.0, 27.0));
-    painter.drawLine(QPointF(13.5, 9.5), QPointF(13.5, 17.5));
+    if (direction == ZoomCursorDirection::In)
+        painter.drawLine(QPointF(13.5, 9.5), QPointF(13.5, 17.5));
     painter.drawLine(QPointF(9.5, 13.5), QPointF(17.5, 13.5));
     return QCursor(pixmap, 13, 13);
 }
@@ -296,7 +303,7 @@ void ImageViewer::updateDragMode()
     if (shouldPan) {
         viewport()->setCursor(Qt::OpenHandCursor);
     } else if (zoomInteractionActive()) {
-        viewport()->setCursor(zoomCursor());
+        viewport()->setCursor(zoomCursor(m_zoomCursorDirection));
     } else if (m_pointEditEnabled) {
         viewport()->setCursor(editPointsCursor());
     } else {
@@ -375,8 +382,9 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
     if (zoomInteractionActive() && event->button() == Qt::LeftButton) {
         m_zoomDragging = true;
         m_zoomDragLastPos = event->pos();
+        m_zoomCursorDirection = ZoomCursorDirection::In;
         m_autoFitImage = false;
-        viewport()->setCursor(zoomCursor());
+        viewport()->setCursor(zoomCursor(m_zoomCursorDirection));
         event->accept();
         return;
     }
@@ -416,6 +424,10 @@ void ImageViewer::applyDragZoom(const QPoint &pos)
     const int zoomDelta = delta.x() - delta.y();
     if (zoomDelta == 0)
         return;
+
+    setZoomCursorDirection(
+        zoomDelta > 0 ? ZoomCursorDirection::In
+                      : ZoomCursorDirection::Out);
 
     const QPointF center = viewCenter();
     const double factor = std::pow(1.01, zoomDelta);
@@ -500,6 +512,7 @@ void ImageViewer::mouseReleaseEvent(QMouseEvent *event)
 
     if (m_zoomDragging && event->button() == Qt::LeftButton) {
         m_zoomDragging = false;
+        m_zoomCursorDirection = ZoomCursorDirection::In;
         updateDragMode();
         event->accept();
         return;
@@ -567,6 +580,15 @@ void ImageViewer::finishPointBoxSelection(const QPoint &pos)
 
     const int primary = selected.isEmpty() ? -1 : *selected.constBegin();
     layer->setSelectedPointIndices(selected, primary);
+}
+
+void ImageViewer::setZoomCursorDirection(ZoomCursorDirection direction)
+{
+    if (m_zoomCursorDirection == direction)
+        return;
+    m_zoomCursorDirection = direction;
+    if (zoomInteractionActive())
+        viewport()->setCursor(zoomCursor(m_zoomCursorDirection));
 }
 
 // --- Drag & Drop ---

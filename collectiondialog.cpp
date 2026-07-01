@@ -306,7 +306,9 @@ void CollectionDialog::updateOkButton()
             projectRoot + QLatin1Char('/'), pathCaseSensitivity);
     bool enableOk = false;
 
-    if (collectionClass == "preprocessed_image_collection" || collectionClass == "other") {
+    if (collectionClass == "preprocessed_image_collection") {
+        enableOk = hasDirectory;
+    } else if (collectionClass == "other") {
         enableOk = hasDirectory && !m_registryEdit->text().isEmpty();
     } else if (collectionClass == "processed_image_collection") {
         enableOk = hasDirectory;

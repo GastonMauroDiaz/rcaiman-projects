@@ -228,29 +228,16 @@ int main(int argc, char *argv[])
     if (!report.stale)
         return 26;
 
-    const QString discoveredRegistry =
-        QDir(collectionDirectory).filePath("camera_registry.yaml");
-    if (!QFile::copy(exactRegistry, discoveredRegistry))
-        return 41;
     collection.registry.clear();
     QString resolvedRegistry;
     QString registryError;
-    if (!CollectionValidation::resolveRegistry(
+    if (CollectionValidation::resolveRegistry(
             projectRoot, collection, &resolvedRegistry, &registryError)
-        || QFileInfo(resolvedRegistry).absoluteFilePath()
-            != QFileInfo(discoveredRegistry).absoluteFilePath()) {
+        || !resolvedRegistry.isEmpty()
+        || !registryError.contains("No registry is declared")) {
         return 42;
     }
-    const QString secondRegistry =
-        QDir(collectionDirectory).filePath("second_registry.yaml");
-    if (!QFile::copy(exactRegistry, secondRegistry)
-        || CollectionValidation::resolveRegistry(
-            projectRoot, collection, &resolvedRegistry, &registryError)
-        || !registryError.contains("Multiple compatible registries")) {
-        return 43;
-    }
-    QFile::remove(secondRegistry);
-    QFile::remove(discoveredRegistry);
+    collection.registry = "registry_drafts/exact.yaml";
 
     const QString reviewedRegistry =
         QDir(registryDirectory).filePath("reviewed.yaml");
@@ -429,6 +416,18 @@ int main(int argc, char *argv[])
     directValues.exposureTimeSeconds = 0.005;
     directValues.hasExposureCompensation = true;
     directValues.exposureCompensationEv = -0.3333333333333333;
+    directValues.hasLibRawBlack = true;
+    directValues.libRawBlack = 512;
+    directValues.hasLibRawCblack = true;
+    directValues.libRawCblack[0] = 2;
+    directValues.libRawCblack[1] = 0;
+    directValues.libRawCblack[2] = 1;
+    directValues.libRawCblack[3] = 0;
+    directValues.dateTimeOriginal = "2026:06:29 10:15:30";
+    directValues.hasGpsLatitude = true;
+    directValues.gpsLatitude = -42.75;
+    directValues.hasGpsLongitude = true;
+    directValues.gpsLongitude = -71.25;
     const QString directSidecar =
         QDir(sidecarSensorDirectory).filePath("with spaces.tsv");
     if (!AcquisitionMetadata::writeSidecar(
@@ -445,10 +444,15 @@ int main(int argc, char *argv[])
     directSidecarFile.close();
     if (!directText.startsWith(
             "basename\traw_file\tsensor_file\taperture\t"
-            "exposure_time_seconds\tiso\texposure_compensation_ev\tmetadata_status\t"
+            "exposure_time_seconds\tiso\texposure_compensation_ev\t"
+            "libraw_black\tlibraw_cblack_0\tlibraw_cblack_1\t"
+            "libraw_cblack_2\tlibraw_cblack_3\tdate_time_original\t"
+            "gps_latitude\tgps_longitude\tgps_altitude\tmetadata_status\t"
             "metadata_error\n")
         || !directText.contains("raw_files/with spaces.NEF")
-        || !directText.contains("\t3.2\t0.005\t\t-0.3333333333333333\terror\t")
+        || !directText.contains(
+            "\t3.2\t0.005\t\t-0.3333333333333333\t512\t2\t0\t1\t0\t"
+            "2026:06:29 10:15:30\t-42.75\t-71.25\t\terror\t")
         || !directText.contains("\"tab\tquote \"\"value\"\"\n"
                                 "second line\"")) {
         return 51;
@@ -463,6 +467,13 @@ int main(int argc, char *argv[])
             "is.numeric(a$aperture),"
             "abs(a$exposure_time_seconds-0.005)<1e-12,"
             "abs(a$exposure_compensation_ev+1/3)<1e-12,"
+            "abs(a$libraw_black-512)<1e-12,"
+            "abs(a$libraw_cblack_0-2)<1e-12,"
+            "abs(a$libraw_cblack_1-0)<1e-12,"
+            "abs(a$libraw_cblack_2-1)<1e-12,"
+            "abs(a$libraw_cblack_3-0)<1e-12,"
+            "abs(a$gps_latitude+42.75)<1e-12,"
+            "abs(a$gps_longitude+71.25)<1e-12,"
             "is.na(a$iso))";
         QProcess parser;
         parser.start(rscript, {"-e", expression, directSidecar});

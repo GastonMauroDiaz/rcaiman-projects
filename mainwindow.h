@@ -11,12 +11,16 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QHash>
+#include <QList>
+#include <QSet>
 #include <QByteArray>
 
 class QCloseEvent;
 class QEvent;
+class QFileSystemWatcher;
 class ProjectFileSystemModel;
 class ImageViewer;
+class Layer;
 class LayerManager;
 class LayersDock;
 class QTableWidget;
@@ -73,6 +77,7 @@ private slots:
     void validateImageMetadata();
     void validateCollectionMetadata();
     void showAboutDialog();
+    void showInteractionShortcutsDialog();
     void createProjectFromExample();
 
 private:
@@ -108,9 +113,14 @@ private:
     bool validateRawImage(const QString &rawPath,
                           const QString &registryPath = {});
     Collection collectionForPath(const QString &path) const;
+    void refreshReloadableArtifactWatchers();
+    void scheduleArtifactReload(const QString &path, int delayMs = 500);
+    void reloadArtifactFromDisk(const QString &path);
+    QList<Layer*> reloadableLayersForPath(const QString &path) const;
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
+    QFileSystemWatcher *m_artifactWatcher = nullptr;
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
@@ -124,6 +134,8 @@ private:
     QHash<PointLayer*, QPointer<PointAttributeTableWindow>> m_attributeTables;
     QByteArray m_defaultWindowState;
     bool m_resetLayoutPending = false;
+    QHash<QString, int> m_pendingReloadAttempts;
+    QSet<QString> m_scheduledArtifactReloads;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

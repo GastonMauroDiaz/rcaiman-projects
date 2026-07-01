@@ -14,6 +14,17 @@ struct AcquisitionMetadataValues {
     double iso = 0.0;
     bool hasExposureCompensation = false;
     double exposureCompensationEv = 0.0;
+    bool hasLibRawBlack = false;
+    double libRawBlack = 0.0;
+    bool hasLibRawCblack = false;
+    double libRawCblack[4] = {0.0, 0.0, 0.0, 0.0};
+    QString dateTimeOriginal;
+    bool hasGpsLatitude = false;
+    double gpsLatitude = 0.0;
+    bool hasGpsLongitude = false;
+    double gpsLongitude = 0.0;
+    bool hasGpsAltitude = false;
+    double gpsAltitude = 0.0;
 };
 
 struct AcquisitionMetadataSummary {

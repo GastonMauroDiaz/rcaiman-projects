@@ -10,24 +10,39 @@
 
 #include <vector>
 
+namespace {
+
+bool openRawFile(const QString &rawFilePath,
+                 LibRaw *processor,
+                 QString *errorMessage)
+{
+    const QByteArray rawPath =
+        QFileInfo(rawFilePath).absoluteFilePath().toUtf8();
+    const int ret = processor->open_file(rawPath.constData());
+    if (ret != LIBRAW_SUCCESS) {
+        if (errorMessage)
+            *errorMessage =
+                QStringLiteral("Cannot open RAW file: %1\nLibRaw error: %2")
+                    .arg(rawFilePath,
+                         QString::fromLatin1(libraw_strerror(ret)));
+        return false;
+    }
+    return true;
+}
+
+}
+
 bool RawReader::extractSensorData(const QString &rawFilePath,
                                    const QString &tiffOutputPath,
                                    QString *errorMessage)
 {
-    const QByteArray rawPath = QFileInfo(rawFilePath).absoluteFilePath().toUtf8();
-
     // Open RAW file via LibRaw
     LibRaw processor;
-    int ret = processor.open_file(rawPath.constData());
-    if (ret != LIBRAW_SUCCESS) {
-        if (errorMessage)
-            *errorMessage = QStringLiteral("Cannot open RAW file: %1\nLibRaw error: %2")
-                                .arg(rawFilePath, QString::fromLatin1(libraw_strerror(ret)));
+    if (!openRawFile(rawFilePath, &processor, errorMessage))
         return false;
-    }
 
     // Unpack raw data (no processing, just raw Bayer data)
-    ret = processor.unpack();
+    int ret = processor.unpack();
     if (ret != LIBRAW_SUCCESS) {
         if (errorMessage)
             *errorMessage = QStringLiteral("Cannot unpack RAW data: %1\nLibRaw error: %2")
@@ -107,6 +122,40 @@ bool RawReader::extractSensorData(const QString &rawFilePath,
         }
     }
 
+    processor.recycle();
+    return true;
+}
+
+bool RawReader::readBlackLevels(const QString &rawFilePath,
+                                RawBlackLevels *blackLevels,
+                                QString *errorMessage)
+{
+    if (!blackLevels) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "Black level output is required.");
+        return false;
+    }
+
+    LibRaw processor;
+    if (!openRawFile(rawFilePath, &processor, errorMessage))
+        return false;
+
+    RawBlackLevels values;
+    const libraw_colordata_t &color = processor.imgdata.color;
+    if (color.black > 0) {
+        values.hasBlack = true;
+        values.black = static_cast<double>(color.black);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        values.cblack[static_cast<size_t>(i)] =
+            static_cast<double>(color.cblack[i]);
+        if (color.cblack[i] != 0)
+            values.hasCblack = true;
+    }
+
+    *blackLevels = values;
     processor.recycle();
     return true;
 }

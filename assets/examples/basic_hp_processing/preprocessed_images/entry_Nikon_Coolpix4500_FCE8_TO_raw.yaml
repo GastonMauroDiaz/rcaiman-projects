@@ -1,0 +1,185 @@
+schema_version: 2
+created_with:
+  package: rcaiman.registry
+  version: 0.1.1.9000
+  date: '2026-06-26'
+configuration:
+  embedded_metadata_sig: exif_01
+  geometry_spec: to_method
+  interpretive_constraint: spectral_bands
+  flat_field_correction: to_method
+registry_entry:
+  instrument_metadata:
+    id: Nikon_Coolpix4500.FCE8.TO
+    body:
+      model: CoolPix 4500
+      manufacturer: NIKON CORP
+      serial: ~
+    device: ~
+    lens: ~
+    auxiliary_lens:
+      model: FE-C8 ﬁsh-eye converter
+      manufacturer: NIKON CORP
+      serial: ~
+    institution: Tartu Observatory, Tõravere, Estonia
+  embedded_metadata_sig:
+    id: exif_01
+    dim:
+      - 1144
+      - 854
+    validated_with_libraw: 0.21.1
+    validated_with_exiftool: '13.59'
+    metadata_profile: exiftool_g1_short_v1
+    rules:
+      cfapattern:
+        group: Composite
+        tag: CFAPattern
+        label: CFAPattern
+        expected: '[Yellow,Cyan][Green,Magenta]'
+      exif_version:
+        group: ExifIFD
+        tag: ExifVersion
+        label: ExifVersion
+        expected: '0220'
+      flash:
+        group: ExifIFD
+        tag: Flash
+        label: Flash
+        expected: Off, Did not fire
+      gain_control:
+        group: ExifIFD
+        tag: GainControl
+        label: GainControl
+        expected: None
+      exif_tool_version:
+        group: ExifTool
+        tag: ExifToolVersion
+        label: ExifToolVersion
+        expected: '13.59'
+      file_type:
+        group: File
+        tag: FileType
+        label: FileType
+        expected: NEF
+      file_type_extension:
+        group: File
+        tag: FileTypeExtension
+        label: FileTypeExtension
+        expected: nef
+      compression:
+        group: IFD0
+        tag: Compression
+        label: Compression
+        expected: Uncompressed
+      make:
+        group: IFD0
+        tag: Make
+        label: Make
+        expected: NIKON
+      model:
+        group: IFD0
+        tag: Model
+        label: Model
+        expected: E5700
+      software:
+        group: IFD0
+        tag: Software
+        label: Software
+        expected: E4500v1.2
+      auxiliary_lens:
+        group: Nikon
+        tag: AuxiliaryLens
+        label: AuxiliaryLens
+        expected: Fisheye 1
+      digital_zoom:
+        group: Nikon
+        tag: DigitalZoom
+        label: DigitalZoom
+        expected: '1'
+      focus_mode:
+        group: Nikon
+        tag: FocusMode
+        label: FocusMode
+        expected: AF-S
+      noise_reduction:
+        group: Nikon
+        tag: NoiseReduction
+        label: NoiseReduction
+        expected: 'Off'
+      quality:
+        group: Nikon
+        tag: Quality
+        label: Quality
+        expected: RAW
+      bits_per_sample:
+        group: SubIFD
+        tag: BitsPerSample
+        label: BitsPerSample
+        expected: '12'
+      image_height:
+        group: SubIFD
+        tag: ImageHeight
+        label: ImageHeight
+        expected: '1708'
+      image_width:
+        group: SubIFD
+        tag: ImageWidth
+        label: ImageWidth
+        expected: '2288'
+    date: '2026-06-26'
+    file_sig: ~
+  geometry_spec:
+    id: to_method
+    parameters:
+      - 0.6945619
+      - -0.016246
+      - -0.0129494
+    zenith_col_row:
+      - 581
+      - 440
+    horizon_radius: 378
+    is_horizon_circle_clipped: no
+    max_zenith_angle: 94.8
+    date: '2026-06-26'
+    notes: |-
+      The Centre was estimated using dcraw -4 -D Full size: 2288 x 1708.
+          Measured diameter was adapted to rcaiman rules.
+    contact_information: gastonmaurodiaz@gmail.com
+  interpretive_constraint:
+    id: spectral_bands
+    type: interpretive_constraint
+    model: ~
+    rcaiman_version: ~
+    parameters: ~
+    data: ~
+    cfa_pattern:
+      - Green
+      - Magenta
+      - Yellow
+      - Cyan
+    spectral_mapping:
+      Red: (Yellow + Magenta)/2
+      Green: Green
+      Blue: Cyan
+    offset_value:
+      '100': 0
+    date: '2026-06-26'
+    notes: ~
+    contact_information: lang@to.ee
+  flat_field_correction:
+    id: to_method
+    type: flat_field_correction
+    model: ff_simple_polynomial
+    rcaiman_version: 2.6.3.9000
+    parameters:
+      '5.3':
+        - 0.0638
+        - -0.101
+    data: ~
+    cfa_pattern: ~
+    spectral_mapping: ~
+    offset_value: ~
+    date: '2026-06-26'
+    notes: 'Aperture do not influence vignetting. Aperture value reported in Lang
+      et al. (2010)''s fig. 5. '
+    contact_information: lang@to.ee

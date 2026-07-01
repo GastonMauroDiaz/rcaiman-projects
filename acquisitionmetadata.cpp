@@ -1,10 +1,12 @@
 #include "acquisitionmetadata.h"
+#include "rawreader.h"
 
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 
@@ -103,6 +105,24 @@ bool firstFiniteValue(
     return false;
 }
 
+QString firstTextValue(
+    const QList<MetadataObservation> &observations,
+    const QList<QPair<QString, QString>> &precedence)
+{
+    for (const auto &key : precedence) {
+        for (const MetadataObservation &observation : observations) {
+            if (observation.group.compare(
+                    key.first, Qt::CaseInsensitive) == 0
+                && observation.tag.compare(
+                    key.second, Qt::CaseInsensitive) == 0
+                && !observation.value.trimmed().isEmpty()) {
+                return observation.value.trimmed();
+            }
+        }
+    }
+    return {};
+}
+
 bool firstPositiveMakerNoteIso(
     const QList<MetadataObservation> &observations,
     double *value)
@@ -124,6 +144,75 @@ bool firstPositiveMakerNoteIso(
             if (value)
                 *value = candidate;
             return true;
+        }
+    }
+    return false;
+}
+
+bool coordinateValue(const QString &text,
+                     const QString &reference,
+                     double *value)
+{
+    const QString trimmed = text.trimmed();
+    double candidate = 0.0;
+    if (numericValue(trimmed, &candidate)) {
+        const QString ref = reference.trimmed().toUpper();
+        if ((ref == "S" || ref == "W") && candidate > 0.0)
+            candidate = -candidate;
+        if (value)
+            *value = candidate;
+        return true;
+    }
+
+    QRegularExpression numberExpression(
+        QStringLiteral("[-+]?\\d+(?:\\.\\d+)?"));
+    QRegularExpressionMatchIterator matches =
+        numberExpression.globalMatch(trimmed);
+    QList<double> parts;
+    while (matches.hasNext() && parts.size() < 3) {
+        bool ok = false;
+        const double part = matches.next().captured(0).toDouble(&ok);
+        if (ok)
+            parts.append(part);
+    }
+    if (parts.isEmpty())
+        return false;
+
+    candidate = std::abs(parts.value(0))
+        + std::abs(parts.value(1)) / 60.0
+        + std::abs(parts.value(2)) / 3600.0;
+
+    const QString upperText = trimmed.toUpper();
+    const QString upperRef = reference.trimmed().toUpper();
+    if (upperText.contains('S') || upperText.contains('W')
+        || upperRef == "S" || upperRef == "W"
+        || parts.first() < 0.0) {
+        candidate = -candidate;
+    }
+
+    if (value)
+        *value = candidate;
+    return true;
+}
+
+bool firstCoordinate(
+    const QList<MetadataObservation> &observations,
+    const QList<QPair<QString, QString>> &precedence,
+    const QList<QPair<QString, QString>> &referencePrecedence,
+    double *value)
+{
+    const QString reference =
+        firstTextValue(observations, referencePrecedence);
+    for (const auto &key : precedence) {
+        for (const MetadataObservation &observation : observations) {
+            if (observation.group.compare(
+                    key.first, Qt::CaseInsensitive) != 0
+                || observation.tag.compare(
+                    key.second, Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+            if (coordinateValue(observation.value, reference, value))
+                return true;
         }
     }
     return false;
@@ -213,6 +302,46 @@ AcquisitionMetadataValues AcquisitionMetadata::valuesFromObservations(
             {"ExifIFD", "ExposureCompensation"}
         },
         &values.exposureCompensationEv);
+    values.dateTimeOriginal = firstTextValue(
+        observations,
+        {
+            {"Composite", "SubSecDateTimeOriginal"},
+            {"ExifIFD", "DateTimeOriginal"},
+            {"ExifIFD", "CreateDate"},
+            {"IFD0", "ModifyDate"}
+        });
+    values.hasGpsLatitude = firstCoordinate(
+        observations,
+        {
+            {"Composite", "GPSLatitude"},
+            {"GPS", "GPSLatitude"},
+            {"ExifIFD", "GPSLatitude"}
+        },
+        {
+            {"GPS", "GPSLatitudeRef"},
+            {"ExifIFD", "GPSLatitudeRef"}
+        },
+        &values.gpsLatitude);
+    values.hasGpsLongitude = firstCoordinate(
+        observations,
+        {
+            {"Composite", "GPSLongitude"},
+            {"GPS", "GPSLongitude"},
+            {"ExifIFD", "GPSLongitude"}
+        },
+        {
+            {"GPS", "GPSLongitudeRef"},
+            {"ExifIFD", "GPSLongitudeRef"}
+        },
+        &values.gpsLongitude);
+    values.hasGpsAltitude = firstFiniteValue(
+        observations,
+        {
+            {"Composite", "GPSAltitude"},
+            {"GPS", "GPSAltitude"},
+            {"ExifIFD", "GPSAltitude"}
+        },
+        &values.gpsAltitude);
     return values;
 }
 
@@ -229,6 +358,9 @@ bool AcquisitionMetadata::writeSidecar(
     const QStringList header = {
         "basename", "raw_file", "sensor_file", "aperture",
         "exposure_time_seconds", "iso", "exposure_compensation_ev",
+        "libraw_black", "libraw_cblack_0", "libraw_cblack_1",
+        "libraw_cblack_2", "libraw_cblack_3", "date_time_original",
+        "gps_latitude", "gps_longitude", "gps_altitude",
         "metadata_status", "metadata_error"
     };
     const QStringList row = {
@@ -240,6 +372,15 @@ bool AcquisitionMetadata::writeSidecar(
         numberField(values.hasIso, values.iso),
         numberField(values.hasExposureCompensation,
                     values.exposureCompensationEv),
+        numberField(values.hasLibRawBlack, values.libRawBlack),
+        numberField(values.hasLibRawCblack, values.libRawCblack[0]),
+        numberField(values.hasLibRawCblack, values.libRawCblack[1]),
+        numberField(values.hasLibRawCblack, values.libRawCblack[2]),
+        numberField(values.hasLibRawCblack, values.libRawCblack[3]),
+        values.dateTimeOriginal,
+        numberField(values.hasGpsLatitude, values.gpsLatitude),
+        numberField(values.hasGpsLongitude, values.gpsLongitude),
+        numberField(values.hasGpsAltitude, values.gpsAltitude),
         status,
         error
     };
@@ -362,6 +503,18 @@ bool AcquisitionMetadata::regenerate(
                     status = "error";
                 } else {
                     values = valuesFromObservations(observations);
+                    RawBlackLevels blackLevels;
+                    QString blackLevelError;
+                    if (RawReader::readBlackLevels(
+                            rawPath, &blackLevels, &blackLevelError)) {
+                        values.hasLibRawBlack = blackLevels.hasBlack;
+                        values.libRawBlack = blackLevels.black;
+                        values.hasLibRawCblack = blackLevels.hasCblack;
+                        for (int i = 0; i < 4; ++i) {
+                            values.libRawCblack[i] =
+                                blackLevels.cblack[static_cast<size_t>(i)];
+                        }
+                    }
                 }
             }
         }

@@ -283,41 +283,10 @@ bool CollectionValidation::resolveRegistry(
         return true;
     }
 
-    QStringList candidates;
-    const QFileInfoList yamlFiles = QDir(collection.dirPath).entryInfoList(
-        {"*.yaml", "*.yml"}, QDir::Files | QDir::NoSymLinks,
-        QDir::Name);
-    for (const QFileInfo &file : yamlFiles) {
-        const QString name = file.fileName();
-        if (name.compare("collection.yaml", Qt::CaseInsensitive) == 0
-            || name.compare("style.yaml", Qt::CaseInsensitive) == 0) {
-            continue;
-        }
-        QList<MetadataRule> rules;
-        if (MetadataRegistry::readRules(
-                file.absoluteFilePath(), &rules, nullptr)) {
-            candidates.append(file.absoluteFilePath());
-        }
-    }
-    if (candidates.size() == 1) {
-        if (registryPath)
-            *registryPath = candidates.first();
-        return true;
-    }
     if (errorMessage) {
-        if (candidates.isEmpty()) {
-            *errorMessage =
-                "No compatible registry was declared in collection.yaml "
-                "or found inside the collection folder.";
-        } else {
-            QStringList names;
-            for (const QString &candidate : candidates)
-                names.append(QFileInfo(candidate).fileName());
-            *errorMessage =
-                QString("Multiple compatible registries were found: %1. "
-                        "Declare one with `registry:` in collection.yaml.")
-                    .arg(names.join(", "));
-        }
+        *errorMessage =
+            "No registry is declared in collection.yaml. "
+            "The collection is valid, but it is not eligible for registry validation.";
     }
     return false;
 }

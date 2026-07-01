@@ -33,6 +33,8 @@ public:
     // Construye y cachea los items gráficos.
     // Se llama una vez: en addLayer() o en el primer build necesario.
     virtual const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) = 0;
+    virtual bool supportsReloadFromDisk() const;
+    virtual bool reloadFromDisk(QString *errorMessage = nullptr);
 
     // Agrega los items cacheados a la escena (o los oculta según visibilidad)
     void addToScene(QGraphicsScene *scene);
@@ -54,6 +56,7 @@ signals:
     void nameChanged(const QString &name);
     void flickerChanged(bool enabled);
     void styleChanged();
+    void dataChanged();
 
 private slots:
     void onFlickerTick();
