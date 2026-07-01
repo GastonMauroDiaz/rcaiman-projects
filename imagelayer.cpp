@@ -87,7 +87,12 @@ void ImageLayer::setStyle(const ImageLayerStyle &style)
         m_style.render.colorRamp != style.render.colorRamp ||
         m_style.render.stretchMode != style.render.stretchMode ||
         m_style.render.tailTrim != style.render.tailTrim ||
+        m_style.render.trimLeftTail != style.render.trimLeftTail ||
+        m_style.render.trimRightTail != style.render.trimRightTail ||
         !qFuzzyCompare(m_style.render.trimPercent, style.render.trimPercent) ||
+        m_style.render.manualRangeEnabled != style.render.manualRangeEnabled ||
+        !qFuzzyCompare(m_style.render.manualMin, style.render.manualMin) ||
+        !qFuzzyCompare(m_style.render.manualMax, style.render.manualMax) ||
         !qFuzzyCompare(m_style.render.gamma, style.render.gamma) ||
         m_style.render.band != style.render.band ||
         m_style.render.redBand != style.render.redBand ||
@@ -140,10 +145,48 @@ void ImageLayer::setTailTrim(bool enabled)
     setRenderStyle(next);
 }
 
+void ImageLayer::setTrimLeftTail(bool enabled)
+{
+    RasterRenderStyle next = m_style.render;
+    next.trimLeftTail = enabled;
+    setRenderStyle(next);
+}
+
+void ImageLayer::setTrimRightTail(bool enabled)
+{
+    RasterRenderStyle next = m_style.render;
+    next.trimRightTail = enabled;
+    setRenderStyle(next);
+}
+
 void ImageLayer::setTrimPercent(double percent)
 {
     RasterRenderStyle next = m_style.render;
     next.trimPercent = qBound(0.0, percent, 49.0);
+    setRenderStyle(next);
+}
+
+void ImageLayer::setManualRangeEnabled(bool enabled)
+{
+    RasterRenderStyle next = m_style.render;
+    next.manualRangeEnabled = enabled;
+    setRenderStyle(next);
+}
+
+void ImageLayer::setManualRange(double minValue, double maxValue)
+{
+    RasterRenderStyle next = m_style.render;
+    next.manualMin = minValue;
+    next.manualMax = maxValue;
+    setRenderStyle(next);
+}
+
+void ImageLayer::setManualRange(bool enabled, double minValue, double maxValue)
+{
+    RasterRenderStyle next = m_style.render;
+    next.manualRangeEnabled = enabled;
+    next.manualMin = minValue;
+    next.manualMax = maxValue;
     setRenderStyle(next);
 }
 

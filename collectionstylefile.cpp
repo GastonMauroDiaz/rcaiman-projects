@@ -134,8 +134,18 @@ CollectionStyleData CollectionStyleFile::load(
             data.imageStyle.render.gamma = value.toDouble();
         } else if (key == "tail_trim") {
             data.imageStyle.render.tailTrim = parseBool(value);
+        } else if (key == "trim_left_tail") {
+            data.imageStyle.render.trimLeftTail = parseBool(value);
+        } else if (key == "trim_right_tail") {
+            data.imageStyle.render.trimRightTail = parseBool(value);
         } else if (key == "trim_percent") {
             data.imageStyle.render.trimPercent = value.toDouble();
+        } else if (key == "manual_range_enabled") {
+            data.imageStyle.render.manualRangeEnabled = parseBool(value);
+        } else if (key == "manual_min") {
+            data.imageStyle.render.manualMin = value.toDouble();
+        } else if (key == "manual_max") {
+            data.imageStyle.render.manualMax = value.toDouble();
         }
     }
     return data;
@@ -180,7 +190,15 @@ bool CollectionStyleFile::save(const QString &collectionDirectory,
         stream << "  gamma: " << render.gamma << "\n";
         stream << "  tail_trim: "
                << (render.tailTrim ? "true" : "false") << "\n";
+        stream << "  trim_left_tail: "
+               << (render.trimLeftTail ? "true" : "false") << "\n";
+        stream << "  trim_right_tail: "
+               << (render.trimRightTail ? "true" : "false") << "\n";
         stream << "  trim_percent: " << render.trimPercent << "\n";
+        stream << "  manual_range_enabled: "
+               << (render.manualRangeEnabled ? "true" : "false") << "\n";
+        stream << "  manual_min: " << render.manualMin << "\n";
+        stream << "  manual_max: " << render.manualMax << "\n";
     } else {
         if (errorMessage)
             *errorMessage = "Unsupported collection style.";

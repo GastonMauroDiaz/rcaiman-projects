@@ -401,6 +401,19 @@ QImage RasterRenderer::renderAuto(const RasterData &data) const
     return renderSingle(data, 0, mn, mx);
 }
 
+void RasterRenderer::rawRange(const RasterData &data, int band,
+                              double &outMin, double &outMax) const
+{
+    computeRange(data, band, outMin, outMax);
+}
+
+void RasterRenderer::renderRange(const RasterData &data, int band,
+                                 const RasterRenderStyle &style,
+                                 double &outMin, double &outMax) const
+{
+    computeRenderRange(data, band, style, outMin, outMax);
+}
+
 void RasterRenderer::computeRange(const RasterData &data, int band,
                                    double &outMin, double &outMax) const
 {
@@ -444,6 +457,18 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
 {
     const int b = std::clamp(band, 0, data.bands() - 1);
 
+    if (style.manualRangeEnabled) {
+        outMin = style.manualMin;
+        outMax = style.manualMax;
+        if (!std::isfinite(outMin))
+            outMin = 0.0;
+        if (!std::isfinite(outMax))
+            outMax = outMin + 1.0;
+        if (outMax <= outMin)
+            outMax = outMin + 1.0;
+        return;
+    }
+
     if (style.stretchMode == StretchMode::None) {
         computeRange(data, b, outMin, outMax);
         return;
@@ -482,15 +507,29 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
     }
 
     std::sort(values.begin(), values.end());
-    if (style.tailTrim && style.trimPercent > 0.0) {
-        const double trim = std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
-        const size_t lowIndex = static_cast<size_t>(trim * static_cast<double>(values.size() - 1));
-        const size_t highIndex = static_cast<size_t>((1.0 - trim) * static_cast<double>(values.size() - 1));
-        outMin = values[lowIndex];
-        outMax = values[highIndex];
-    } else {
+    if (!style.tailTrim
+        || style.trimPercent <= 0.0
+        || (!style.trimLeftTail && !style.trimRightTail)) {
         outMin = values.front();
         outMax = values.back();
+    } else {
+        const double trim = std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
+        const double lastIndex = static_cast<double>(values.size() - 1);
+        const size_t lowIndex =
+            static_cast<size_t>(std::ceil(trim * lastIndex));
+        const size_t highIndex =
+            static_cast<size_t>(std::floor((1.0 - trim) * lastIndex));
+
+        if (style.trimLeftTail && style.trimRightTail) {
+            outMin = values[lowIndex];
+            outMax = values[highIndex];
+        } else if (style.trimLeftTail) {
+            outMin = values[lowIndex];
+            outMax = values.back();
+        } else {
+            outMin = values.front();
+            outMax = values[highIndex];
+        }
     }
 
     if (std::abs(outMax - outMin) < 1e-10)

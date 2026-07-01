@@ -66,6 +66,7 @@ qt_add_executable(rcaiman_projects
     pointlayerpropertieswidget.h pointlayerpropertieswidget.cpp
     pointattributetablemodel.h pointattributetablemodel.cpp
     pointattributetablewindow.h pointattributetablewindow.cpp
+    histogramdock.h histogramdock.cpp
     previewdock.h previewdock.cpp
     project.h project.cpp
     projectfilesystemmodel.h projectfilesystemmodel.cpp

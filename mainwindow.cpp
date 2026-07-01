@@ -7,6 +7,7 @@
 #include "imagelayer.h"
 #include "pointlayer.h"
 #include "pointattributetablewindow.h"
+#include "histogramdock.h"
 #include "previewdock.h"
 #include "projectcleanupdialog.h"
 #include "projectfilesystemmodel.h"
@@ -93,7 +94,12 @@ QJsonObject imageStyleToJson(const ImageLayerStyle &style)
     object["ramp"] = static_cast<int>(render.colorRamp);
     object["stretch"] = static_cast<int>(render.stretchMode);
     object["tail_trim"] = render.tailTrim;
+    object["trim_left_tail"] = render.trimLeftTail;
+    object["trim_right_tail"] = render.trimRightTail;
     object["trim_percent"] = render.trimPercent;
+    object["manual_range_enabled"] = render.manualRangeEnabled;
+    object["manual_min"] = render.manualMin;
+    object["manual_max"] = render.manualMax;
     object["gamma"] = render.gamma;
     object["band"] = render.band;
     object["red_band"] = render.redBand;
@@ -115,8 +121,18 @@ ImageLayerStyle imageStyleFromJson(const QJsonObject &object,
     render.stretchMode = static_cast<StretchMode>(
         object.value("stretch").toInt(static_cast<int>(render.stretchMode)));
     render.tailTrim = object.value("tail_trim").toBool(render.tailTrim);
+    render.trimLeftTail =
+        object.value("trim_left_tail").toBool(render.trimLeftTail);
+    render.trimRightTail =
+        object.value("trim_right_tail").toBool(render.trimRightTail);
     render.trimPercent =
         object.value("trim_percent").toDouble(render.trimPercent);
+    render.manualRangeEnabled =
+        object.value("manual_range_enabled").toBool(render.manualRangeEnabled);
+    render.manualMin =
+        object.value("manual_min").toDouble(render.manualMin);
+    render.manualMax =
+        object.value("manual_max").toDouble(render.manualMax);
     render.gamma = object.value("gamma").toDouble(render.gamma);
     render.band = object.value("band").toInt(render.band);
     render.redBand = object.value("red_band").toInt(render.redBand);
@@ -529,6 +545,11 @@ MainWindow::MainWindow(QWidget *parent)
     splitDockWidget(ui->dockProjectExplorer, m_previewDock, Qt::Vertical);
     m_previewDock->hide(); // hidden until a project is loaded
 
+    m_histogramDock = new HistogramDock(this);
+    addDockWidget(Qt::RightDockWidgetArea, m_histogramDock);
+    tabifyDockWidget(ui->dockProperties, m_histogramDock);
+    m_histogramDock->raise();
+
     configureDockSizing();
 
     // Initial dock proportions.
@@ -562,6 +583,21 @@ MainWindow::MainWindow(QWidget *parent)
                     if (QWidget *contents = m_previewDock->widget()) {
                         contents->setMinimumWidth(260);
                         contents->setMaximumWidth(460);
+                    }
+                }
+            });
+    connect(m_histogramDock, &QDockWidget::topLevelChanged,
+            this, [this](bool floating) {
+                if (floating) {
+                    m_histogramDock->setMaximumWidth(QWIDGETSIZE_MAX);
+                    if (QWidget *contents = m_histogramDock->widget())
+                        contents->setMaximumWidth(QWIDGETSIZE_MAX);
+                } else {
+                    m_histogramDock->setMinimumWidth(220);
+                    m_histogramDock->setMaximumWidth(320);
+                    if (QWidget *contents = m_histogramDock->widget()) {
+                        contents->setMinimumWidth(220);
+                        contents->setMaximumWidth(320);
                     }
                 }
             });
@@ -1671,18 +1707,25 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
 void MainWindow::onLayerSelectionChanged(int index)
 {
     ImageViewer *viewer = currentImageViewer();
-    if (!viewer)
+    if (!viewer) {
+        setHistogramLayer(nullptr);
         return;
+    }
 
     LayerManager *mgr = viewer->layerManager();
-    if (!mgr)
+    if (!mgr) {
+        setHistogramLayer(nullptr);
         return;
+    }
 
-    if (index < 0 || index >= mgr->layerCount())
+    if (index < 0 || index >= mgr->layerCount()) {
+        setHistogramLayer(nullptr);
         return;
+    }
 
     Layer *layer = mgr->layerAt(index);
     mgr->setActiveLayer(layer);
+    setHistogramLayer(layer);
 
     // Disconnect previous point layer connection
     if (m_currentPointLayer) {
@@ -1708,6 +1751,32 @@ void MainWindow::onLayerSelectionChanged(int index)
     PointLayer *editingLayer = viewer->editingPointLayer();
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
     ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
+}
+
+void MainWindow::setHistogramLayer(Layer *layer)
+{
+    disconnect(m_histogramStyleConnection);
+    disconnect(m_histogramDataConnection);
+
+    auto *imageLayer = qobject_cast<ImageLayer*>(layer);
+    if (m_histogramDock)
+        m_histogramDock->setLayer(imageLayer);
+
+    if (!imageLayer || !m_histogramDock)
+        return;
+
+    m_histogramStyleConnection =
+        connect(imageLayer, &Layer::styleChanged, this,
+                [this, imageLayer]() {
+                    if (m_histogramDock)
+                        m_histogramDock->setLayer(imageLayer);
+                });
+    m_histogramDataConnection =
+        connect(imageLayer, &Layer::dataChanged, this,
+                [this, imageLayer]() {
+                    if (m_histogramDock)
+                        m_histogramDock->setLayer(imageLayer);
+                });
 }
 
 void MainWindow::onPointSelectionChanged()
@@ -1932,6 +2001,7 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         ui->actionCancelEdit->setEnabled(false);
         if (m_layersDock)
             m_layersDock->setLayerManager(nullptr);
+        setHistogramLayer(nullptr);
         clearPropertiesTable();
         return;
     }
@@ -1962,6 +2032,7 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 
     if (m_layersDock)
         m_layersDock->setLayerManager(mgr);
+    setHistogramLayer(active);
 }
 
 ImageViewer *MainWindow::viewerForLayer(PointLayer *layer) const
@@ -3398,6 +3469,7 @@ void MainWindow::configureDockSizing()
     constrainWidth(m_previewDock, 260, 460);
     constrainWidth(ui->dockLayers, 220, 320);
     constrainWidth(ui->dockProperties, 220, 320);
+    constrainWidth(m_histogramDock, 220, 320);
 
     if (ui->dockViewer) {
         ui->dockViewer->setMinimumWidth(320);

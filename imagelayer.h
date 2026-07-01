@@ -27,7 +27,12 @@ public:
     void setColorRamp(ColorRamp ramp);
     void setStretchMode(StretchMode mode);
     void setTailTrim(bool enabled);
+    void setTrimLeftTail(bool enabled);
+    void setTrimRightTail(bool enabled);
     void setTrimPercent(double percent);
+    void setManualRangeEnabled(bool enabled);
+    void setManualRange(double minValue, double maxValue);
+    void setManualRange(bool enabled, double minValue, double maxValue);
     void setGamma(double gamma);
     void setRenderBand(int band);
     void setRenderMode(RasterRenderMode mode);

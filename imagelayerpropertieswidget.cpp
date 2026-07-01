@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QSlider>
 #include <QSpinBox>
 
@@ -25,6 +26,7 @@ int sliderFromTrimPercent(double trimPercent)
     const double normalized = qBound(0.0, trimPercent / trimPercentMaximum, 1.0);
     return qRound(std::sqrt(normalized) * trimSliderMaximum);
 }
+
 }
 
 ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
@@ -88,8 +90,17 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
     m_blueBandSpin->setMinimum(1);
     layout->addRow("Blue:", m_blueBandSpin);
 
-    m_tailTrimCheck = new QCheckBox(this);
-    layout->addRow("Tail trim:", m_tailTrimCheck);
+    m_tailTrimWidget = new QWidget(this);
+    auto *tailTrimLayout = new QHBoxLayout(m_tailTrimWidget);
+    tailTrimLayout->setContentsMargins(0, 0, 0, 0);
+    m_tailTrimCheck = new QCheckBox(m_tailTrimWidget);
+    m_trimLeftCheck = new QCheckBox("Left", m_tailTrimWidget);
+    m_trimRightCheck = new QCheckBox("Right", m_tailTrimWidget);
+    tailTrimLayout->addWidget(m_tailTrimCheck);
+    tailTrimLayout->addWidget(m_trimLeftCheck);
+    tailTrimLayout->addWidget(m_trimRightCheck);
+    tailTrimLayout->addStretch(1);
+    layout->addRow("Tail trim:", m_tailTrimWidget);
 
     m_trimPercentSlider = new QSlider(Qt::Horizontal, this);
     m_trimPercentSlider->setRange(0, trimSliderMaximum);
@@ -101,6 +112,21 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
     m_trimPercentSpin->setSingleStep(0.01);
     m_trimPercentSpin->setSuffix(" %");
     layout->addRow("Trim value:", m_trimPercentSpin);
+
+    m_manualRangeCheck = new QCheckBox(this);
+    layout->addRow("Manual range:", m_manualRangeCheck);
+
+    m_manualMinSpin = new QDoubleSpinBox(this);
+    m_manualMinSpin->setRange(-1.0e12, 1.0e12);
+    m_manualMinSpin->setDecimals(6);
+    m_manualMinSpin->setSingleStep(1.0);
+    layout->addRow("Min:", m_manualMinSpin);
+
+    m_manualMaxSpin = new QDoubleSpinBox(this);
+    m_manualMaxSpin->setRange(-1.0e12, 1.0e12);
+    m_manualMaxSpin->setDecimals(6);
+    m_manualMaxSpin->setSingleStep(1.0);
+    layout->addRow("Max:", m_manualMaxSpin);
 
     connect(m_opacitySlider, &QSlider::valueChanged,
             this, [this](int value) {
@@ -173,6 +199,20 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
                 m_layer->setTailTrim(checked);
                 updateControlVisibility();
             });
+    connect(m_trimLeftCheck, &QCheckBox::toggled,
+            this, [this](bool checked) {
+                if (!m_layer || m_updating)
+                    return;
+                m_layer->setTrimLeftTail(checked);
+                updateControlVisibility();
+            });
+    connect(m_trimRightCheck, &QCheckBox::toggled,
+            this, [this](bool checked) {
+                if (!m_layer || m_updating)
+                    return;
+                m_layer->setTrimRightTail(checked);
+                updateControlVisibility();
+            });
     connect(m_trimPercentSlider, &QSlider::valueChanged,
             this, [this](int value) {
                 if (!m_layer || m_updating)
@@ -185,6 +225,45 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
                     return;
                 m_layer->setTrimPercent(value);
             });
+    connect(m_manualRangeCheck, &QCheckBox::toggled,
+            this, [this](bool checked) {
+                if (!m_layer || m_updating)
+                    return;
+
+                if (checked) {
+                    RasterRenderStyle autoStyle = m_layer->style().render;
+                    autoStyle.manualRangeEnabled = false;
+                    double minValue = 0.0;
+                    double maxValue = 1.0;
+                    const int band = autoStyle.mode == RasterRenderMode::Rgb
+                        ? autoStyle.redBand
+                        : autoStyle.band;
+                    RasterRenderer().renderRange(
+                        m_layer->rasterData(), band, autoStyle,
+                        minValue, maxValue);
+
+                    m_updating = true;
+                    m_manualMinSpin->setValue(minValue);
+                    m_manualMaxSpin->setValue(maxValue);
+                    m_updating = false;
+
+                    m_layer->setManualRange(true, minValue, maxValue);
+                } else {
+                    m_layer->setManualRangeEnabled(false);
+                }
+                updateControlVisibility();
+            });
+    auto manualRangeChanged = [this]() {
+        if (!m_layer || m_updating)
+            return;
+        m_layer->setManualRange(
+            m_manualMinSpin->value(),
+            m_manualMaxSpin->value());
+    };
+    connect(m_manualMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [manualRangeChanged](double) { manualRangeChanged(); });
+    connect(m_manualMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [manualRangeChanged](double) { manualRangeChanged(); });
 }
 
 void ImageLayerPropertiesWidget::setLayer(ImageLayer *layer)
@@ -228,8 +307,13 @@ void ImageLayerPropertiesWidget::updateFromLayer()
         m_greenBandSpin->setValue(qBound(1, style.render.greenBand + 1, bandCount));
         m_blueBandSpin->setValue(qBound(1, style.render.blueBand + 1, bandCount));
         m_tailTrimCheck->setChecked(style.render.tailTrim);
+        m_trimLeftCheck->setChecked(style.render.trimLeftTail);
+        m_trimRightCheck->setChecked(style.render.trimRightTail);
         m_trimPercentSlider->setValue(sliderFromTrimPercent(style.render.trimPercent));
         m_trimPercentSpin->setValue(style.render.trimPercent);
+        m_manualRangeCheck->setChecked(style.render.manualRangeEnabled);
+        m_manualMinSpin->setValue(style.render.manualMin);
+        m_manualMaxSpin->setValue(style.render.manualMax);
     }
 
     updateControlVisibility();
@@ -242,7 +326,14 @@ void ImageLayerPropertiesWidget::updateControlVisibility()
     const bool categoricalRamp = !rgbMode && m_layer
         && m_layer->style().render.colorRamp == ColorRamp::Categorical;
     const bool gammaMode = m_layer && m_layer->style().render.stretchMode == StretchMode::Gamma;
-    const bool trimEnabled = m_layer && m_layer->style().render.tailTrim;
+    const bool manualRangeEnabled =
+        m_layer && m_layer->style().render.manualRangeEnabled;
+    const bool trimControlsEnabled =
+        m_layer && m_layer->style().render.tailTrim && !manualRangeEnabled;
+    const bool trimRangeEnabled =
+        trimControlsEnabled
+        && (m_layer->style().render.trimLeftTail
+            || m_layer->style().render.trimRightTail);
 
     auto setFieldVisible = [this](QWidget *field, bool visible) {
         if (!field)
@@ -262,10 +353,18 @@ void ImageLayerPropertiesWidget::updateControlVisibility()
     setFieldVisible(m_stretchCombo, !categoricalRamp);
     setFieldVisible(m_gammaSlider, !categoricalRamp && gammaMode);
     setFieldVisible(m_gammaSpin, !categoricalRamp && gammaMode);
-    setFieldVisible(m_tailTrimCheck, !categoricalRamp);
+    setFieldVisible(m_tailTrimWidget, !categoricalRamp);
     setFieldVisible(m_trimPercentSlider, !categoricalRamp);
     setFieldVisible(m_trimPercentSpin, !categoricalRamp);
+    setFieldVisible(m_manualRangeCheck, !categoricalRamp);
+    setFieldVisible(m_manualMinSpin, !categoricalRamp);
+    setFieldVisible(m_manualMaxSpin, !categoricalRamp);
 
-    m_trimPercentSlider->setEnabled(trimEnabled);
-    m_trimPercentSpin->setEnabled(trimEnabled);
+    m_tailTrimCheck->setEnabled(!manualRangeEnabled);
+    m_trimLeftCheck->setEnabled(trimControlsEnabled);
+    m_trimRightCheck->setEnabled(trimControlsEnabled);
+    m_trimPercentSlider->setEnabled(trimRangeEnabled);
+    m_trimPercentSpin->setEnabled(trimRangeEnabled);
+    m_manualMinSpin->setEnabled(manualRangeEnabled);
+    m_manualMaxSpin->setEnabled(manualRangeEnabled);
 }

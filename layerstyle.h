@@ -43,7 +43,12 @@ struct RasterRenderStyle
     ColorRamp colorRamp = ColorRamp::Gray;
     StretchMode stretchMode = StretchMode::Linear;
     bool tailTrim = true;
+    bool trimLeftTail = true;
+    bool trimRightTail = true;
     double trimPercent = 2.0;
+    bool manualRangeEnabled = false;
+    double manualMin = 0.0;
+    double manualMax = 1.0;
     double gamma = 2.2;
     int band = 0;
     int redBand = 0;

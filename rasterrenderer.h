@@ -24,6 +24,11 @@ public:
 
     QImage render(const RasterData &data, const RasterRenderStyle &style) const;
     QImage renderAuto(const RasterData &data) const;
+    void rawRange(const RasterData &data, int band,
+                  double &outMin, double &outMax) const;
+    void renderRange(const RasterData &data, int band,
+                     const RasterRenderStyle &style,
+                     double &outMin, double &outMax) const;
 
 private:
     void computeRange(const RasterData &data, int band,

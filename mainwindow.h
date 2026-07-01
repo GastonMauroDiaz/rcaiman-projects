@@ -20,6 +20,7 @@ class QEvent;
 class QFileSystemWatcher;
 class ProjectFileSystemModel;
 class ImageViewer;
+class HistogramDock;
 class Layer;
 class LayerManager;
 class LayersDock;
@@ -117,6 +118,7 @@ private:
     void scheduleArtifactReload(const QString &path, int delayMs = 500);
     void reloadArtifactFromDisk(const QString &path);
     QList<Layer*> reloadableLayersForPath(const QString &path) const;
+    void setHistogramLayer(Layer *layer);
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
@@ -124,6 +126,7 @@ private:
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
+    HistogramDock *m_histogramDock = nullptr;
     PreviewDock *m_previewDock = nullptr;
     QToolButton *m_newFolderButton = nullptr;
     QStringList m_recentProjects;
@@ -132,6 +135,8 @@ private:
     QMetaObject::Connection m_pointCollectionConnection;
     QPointer<ImageViewer> m_activeViewer;
     QHash<PointLayer*, QPointer<PointAttributeTableWindow>> m_attributeTables;
+    QMetaObject::Connection m_histogramStyleConnection;
+    QMetaObject::Connection m_histogramDataConnection;
     QByteArray m_defaultWindowState;
     bool m_resetLayoutPending = false;
     QHash<QString, int> m_pendingReloadAttempts;

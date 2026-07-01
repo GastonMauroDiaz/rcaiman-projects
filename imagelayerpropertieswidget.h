@@ -9,6 +9,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QSpinBox;
 class QSlider;
+class QWidget;
 
 class ImageLayerPropertiesWidget : public QWidget
 {
@@ -31,9 +32,15 @@ private:
     QSpinBox *m_redBandSpin = nullptr;
     QSpinBox *m_greenBandSpin = nullptr;
     QSpinBox *m_blueBandSpin = nullptr;
+    QWidget *m_tailTrimWidget = nullptr;
     QCheckBox *m_tailTrimCheck = nullptr;
+    QCheckBox *m_trimLeftCheck = nullptr;
+    QCheckBox *m_trimRightCheck = nullptr;
     QSlider *m_trimPercentSlider = nullptr;
     QDoubleSpinBox *m_trimPercentSpin = nullptr;
+    QCheckBox *m_manualRangeCheck = nullptr;
+    QDoubleSpinBox *m_manualMinSpin = nullptr;
+    QDoubleSpinBox *m_manualMaxSpin = nullptr;
     QSlider *m_gammaSlider = nullptr;
     QDoubleSpinBox *m_gammaSpin = nullptr;
     QSlider *m_opacitySlider = nullptr;
