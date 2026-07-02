@@ -772,8 +772,7 @@ void ImageViewer::dropEvent(QDropEvent *event)
                     "Load an image first before adding a point layer.");
                 continue;
             }
-            auto *layer = new PointLayer(path, m_scene);
-            m_layerManager->addLayer(layer);
+            emit pointLayerFileDropped(path);
         }
     }
     event->acceptProposedAction();

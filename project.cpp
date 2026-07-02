@@ -32,7 +32,41 @@ QString yamlString(const QString &value)
     QString escaped = value;
     escaped.replace('\\', "\\\\");
     escaped.replace('"', "\\\"");
+    escaped.replace('\n', "\\n");
+    escaped.replace('\r', "\\r");
+    escaped.replace('\t', "\\t");
     return QStringLiteral("\"%1\"").arg(escaped);
+}
+
+QString unescapeYamlQuotedString(const QString &value)
+{
+    QString result;
+    result.reserve(value.size());
+    bool escaping = false;
+
+    for (const QChar character : value) {
+        if (escaping) {
+            if (character == QLatin1Char('n')) {
+                result.append(QLatin1Char('\n'));
+            } else if (character == QLatin1Char('r')) {
+                result.append(QLatin1Char('\r'));
+            } else if (character == QLatin1Char('t')) {
+                result.append(QLatin1Char('\t'));
+            } else {
+                result.append(character);
+            }
+            escaping = false;
+        } else if (character == QLatin1Char('\\')) {
+            escaping = true;
+        } else {
+            result.append(character);
+        }
+    }
+
+    if (escaping)
+        result.append(QLatin1Char('\\'));
+
+    return result;
 }
 
 QString yamlValueAfterColon(const QString &line)
@@ -40,8 +74,7 @@ QString yamlValueAfterColon(const QString &line)
     QString value = valueAfterColon(line);
     if (value.size() >= 2 && value.startsWith('"') && value.endsWith('"')) {
         value = value.mid(1, value.size() - 2);
-        value.replace("\\\"", "\"");
-        value.replace("\\\\", "\\");
+        value = unescapeYamlQuotedString(value);
     }
     return value;
 }
@@ -214,12 +247,15 @@ Project Project::create(const QString &rootPath,
                         QString *errorMessage)
 {
     const QString cleanName = projectName.trimmed();
+    const QString cleanDescription = description.trimmed();
     if (rootPath.trimmed().isEmpty() || cleanName.isEmpty()) {
         if (errorMessage) {
             *errorMessage = "Project path and name are required.";
         }
         return {};
     }
+    if (!descriptionIsSupported(cleanDescription, errorMessage))
+        return {};
 
     // Check if folder already exists
     QDir root;
@@ -245,7 +281,7 @@ Project Project::create(const QString &rootPath,
         QDir(rootPath).absolutePath(),
         cleanName,
         QDate::currentDate().toString(Qt::ISODate),
-        description.trimmed());
+        cleanDescription);
     if (!project.save(errorMessage)) {
         return {};
     }
@@ -279,7 +315,7 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
     while (!stream.atEnd()) {
         const QString line = stream.readLine();
         if (line.startsWith("project_name:")) {
-            name = valueAfterColon(line);
+            name = yamlValueAfterColon(line);
         } else if (line.startsWith("created:")) {
             created = valueAfterColon(line);
         } else if (line.startsWith("description:")) {
@@ -296,6 +332,21 @@ Project Project::open(const QString &rootPath, QString *errorMessage)
 
     return Project(
         QDir(rootPath).absolutePath(), name, created, description);
+}
+
+bool Project::descriptionIsSupported(const QString &description,
+                                     QString *errorMessage)
+{
+    for (const QChar character : description) {
+        if (character.category() == QChar::Other_Control) {
+            if (errorMessage) {
+                *errorMessage = "Project description cannot contain line "
+                    "breaks or control characters.";
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Project::registerCollection(const QString &projectRootPath,
@@ -449,7 +500,7 @@ bool Project::save(QString *errorMessage) const
 
     QTextStream stream(&file);
     stream << "version: " << ProjectVersion << '\n';
-    stream << "project_name: " << m_name << '\n';
+    stream << "project_name: " << yamlString(m_name) << '\n';
     if (!m_description.isEmpty())
         stream << "description: " << yamlString(m_description) << '\n';
     stream << "created: " << m_created << '\n';
@@ -461,7 +512,10 @@ bool Project::save(QString *errorMessage) const
 bool Project::setDescription(const QString &description,
                              QString *errorMessage)
 {
-    m_description = description.trimmed();
+    const QString cleanDescription = description.trimmed();
+    if (!descriptionIsSupported(cleanDescription, errorMessage))
+        return false;
+    m_description = cleanDescription;
     return save(errorMessage);
 }
 

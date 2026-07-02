@@ -44,6 +44,7 @@ private slots:
     void onCurrentRowChanged(int row);
     void onLayerStyleChanged();
     void onLayerVisibilityChanged(bool visible);
+    void onLayerContextMenuRequested(const QPoint &position);
     void onRowsMoved(const QModelIndex &sourceParent,
                      int sourceStart,
                      int sourceEnd,

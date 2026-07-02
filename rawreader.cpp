@@ -3,7 +3,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QTextStream>
 
 #include <libraw/libraw.h>
 #include <tiffio.h>
@@ -111,16 +110,6 @@ bool RawReader::extractSensorData(const QString &rawFilePath,
     }
 
     TIFFClose(tif);
-
-    // Write LibRaw version info (once per sensor_data folder)
-    const QString versionFilePath = QFileInfo(tiffOutputPath).absolutePath() + "/libraw_version.yaml";
-    if (!QFile::exists(versionFilePath)) {
-        QFile vFile(versionFilePath);
-        if (vFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream stream(&vFile);
-            stream << "libraw_version: " << QString::fromLatin1(libraw_version()) << "\n";
-        }
-    }
 
     processor.recycle();
     return true;

@@ -67,6 +67,8 @@ public:
                                     const QString &reference);
     static QString portableReference(const QString &projectRootPath,
                                      const QString &reference);
+    static bool descriptionIsSupported(const QString &description,
+                                       QString *errorMessage = nullptr);
 
     bool isValid() const;
     bool save(QString *errorMessage = nullptr) const;

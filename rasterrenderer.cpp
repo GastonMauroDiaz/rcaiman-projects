@@ -308,17 +308,13 @@ QImage RasterRenderer::render(const RasterData &data, const RasterRenderStyle &s
         return {};
 
     if (style.mode == RasterRenderMode::Rgb) {
-        double minR = 0.0;
-        double maxR = 1.0;
-        double minG = 0.0;
-        double maxG = 1.0;
-        double minB = 0.0;
-        double maxB = 1.0;
-        computeRenderRange(data, style.redBand, style, minR, maxR);
-        computeRenderRange(data, style.greenBand, style, minG, maxG);
-        computeRenderRange(data, style.blueBand, style, minB, maxB);
+        double minRgb = 0.0;
+        double maxRgb = 1.0;
+        computeRgbRenderRange(
+            data, style.redBand, style.greenBand, style.blueBand,
+            style, minRgb, maxRgb);
         return renderRgb(data, style.redBand, style.greenBand, style.blueBand,
-                         minR, maxR, minG, maxG, minB, maxB,
+                         minRgb, maxRgb, minRgb, maxRgb, minRgb, maxRgb,
                          style.stretchMode, style.gamma);
     }
 
@@ -368,12 +364,14 @@ QImage RasterRenderer::renderAuto(const RasterData &data) const
         return {};
 
     if (data.bands() >= 3) {
-        double min0, max0, min1, max1, min2, max2;
-        computeRange(data, 0, min0, max0);
-        computeRange(data, 1, min1, max1);
-        computeRange(data, 2, min2, max2);
+        RasterRenderStyle style;
+        style.mode = RasterRenderMode::Rgb;
+        style.stretchMode = StretchMode::None;
+        double minRgb = 0.0;
+        double maxRgb = 1.0;
+        computeRgbRenderRange(data, 0, 1, 2, style, minRgb, maxRgb);
         return renderRgb(data, 0, 1, 2,
-                         min0, max0, min1, max1, min2, max2,
+                         minRgb, maxRgb, minRgb, maxRgb, minRgb, maxRgb,
                          StretchMode::Linear, 1.0);
     }
 
@@ -393,6 +391,20 @@ void RasterRenderer::renderRange(const RasterData &data, int band,
                                  double &outMin, double &outMax) const
 {
     computeRenderRange(data, band, style, outMin, outMax);
+}
+
+void RasterRenderer::renderRgbRange(const RasterData &data,
+                                    int bandR, int bandG, int bandB,
+                                    const RasterRenderStyle &style,
+                                    double &outMin, double &outMax) const
+{
+    computeRgbRenderRange(data, bandR, bandG, bandB, style, outMin, outMax);
+}
+
+void RasterRenderer::clearCache()
+{
+    m_bandStatsCache.clear();
+    m_rgbStatsCache.clear();
 }
 
 const RasterRenderer::BandStats &RasterRenderer::bandStats(
@@ -457,6 +469,67 @@ const RasterRenderer::BandStats &RasterRenderer::bandStats(
     return m_bandStatsCache.back();
 }
 
+const RasterRenderer::RgbStats &RasterRenderer::rgbStats(
+    const RasterData &data, int bandR, int bandG, int bandB) const
+{
+    const int bR = std::clamp(bandR, 0, data.bands() - 1);
+    const int bG = std::clamp(bandG, 0, data.bands() - 1);
+    const int bB = std::clamp(bandB, 0, data.bands() - 1);
+    for (const RgbStats &stats : m_rgbStatsCache) {
+        if (stats.data == &data
+            && stats.bandR == bR
+            && stats.bandG == bG
+            && stats.bandB == bB
+            && stats.dataType == data.dataType()
+            && stats.width == data.width()
+            && stats.height == data.height()) {
+            return stats;
+        }
+    }
+
+    bandStats(data, bR);
+    bandStats(data, bG);
+    bandStats(data, bB);
+    const BandStats &statsR = bandStats(data, bR);
+    const BandStats &statsG = bandStats(data, bG);
+    const BandStats &statsB = bandStats(data, bB);
+
+    RgbStats stats;
+    stats.data = &data;
+    stats.bandR = bR;
+    stats.bandG = bG;
+    stats.bandB = bB;
+    stats.dataType = data.dataType();
+    stats.width = data.width();
+    stats.height = data.height();
+
+    if (!statsR.sortedSamples.empty()
+        && !statsG.sortedSamples.empty()
+        && !statsB.sortedSamples.empty()) {
+        stats.min = std::min(statsR.min, std::min(statsG.min, statsB.min));
+        stats.max = std::max(statsR.max, std::max(statsG.max, statsB.max));
+        stats.sortedSamples.reserve(statsR.sortedSamples.size()
+                                    + statsG.sortedSamples.size()
+                                    + statsB.sortedSamples.size());
+        stats.sortedSamples.insert(stats.sortedSamples.end(),
+                                   statsR.sortedSamples.begin(),
+                                   statsR.sortedSamples.end());
+        stats.sortedSamples.insert(stats.sortedSamples.end(),
+                                   statsG.sortedSamples.begin(),
+                                   statsG.sortedSamples.end());
+        stats.sortedSamples.insert(stats.sortedSamples.end(),
+                                   statsB.sortedSamples.begin(),
+                                   statsB.sortedSamples.end());
+        std::sort(stats.sortedSamples.begin(), stats.sortedSamples.end());
+    }
+
+    m_rgbStatsCache.push_back(std::move(stats));
+    constexpr size_t MaximumStatsEntries = 16;
+    while (m_rgbStatsCache.size() > MaximumStatsEntries)
+        m_rgbStatsCache.erase(m_rgbStatsCache.begin());
+    return m_rgbStatsCache.back();
+}
+
 void RasterRenderer::computeRange(const RasterData &data, int band,
                                    double &outMin, double &outMax) const
 {
@@ -485,11 +558,6 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
             outMax = outMin + 1.0;
         if (outMax <= outMin)
             outMax = outMin + 1.0;
-        return;
-    }
-
-    if (style.stretchMode == StretchMode::None) {
-        computeRange(data, b, outMin, outMax);
         return;
     }
 
@@ -527,6 +595,67 @@ void RasterRenderer::computeRenderRange(const RasterData &data, int band,
         }
     }
 
+    if (std::abs(outMax - outMin) < 1e-10)
+        outMax = outMin + 1.0;
+}
+
+void RasterRenderer::computeRgbRenderRange(
+    const RasterData &data,
+    int bandR,
+    int bandG,
+    int bandB,
+    const RasterRenderStyle &style,
+    double &outMin,
+    double &outMax) const
+{
+    if (data.isNull() || data.bands() <= 0) {
+        outMin = 0.0;
+        outMax = 1.0;
+        return;
+    }
+
+    if (style.manualRangeEnabled) {
+        outMin = style.manualMin;
+        outMax = style.manualMax;
+        if (!std::isfinite(outMin))
+            outMin = 0.0;
+        if (!std::isfinite(outMax))
+            outMax = outMin + 1.0;
+        if (outMax <= outMin)
+            outMax = outMin + 1.0;
+        return;
+    }
+
+    const RgbStats &stats = rgbStats(data, bandR, bandG, bandB);
+    const std::vector<double> &values = stats.sortedSamples;
+
+    if (values.empty()) {
+        outMin = 0.0;
+        outMax = 1.0;
+        return;
+    }
+
+    if (!style.tailTrim
+        || style.trimPercent <= 0.0
+        || (!style.trimLeftTail && !style.trimRightTail)) {
+        outMin = stats.min;
+        outMax = stats.max;
+    } else {
+        const double trim = std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
+        const double lastIndex = static_cast<double>(values.size() - 1);
+        const size_t lowIndex =
+            static_cast<size_t>(std::ceil(trim * lastIndex));
+        const size_t highIndex =
+            static_cast<size_t>(std::floor((1.0 - trim) * lastIndex));
+
+        outMin = style.trimLeftTail ? values[lowIndex] : stats.min;
+        outMax = style.trimRightTail ? values[highIndex] : stats.max;
+    }
+
+    if (!std::isfinite(outMin))
+        outMin = 0.0;
+    if (!std::isfinite(outMax))
+        outMax = outMin + 1.0;
     if (std::abs(outMax - outMin) < 1e-10)
         outMax = outMin + 1.0;
 }

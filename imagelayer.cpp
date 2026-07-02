@@ -69,7 +69,8 @@ bool ImageLayer::reloadFromDisk(QString *errorMessage)
         return false;
     }
 
-    const QImage image = m_renderer.render(reloaded, m_style.render);
+    RasterRenderer previewRenderer;
+    const QImage image = previewRenderer.render(reloaded, m_style.render);
     if (image.isNull()) {
         if (errorMessage)
             *errorMessage = QStringLiteral("Could not render reloaded image.");
@@ -77,6 +78,7 @@ bool ImageLayer::reloadFromDisk(QString *errorMessage)
     }
 
     m_rasterData = std::move(reloaded);
+    m_renderer.clearCache();
     ++m_dataRevision;
     if (m_pixmapItem) {
         m_pixmapItem->setPixmap(QPixmap::fromImage(image));

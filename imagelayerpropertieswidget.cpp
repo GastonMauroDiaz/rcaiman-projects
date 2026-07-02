@@ -231,16 +231,9 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
                     return;
 
                 if (checked) {
-                    RasterRenderStyle autoStyle = m_layer->style().render;
-                    autoStyle.manualRangeEnabled = false;
                     double minValue = 0.0;
                     double maxValue = 1.0;
-                    const int band = autoStyle.mode == RasterRenderMode::Rgb
-                        ? autoStyle.redBand
-                        : autoStyle.band;
-                    RasterRenderer().renderRange(
-                        m_layer->rasterData(), band, autoStyle,
-                        minValue, maxValue);
+                    automaticRenderRange(&minValue, &maxValue);
 
                     m_updating = true;
                     m_manualMinSpin->setValue(minValue);
@@ -312,8 +305,16 @@ void ImageLayerPropertiesWidget::updateFromLayer()
         m_trimPercentSlider->setValue(sliderFromTrimPercent(style.render.trimPercent));
         m_trimPercentSpin->setValue(style.render.trimPercent);
         m_manualRangeCheck->setChecked(style.render.manualRangeEnabled);
-        m_manualMinSpin->setValue(style.render.manualMin);
-        m_manualMaxSpin->setValue(style.render.manualMax);
+        if (style.render.manualRangeEnabled) {
+            m_manualMinSpin->setValue(style.render.manualMin);
+            m_manualMaxSpin->setValue(style.render.manualMax);
+        } else {
+            double minValue = 0.0;
+            double maxValue = 1.0;
+            automaticRenderRange(&minValue, &maxValue);
+            m_manualMinSpin->setValue(minValue);
+            m_manualMaxSpin->setValue(maxValue);
+        }
     }
 
     updateControlVisibility();
@@ -367,4 +368,39 @@ void ImageLayerPropertiesWidget::updateControlVisibility()
     m_trimPercentSpin->setEnabled(trimRangeEnabled);
     m_manualMinSpin->setEnabled(manualRangeEnabled);
     m_manualMaxSpin->setEnabled(manualRangeEnabled);
+}
+
+void ImageLayerPropertiesWidget::automaticRenderRange(
+    double *minValue,
+    double *maxValue) const
+{
+    if (!minValue || !maxValue)
+        return;
+
+    *minValue = 0.0;
+    *maxValue = 1.0;
+    if (!m_layer || m_layer->rasterData().isNull())
+        return;
+
+    RasterRenderStyle autoStyle = m_layer->style().render;
+    autoStyle.manualRangeEnabled = false;
+
+    RasterRenderer &renderer = m_layer->renderer();
+    if (autoStyle.mode == RasterRenderMode::Rgb) {
+        renderer.renderRgbRange(
+            m_layer->rasterData(),
+            autoStyle.redBand,
+            autoStyle.greenBand,
+            autoStyle.blueBand,
+            autoStyle,
+            *minValue,
+            *maxValue);
+    } else {
+        renderer.renderRange(
+            m_layer->rasterData(),
+            autoStyle.band,
+            autoStyle,
+            *minValue,
+            *maxValue);
+    }
 }

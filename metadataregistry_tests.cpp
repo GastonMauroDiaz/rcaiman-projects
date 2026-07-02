@@ -1,6 +1,7 @@
 #include "metadataregistry.h"
 #include "collectionvalidation.h"
 #include "acquisitionmetadata.h"
+#include "project.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -545,16 +546,47 @@ int main(int argc, char *argv[])
         return 57;
     }
     QFile extractionDoc(
-        QDir(sidecarSensorDirectory).filePath("metadata_extraction.md"));
+        QDir(sidecarSensorDirectory).filePath("README.md"));
     if (!extractionDoc.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return 58;
     }
     const QByteArray extractionDocText = extractionDoc.readAll();
-    if (!extractionDocText.contains("Metadata extraction")
+    if (!extractionDocText.contains("Sensor data")
         || !extractionDocText.contains("sensor_metadata_sidecar_tsv_v1")
         || !extractionDocText.contains("read.delim")
         || !extractionDocText.contains("LibRaw version")) {
         return 59;
+    }
+    if (QFileInfo::exists(
+            QDir(sidecarSensorDirectory).filePath("metadata_extraction.md"))
+        || QFileInfo::exists(
+            QDir(sidecarSensorDirectory).filePath("libraw_version.yaml"))) {
+        return 60;
+    }
+    const QString quotedProjectRoot =
+        QDir(directory.path()).filePath("quoted_project");
+    const QString quotedDescription =
+        "Calibration = Nikon \"A\": C:\\raw # checked";
+    const Project quotedProject = Project::create(
+        quotedProjectRoot, "quoted_project", quotedDescription, &error);
+    if (!quotedProject.isValid()) {
+        return 61;
+    }
+    const Project reopenedQuotedProject =
+        Project::open(quotedProjectRoot, &error);
+    if (!reopenedQuotedProject.isValid()
+        || reopenedQuotedProject.name() != "quoted_project"
+        || reopenedQuotedProject.description() != quotedDescription) {
+        return 62;
+    }
+    if (Project::descriptionIsSupported("bad\nproject", &error)) {
+        return 63;
+    }
+    const Project invalidDescriptionProject = Project::create(
+        QDir(directory.path()).filePath("invalid_description_project"),
+        "invalid_description_project", "bad\nproject", &error);
+    if (invalidDescriptionProject.isValid()) {
+        return 64;
     }
     return 0;
 }

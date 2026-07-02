@@ -14,13 +14,16 @@
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QDir>
+#include <QDesktopServices>
 #include <QDragMoveEvent>
 #include <QGroupBox>
 #include <QIcon>
+#include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
 #include <QPointer>
+#include <QProcess>
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
@@ -67,6 +70,7 @@ LayersDock::LayersDock(QWidget *parent)
     m_listWidget->setDefaultDropAction(Qt::MoveAction);
     m_listWidget->setDragDropOverwriteMode(false);
     m_listWidget->setDropIndicatorShown(true);
+    m_listWidget->setContextMenuPolicy(Qt::CustomContextMenu);
     mainLayout->addWidget(m_listWidget);
 
     auto *btnLayout = new QHBoxLayout();
@@ -183,6 +187,8 @@ LayersDock::LayersDock(QWidget *parent)
             });
     connect(m_listWidget->model(), &QAbstractItemModel::rowsMoved,
             this, &LayersDock::onRowsMoved);
+    connect(m_listWidget, &QWidget::customContextMenuRequested,
+            this, &LayersDock::onLayerContextMenuRequested);
 
     connect(m_flickerBtn, &QPushButton::toggled,
             this, &LayersDock::onFlickerToggled);
@@ -306,6 +312,85 @@ void LayersDock::onLayerVisibilityChanged(bool visible)
         m_listWidget->blockSignals(true);
         item->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
         m_listWidget->blockSignals(false);
+    }
+}
+
+void LayersDock::onLayerContextMenuRequested(const QPoint &position)
+{
+    if (!m_manager)
+        return;
+
+    QListWidgetItem *item = m_listWidget->itemAt(position);
+    if (!item)
+        return;
+
+    const int row = m_listWidget->row(item);
+    if (row < 0 || row >= m_manager->layerCount())
+        return;
+
+    m_listWidget->setCurrentRow(row);
+    Layer *layer = m_manager->layerAt(row);
+    if (!layer)
+        return;
+
+    const QFileInfo sourceInfo(layer->sourcePath());
+    const bool hasSource = !sourceInfo.absoluteFilePath().isEmpty()
+        && sourceInfo.exists();
+
+    QMenu menu(this);
+    QAction *removeAction = menu.addAction("Remove");
+    menu.addSeparator();
+    QAction *openDefaultAction =
+        menu.addAction("Open with default app");
+    QAction *showInFolderAction =
+        menu.addAction("Show in folder");
+    openDefaultAction->setEnabled(hasSource && sourceInfo.isFile());
+    showInFolderAction->setEnabled(hasSource);
+
+    QAction *selected =
+        menu.exec(m_listWidget->viewport()->mapToGlobal(position));
+    if (!selected)
+        return;
+
+    if (selected == removeAction) {
+        removeLayer();
+        return;
+    }
+
+    if (selected == openDefaultAction) {
+        if (!QDesktopServices::openUrl(
+                QUrl::fromLocalFile(sourceInfo.absoluteFilePath()))) {
+            QMessageBox::warning(
+                this, "Open with default app",
+                "The selected layer source could not be opened.");
+        }
+        return;
+    }
+
+    if (selected == showInFolderAction) {
+#ifdef Q_OS_WIN
+        const QString path = QDir::toNativeSeparators(
+            sourceInfo.absoluteFilePath());
+        const QStringList arguments = sourceInfo.isDir()
+            ? QStringList{path}
+            : QStringList{QStringLiteral("/select,%1").arg(path)};
+        if (!QProcess::startDetached(
+                QStringLiteral("explorer.exe"), arguments)) {
+            QMessageBox::warning(
+                this, "Show in folder",
+                "The selected layer source could not be shown.");
+        }
+#else
+        const QString folderPath = sourceInfo.isDir()
+            ? sourceInfo.absoluteFilePath()
+            : sourceInfo.absoluteDir().absolutePath();
+        if (!QDesktopServices::openUrl(
+                QUrl::fromLocalFile(folderPath))) {
+            QMessageBox::warning(
+                this, "Show in folder",
+                "The selected layer source could not be shown.");
+        }
+#endif
     }
 }
 

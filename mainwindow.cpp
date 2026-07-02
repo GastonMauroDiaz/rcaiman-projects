@@ -1194,41 +1194,6 @@ void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
         openImageAtPath(filePath);
         return;
     }
-
-    if (!fi.isDir())
-        return;
-
-    const QString yamlPath = QDir(filePath).filePath("collection.yaml");
-    const QFileInfo yamlFi(yamlPath);
-    if (!yamlFi.exists())
-        return;
-
-    QFile file(yamlPath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-        return;
-
-    QString type;
-    QTextStream stream(&file);
-    while (!stream.atEnd()) {
-        const QString line = stream.readLine();
-        if (line.startsWith("class:")) {
-            const int sep = line.indexOf(':');
-            if (sep >= 0)
-                type = line.mid(sep + 1).trimmed();
-            break;
-        }
-    }
-
-    if (type == "point_collection") {
-        ImageViewer *viewer = currentImageViewer();
-        if (!viewer) {
-            QMessageBox::information(this, "Add layer",
-                                     "No image viewer is active. Open an image first.");
-            return;
-        }
-                auto *layer = new PointLayer(filePath, viewer->scene());
-        viewer->layerManager()->addLayer(layer);
-    }
 }
 
 void MainWindow::onProjectTreeContextMenu(const QPoint &position)
@@ -2268,6 +2233,13 @@ void MainWindow::configureViewer(ImageViewer *viewer)
         m_activeViewer = viewer;
         onActiveViewerChanged(viewer);
     });
+    connect(viewer, &ImageViewer::pointLayerFileDropped,
+            this, [this, viewer](const QString &path) {
+                if (!viewer || !viewer->layerManager())
+                    return;
+                viewer->layerManager()->addLayer(
+                    createStyledPointLayer(path, viewer));
+            });
     connect(viewer, &ImageViewer::closeRequested, this, [this, viewer]() {
         auto *v = qobject_cast<ImageViewer*>(sender());
         if (!v || v != viewer)
@@ -3342,6 +3314,23 @@ Collection MainWindow::collectionForPath(const QString &path) const
     return {};
 }
 
+PointLayer *MainWindow::createStyledPointLayer(const QString &path,
+                                               ImageViewer *viewer) const
+{
+    if (!viewer)
+        return nullptr;
+
+    auto *layer = new PointLayer(path, viewer->scene());
+    const Collection collection = collectionForPath(path);
+    if (collection.collectionClass == "point_collection"
+        && layer->collection().isValid()) {
+        CollectionStyleResolver styleResolver;
+        layer->setStyle(styleResolver.pointStyle(
+            collection, layer->collection().recordCount()));
+    }
+    return layer;
+}
+
 ImageViewer *MainWindow::currentImageViewer() const
 {
     if (m_activeViewer)
@@ -3428,10 +3417,10 @@ void MainWindow::dropEvent(QDropEvent *event)
         if (!v) {
             QMessageBox::information(this, "Add Points",
                 "Open an image first before adding a point layer.");
-            event->acceptProposedAction();
-            return;
-        }
-        v->layerManager()->addLayer(new PointLayer(path, v->scene()));
+              event->acceptProposedAction();
+              return;
+          }
+        v->layerManager()->addLayer(createStyledPointLayer(path, v));
     } else {
         openImageAtPath(path);
     }
@@ -3601,10 +3590,11 @@ void MainWindow::createPointsCsv()
 
     // If an image viewer is active, offer to add the new layer
     ImageViewer *viewer = currentImageViewer();
-    if (viewer && viewer->layerManager()) {
-        const auto reply = QMessageBox::question(this, "Add layer",
-                                                 "Add the new points file as a layer to the current viewer?");
-        if (reply == QMessageBox::Yes)
-            viewer->layerManager()->addLayer(new PointLayer(savePath, viewer->scene()));
-    }
-}
+      if (viewer && viewer->layerManager()) {
+          const auto reply = QMessageBox::question(this, "Add layer",
+                                                   "Add the new points file as a layer to the current viewer?");
+          if (reply == QMessageBox::Yes)
+            viewer->layerManager()->addLayer(
+                createStyledPointLayer(savePath, viewer));
+      }
+  }

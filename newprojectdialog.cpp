@@ -1,9 +1,11 @@
 #include "newprojectdialog.h"
+#include "project.h"
 
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -32,6 +34,11 @@ NewProjectDialog::NewProjectDialog(QWidget *parent)
     m_description = new QLineEdit(this);
     m_description->setPlaceholderText("Short human-readable project title");
     form->addRow("Description:", m_description);
+    m_descriptionWarning = new QLabel(this);
+    m_descriptionWarning->setWordWrap(true);
+    m_descriptionWarning->setStyleSheet("color: #8a1f11;");
+    m_descriptionWarning->hide();
+    form->addRow(QString(), m_descriptionWarning);
     layout->addLayout(form);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
@@ -45,6 +52,8 @@ NewProjectDialog::NewProjectDialog(QWidget *parent)
     connect(m_parentDirectory, &QLineEdit::textChanged,
             this, &NewProjectDialog::updateCreateButton);
     connect(m_folderName, &QLineEdit::textChanged,
+            this, &NewProjectDialog::updateCreateButton);
+    connect(m_description, &QLineEdit::textChanged,
             this, &NewProjectDialog::updateCreateButton);
     connect(createButton, &QPushButton::clicked,
             this, &QDialog::accept);
@@ -80,11 +89,17 @@ void NewProjectDialog::browseParentDirectory()
 void NewProjectDialog::updateCreateButton()
 {
     const QString name = folderName();
+    QString descriptionError;
+    const bool descriptionOk =
+        Project::descriptionIsSupported(description(), &descriptionError);
+    m_descriptionWarning->setVisible(!descriptionOk);
+    m_descriptionWarning->setText(descriptionError);
     m_createButton->setEnabled(
         !parentDirectory().isEmpty()
         && !name.isEmpty()
         && name != "."
         && name != ".."
         && !name.contains('/')
-        && !name.contains('\\'));
+        && !name.contains('\\')
+        && descriptionOk);
 }

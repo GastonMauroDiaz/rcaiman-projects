@@ -8,6 +8,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDialogButtonBox;
 class QLabel;
 class QLineEdit;
 
@@ -27,6 +28,7 @@ private:
     void applyProfile(int profileIndex);
     void setCustomProfile();
     void updateSummary();
+    void updateDescriptionValidation();
 
     ProjectCleanupPlan m_plan;
     QVector<QCheckBox*> m_checkBoxes;
@@ -34,6 +36,8 @@ private:
     QLabel *m_summaryLabel = nullptr;
     QCheckBox *m_keepDescription = nullptr;
     QLineEdit *m_newDescription = nullptr;
+    QLabel *m_descriptionWarning = nullptr;
+    QDialogButtonBox *m_buttons = nullptr;
     QString m_currentDescription;
     bool m_updatingProfile = false;
 };

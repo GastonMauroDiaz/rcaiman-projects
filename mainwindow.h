@@ -114,6 +114,8 @@ private:
     bool validateRawImage(const QString &rawPath,
                           const QString &registryPath = {});
     Collection collectionForPath(const QString &path) const;
+    PointLayer *createStyledPointLayer(const QString &path,
+                                       ImageViewer *viewer) const;
     void refreshReloadableArtifactWatchers();
     void scheduleArtifactReload(const QString &path, int delayMs = 500);
     void reloadArtifactFromDisk(const QString &path);

@@ -1,6 +1,7 @@
 #include "histogramdock.h"
 #include "imagelayer.h"
 #include "rasterdata.h"
+#include "rasterrenderer.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -40,14 +41,60 @@ void collectSampledValues(const RasterData &data,
 
     const qsizetype total =
         static_cast<qsizetype>(data.width()) * data.height();
-    const qsizetype stride =
-        qMax<qsizetype>(1, (total + MaxHistogramSamples - 1)
-                               / MaxHistogramSamples);
-    values->reserve(static_cast<int>(qMin(total, MaxHistogramSamples)));
-    for (qsizetype i = 0; i < total; i += stride) {
-        const double value = static_cast<double>(ptr[i]);
-        if (std::isfinite(value))
-            values->append(value);
+    if (total <= MaxHistogramSamples) {
+        values->reserve(static_cast<int>(total));
+        for (qsizetype i = 0; i < total; ++i) {
+            const double value = static_cast<double>(ptr[i]);
+            if (std::isfinite(value))
+                values->append(value);
+        }
+        return;
+    }
+
+    const double aspect = static_cast<double>(data.width())
+        / static_cast<double>(qMax(1, data.height()));
+    int sampleRows = qBound(
+        1,
+        static_cast<int>(std::sqrt(
+            static_cast<double>(MaxHistogramSamples) / qMax(0.000001, aspect))),
+        data.height());
+    int sampleCols = qBound(
+        1,
+        static_cast<int>(
+            static_cast<double>(MaxHistogramSamples) / sampleRows),
+        data.width());
+
+    while (static_cast<qsizetype>(sampleRows) * sampleCols
+           > MaxHistogramSamples) {
+        if (sampleCols >= sampleRows && sampleCols > 1)
+            --sampleCols;
+        else if (sampleRows > 1)
+            --sampleRows;
+        else
+            break;
+    }
+
+    values->reserve(sampleRows * sampleCols);
+    const double rowScale =
+        static_cast<double>(data.height()) / static_cast<double>(sampleRows);
+    const double colScale =
+        static_cast<double>(data.width()) / static_cast<double>(sampleCols);
+    for (int sampleRow = 0; sampleRow < sampleRows; ++sampleRow) {
+        const int row = qBound(
+            0,
+            static_cast<int>((sampleRow + 0.5) * rowScale),
+            data.height() - 1);
+        const qsizetype rowOffset =
+            static_cast<qsizetype>(row) * data.width();
+        for (int sampleCol = 0; sampleCol < sampleCols; ++sampleCol) {
+            const int col = qBound(
+                0,
+                static_cast<int>((sampleCol + 0.5) * colScale),
+                data.width() - 1);
+            const double value = static_cast<double>(ptr[rowOffset + col]);
+            if (std::isfinite(value))
+                values->append(value);
+        }
     }
 }
 
@@ -91,9 +138,12 @@ HistogramWidget::HistogramWidget(QWidget *parent)
     setMinimumHeight(160);
     setMouseTracking(true);
     setToolTip(QStringLiteral(
-        "Histogram is an approximation sampled for responsive rendering.\n\n"
+        "Histogram is an approximation based on regular grid sampling "
+        "over the image plane, similar in spirit to camera matrix "
+        "metering, for responsive rendering.\n\n"
         "RGB histograms are overlaid on a shared raw-value axis. "
-        "This is not an average. Manual range is shared by R, G, and B."));
+        "This is not an average. Manual range uses the same raw minimum "
+        "and maximum for R, G, and B."));
 }
 
 void HistogramWidget::setLayer(ImageLayer *layer)
@@ -163,6 +213,7 @@ void HistogramWidget::rebuildNow()
                   QColor(QStringLiteral("#ffaa00")), style.band);
     }
 
+    updateRenderRanges(&series);
     double displayMin = 0.0;
     double displayMax = 1.0;
     rebuildBins(&series, &displayMin, &displayMax);
@@ -171,7 +222,6 @@ void HistogramWidget::rebuildNow()
     m_series = series;
     m_displayMin = displayMin;
     m_displayMax = displayMax;
-    updateRenderRanges();
     m_computing = false;
     update();
 }
@@ -226,7 +276,7 @@ void HistogramWidget::rebuildBins(QVector<Series> *seriesList,
                 normalizedPosition(value, *displayMin, *displayMax);
             const int bin = qBound(
                 0,
-                static_cast<int>(normalized * (HistogramBins - 1)),
+                static_cast<int>(std::floor(normalized * HistogramBins)),
                 HistogramBins - 1);
             ++series.bins[bin];
         }
@@ -320,42 +370,41 @@ void HistogramWidget::trimCache()
 
 void HistogramWidget::updateRenderRanges()
 {
+    updateRenderRanges(&m_series);
+}
+
+void HistogramWidget::updateRenderRanges(QVector<Series> *seriesList) const
+{
     if (!m_layer)
         return;
 
     const RasterRenderStyle style = m_layer->style().render;
-    for (Series &series : m_series) {
-        if (style.manualRangeEnabled) {
-            series.renderMin = std::isfinite(style.manualMin)
-                ? style.manualMin : 0.0;
-            series.renderMax = std::isfinite(style.manualMax)
-                ? style.manualMax : series.renderMin + 1.0;
-        } else if (style.stretchMode == StretchMode::None
-                   || !style.tailTrim
-                   || style.trimPercent <= 0.0
-                   || (!style.trimLeftTail && !style.trimRightTail)
-                   || series.sortedSamples.isEmpty()) {
-            series.renderMin = series.rawMin;
-            series.renderMax = series.rawMax;
-        } else {
-            const double trim =
-                std::clamp(style.trimPercent, 0.0, 49.0) / 100.0;
-            const double last =
-                static_cast<double>(series.sortedSamples.size() - 1);
-            const int lowIndex =
-                qBound(0,
-                       static_cast<int>(std::ceil(trim * last)),
-                       series.sortedSamples.size() - 1);
-            const int highIndex =
-                qBound(0,
-                       static_cast<int>(std::floor((1.0 - trim) * last)),
-                       series.sortedSamples.size() - 1);
-
-            series.renderMin = style.trimLeftTail
-                ? series.sortedSamples[lowIndex] : series.rawMin;
-            series.renderMax = style.trimRightTail
-                ? series.sortedSamples[highIndex] : series.rawMax;
+    RasterRenderer &renderer = m_layer->renderer();
+    if (style.mode == RasterRenderMode::Rgb) {
+        double sharedMin = 0.0;
+        double sharedMax = 1.0;
+        renderer.renderRgbRange(
+            m_layer->rasterData(),
+            style.redBand,
+            style.greenBand,
+            style.blueBand,
+            style,
+            sharedMin,
+            sharedMax);
+        for (Series &series : *seriesList) {
+            series.renderMin = sharedMin;
+            series.renderMax = sharedMax;
         }
+        return;
+    }
+
+    for (Series &series : *seriesList) {
+        renderer.renderRange(
+            m_layer->rasterData(),
+            series.band,
+            style,
+            series.renderMin,
+            series.renderMax);
 
         if (series.renderMax <= series.renderMin
             || !std::isfinite(series.renderMin)
@@ -516,8 +565,8 @@ void HistogramWidget::paintEvent(QPaintEvent *event)
             color.setAlpha(m_series.size() > 1 ? 105 : 180);
             painter.setPen(QPen(color, 1));
             for (int i = 0; i < series.bins.size(); ++i) {
-                const double xNorm = static_cast<double>(i)
-                    / static_cast<double>(series.bins.size() - 1);
+                const double xNorm = (static_cast<double>(i) + 0.5)
+                    / static_cast<double>(series.bins.size());
                 const int x = plotRect.left()
                     + qRound(xNorm * static_cast<double>(plotRect.width() - 1));
                 const double yNorm =

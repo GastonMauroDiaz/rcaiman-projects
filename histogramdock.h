@@ -72,6 +72,7 @@ private:
     void rebuildBins(QVector<Series> *series,
                      double *displayMin,
                      double *displayMax) const;
+    void updateRenderRanges(QVector<Series> *series) const;
     CacheKey currentCacheKey() const;
     bool cacheKeyMatches(const CacheKey &left, const CacheKey &right) const;
     bool loadFromCache(const CacheKey &key);

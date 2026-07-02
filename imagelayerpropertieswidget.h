@@ -23,6 +23,7 @@ public:
 private:
     void updateFromLayer();
     void updateControlVisibility();
+    void automaticRenderRange(double *minValue, double *maxValue) const;
 
     ImageLayer *m_layer = nullptr;
     QComboBox *m_modeCombo = nullptr;

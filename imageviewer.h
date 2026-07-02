@@ -62,6 +62,7 @@ signals:
     void pixelInfoChanged(const PixelInfo &info);
     void closeRequested();
     void activatedByClick();
+    void pointLayerFileDropped(const QString &path);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

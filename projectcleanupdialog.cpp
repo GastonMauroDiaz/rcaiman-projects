@@ -1,5 +1,6 @@
 #include "projectcleanupdialog.h"
 
+#include <QAbstractButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -69,23 +70,33 @@ ProjectCleanupDialog::ProjectCleanupDialog(
     m_newDescription->setPlaceholderText(
         "Leave empty for no description");
     descriptionLayout->addRow("New description:", m_newDescription);
+    m_descriptionWarning = new QLabel(this);
+    m_descriptionWarning->setWordWrap(true);
+    m_descriptionWarning->setStyleSheet("color: #8a1f11;");
+    m_descriptionWarning->hide();
+    descriptionLayout->addRow(QString(), m_descriptionWarning);
     layout->addLayout(descriptionLayout);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
-    auto *createButton = buttons->addButton(
+    m_buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
+    auto *createButton = m_buttons->addButton(
         "Create clean copy", QDialogButtonBox::AcceptRole);
     connect(createButton, &QPushButton::clicked,
             this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected,
+    connect(m_buttons, &QDialogButtonBox::rejected,
             this, &QDialog::reject);
-    layout->addWidget(buttons);
+    layout->addWidget(m_buttons);
 
     connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ProjectCleanupDialog::applyProfile);
     connect(m_keepDescription, &QCheckBox::toggled,
             m_newDescription, &QWidget::setDisabled);
+    connect(m_keepDescription, &QCheckBox::toggled,
+            this, &ProjectCleanupDialog::updateDescriptionValidation);
+    connect(m_newDescription, &QLineEdit::textChanged,
+            this, &ProjectCleanupDialog::updateDescriptionValidation);
     applyProfile(0);
     updateSummary();
+    updateDescriptionValidation();
 }
 
 QString ProjectCleanupDialog::selectedDescription() const
@@ -147,4 +158,23 @@ void ProjectCleanupDialog::updateSummary()
     m_summaryLabel->setText(
         QStringLiteral("%1 file(s) will be removed from the new copy.")
             .arg(selectedFiles));
+}
+
+void ProjectCleanupDialog::updateDescriptionValidation()
+{
+    QString descriptionError;
+    const bool descriptionOk = m_keepDescription->isChecked()
+        || Project::descriptionIsSupported(
+            m_newDescription->text().trimmed(), &descriptionError);
+    m_descriptionWarning->setVisible(!descriptionOk);
+    m_descriptionWarning->setText(descriptionError);
+
+    if (!m_buttons)
+        return;
+
+    const QList<QAbstractButton*> buttons = m_buttons->buttons();
+    for (QAbstractButton *button : buttons) {
+        if (m_buttons->buttonRole(button) == QDialogButtonBox::AcceptRole)
+            button->setEnabled(descriptionOk);
+    }
 }

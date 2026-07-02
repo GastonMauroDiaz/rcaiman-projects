@@ -3,6 +3,7 @@
 
 #include <QDialog>
 
+class QLabel;
 class QLineEdit;
 class QPushButton;
 
@@ -24,6 +25,7 @@ private:
     QLineEdit *m_parentDirectory = nullptr;
     QLineEdit *m_folderName = nullptr;
     QLineEdit *m_description = nullptr;
+    QLabel *m_descriptionWarning = nullptr;
     QPushButton *m_createButton = nullptr;
 };
 
