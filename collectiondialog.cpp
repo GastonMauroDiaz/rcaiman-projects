@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "collectiondialog.h"
 
 #include <QComboBox>
@@ -160,6 +181,15 @@ void CollectionDialog::setupUI()
 
     mainLayout->addWidget(formGroup);
 
+    auto *contractGroup = new QGroupBox("Collection contract");
+    auto *contractLayout = new QVBoxLayout(contractGroup);
+    m_contractLabel = new QLabel(contractGroup);
+    m_contractLabel->setWordWrap(true);
+    m_contractLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_contractLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    contractLayout->addWidget(m_contractLabel);
+    mainLayout->addWidget(contractGroup);
+
     // Buttons
     m_buttonBox = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -189,6 +219,7 @@ void CollectionDialog::onClassChanged(int index)
     updateFieldVisibility();
     populateParentCombo();
     populateRelatedCombo();
+    updateContractText();
     updateOkButton();
 }
 
@@ -202,7 +233,7 @@ void CollectionDialog::updateFieldVisibility()
         m_registryWidget->setVisible(true);
         m_scriptWidget->setVisible(true);
     } else if (collectionClass == "processed_image_collection") {
-        m_parentWidget->setVisible(false);
+        m_parentWidget->setVisible(true);
         m_relatedWidget->setVisible(false);
         m_registryWidget->setVisible(false);
         m_scriptWidget->setVisible(true);
@@ -278,10 +309,65 @@ QStringList CollectionDialog::compatibleClasses(const QString &targetClass, bool
         if (asParent)
             return {"preprocessed_image_collection", "processed_image_collection"};
     }
-    if (targetClass == "preprocessed_image_collection" || targetClass == "processed_image_collection") {
+    if (targetClass == "processed_image_collection") {
+        if (asParent)
+            return {"preprocessed_image_collection", "processed_image_collection"};
+    }
+    if (targetClass == "preprocessed_image_collection") {
         Q_UNUSED(asParent);
     }
     return {};
+}
+
+bool CollectionDialog::hasCompatibleCollection(const QStringList &classes) const
+{
+    for (const Collection &col : m_existingCollections) {
+        if (classes.contains(col.collectionClass, Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
+void CollectionDialog::updateContractText()
+{
+    if (!m_contractLabel || !m_typeCombo)
+        return;
+
+    const QString collectionClass = m_typeCombo->currentText();
+    QString text;
+
+    if (collectionClass == "preprocessed_image_collection") {
+        text = "Primary TIFF collection for visualization and geometry. "
+               "No parent required. Registry is optional; if provided, this "
+               "collection can be validated against RAW files. Script is optional.";
+    } else if (collectionClass == "processed_image_collection") {
+        text = "Derived TIFF collection. Parent is optional. Set a parent "
+               "preprocessed or processed image collection if this collection "
+               "should autoload with that image branch. Script is optional.";
+    } else if (collectionClass == "point_collection") {
+        text = "Point CSV collection. Parent is required and must be a "
+               "preprocessed_image_collection or processed_image_collection "
+               "because points need an image geometry. Related segmentation "
+               "is optional.";
+    } else if (collectionClass == "segmentation_collection") {
+        text = "Segmentation TIFF collection. Parent is required and must be a "
+               "preprocessed_image_collection or processed_image_collection "
+               "because it refers to the segmentation of an image plane.";
+    } else {
+        text = "General project collection for notes, documents, or auxiliary "
+               "files. No parent required.";
+    }
+
+    const QStringList parentClasses =
+        compatibleClasses(collectionClass, true);
+    if ((collectionClass == "point_collection"
+         || collectionClass == "segmentation_collection")
+        && !hasCompatibleCollection(parentClasses)) {
+        text += "\n\nNo compatible parent collection is registered yet. "
+                "Register a preprocessed or processed image collection first.";
+    }
+
+    m_contractLabel->setText(text);
 }
 
 void CollectionDialog::updateOkButton()
@@ -309,7 +395,7 @@ void CollectionDialog::updateOkButton()
     if (collectionClass == "preprocessed_image_collection") {
         enableOk = hasDirectory;
     } else if (collectionClass == "other") {
-        enableOk = hasDirectory && !m_registryEdit->text().isEmpty();
+        enableOk = hasDirectory;
     } else if (collectionClass == "processed_image_collection") {
         enableOk = hasDirectory;
     } else if (collectionClass == "point_collection" || collectionClass == "segmentation_collection") {

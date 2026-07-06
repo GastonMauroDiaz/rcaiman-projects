@@ -1,7 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "tiffreader.h"
 
 #include <QFileInfo>
 #include <QDebug>
+#include <QXmlStreamReader>
 
 #include <tiffio.h>
 
@@ -30,6 +52,65 @@ static RasterData::DataType mapDataType(int bitsPerSample, int sampleFormat)
         break;
     }
     return RasterData::DataType::Invalid;
+}
+
+static void readGdalBandDescriptions(TIFF *tif, RasterData *data)
+{
+    if (!tif || !data)
+        return;
+
+    QByteArray metadataBytes;
+    char *metadata = nullptr;
+    const TIFFField *field =
+        TIFFFindField(tif, TIFFTAG_GDAL_METADATA, TIFF_ANY);
+    if (field && TIFFFieldPassCount(field)) {
+        uint32_t metadataSize = 0;
+        if (!TIFFGetField(
+                tif, TIFFTAG_GDAL_METADATA, &metadataSize, &metadata)
+            || !metadata || metadataSize == 0) {
+            return;
+        }
+        if (metadata[metadataSize - 1] == '\0')
+            --metadataSize;
+        metadataBytes = QByteArray(metadata, static_cast<qsizetype>(metadataSize));
+    } else {
+        if (!TIFFGetField(tif, TIFFTAG_GDAL_METADATA, &metadata)
+            || !metadata) {
+            return;
+        }
+        metadataBytes = QByteArray(metadata);
+    }
+
+    if (metadataBytes.isEmpty())
+        return;
+
+    QXmlStreamReader xml(QString::fromUtf8(metadataBytes));
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement() || xml.name() != QStringLiteral("Item"))
+            continue;
+
+        const QXmlStreamAttributes attributes = xml.attributes();
+        if (attributes.value(QStringLiteral("name"))
+                != QStringLiteral("DESCRIPTION")) {
+            continue;
+        }
+
+        bool ok = false;
+        const int sample =
+            attributes.value(QStringLiteral("sample")).toInt(&ok);
+        const QString description =
+            xml.readElementText(QXmlStreamReader::SkipChildElements).trimmed();
+        if (ok && sample >= 0 && sample < data->bands()
+            && !description.isEmpty()) {
+            data->setBandName(sample, description);
+        }
+    }
+
+    if (xml.hasError()) {
+        qDebug() << "TiffReader: could not parse GDAL metadata:"
+                 << xml.errorString();
+    }
 }
 
 RasterData TiffReader::load(const QString &fileName, QString *errorMessage)
@@ -114,9 +195,7 @@ RasterData TiffReader::load(const QString &fileName, QString *errorMessage)
         }
     }
 
-    // Set band names
-    for (int b = 0; b < result.bands(); ++b)
-        result.setBandName(b, QStringLiteral("Band %1").arg(b));
+    readGdalBandDescriptions(tif, &result);
 
     qDebug() << "TiffReader: success, bands=" << result.bands();
 

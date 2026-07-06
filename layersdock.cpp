@@ -1,9 +1,31 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "layersdock.h"
 #include "layermanager.h"
 #include "layer.h"
 #include "layerpropertieswidget.h"
 #include "imagelayer.h"
 #include "pointlayer.h"
+#include "pointcollection.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -29,12 +51,63 @@
 #include <QUrl>
 
 namespace {
+QString pointCsvContractMessage(const QString &errorMessage)
+{
+    return QStringLiteral(
+        "This file is not a valid point CSV for rcaiman-projects.\n\n"
+        "Point CSV contract:\n"
+        "- The file must be a .csv file.\n"
+        "- The first two columns must be row,col.\n"
+        "- Quoted headers such as \"row\",\"col\" are accepted.\n"
+        "- row and col values must be numeric.\n"
+        "- Extra columns are allowed and are loaded as attributes.\n"
+        "- Empty CSV files are allowed if they contain a valid header.\n\n"
+        "Parser error:\n%1").arg(errorMessage);
+}
+
+bool validatePointCsvForLayer(QWidget *parent,
+                              const QString &path,
+                              const QString &title)
+{
+    QString errorMessage;
+    const PointCollection collection =
+        PointCollection::load(path, &errorMessage);
+    if (collection.isValid())
+        return true;
+
+    QMessageBox::warning(parent, title,
+                         pointCsvContractMessage(errorMessage));
+    return false;
+}
+
 class LayerListWidget : public QListWidget
 {
 public:
     using QListWidget::QListWidget;
 
+    void setPlaceholderText(const QString &text)
+    {
+        if (m_placeholderText == text)
+            return;
+        m_placeholderText = text;
+        viewport()->update();
+    }
+
 protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QListWidget::paintEvent(event);
+        if (count() > 0 || m_placeholderText.isEmpty())
+            return;
+
+        QPainter painter(viewport());
+        painter.setPen(QColor(125, 132, 142));
+        painter.drawText(
+            viewport()->rect().adjusted(18, 18, -18, -18),
+            Qt::AlignCenter | Qt::TextWordWrap,
+            m_placeholderText);
+    }
+
     void dragMoveEvent(QDragMoveEvent *event) override
     {
         QListWidget::dragMoveEvent(event);
@@ -50,6 +123,9 @@ protected:
         }
         QListWidget::dropEvent(event);
     }
+
+private:
+    QString m_placeholderText;
 };
 }
 
@@ -74,8 +150,8 @@ LayersDock::LayersDock(QWidget *parent)
     mainLayout->addWidget(m_listWidget);
 
     auto *btnLayout = new QHBoxLayout();
-    auto *addLayerBtn = new QPushButton("Add Image...", this);
-    auto *addPointsBtn = new QPushButton("Add Points...", this);
+    auto *addLayerBtn = new QPushButton("Add TIFF...", this);
+    auto *addPointsBtn = new QPushButton("Add CSV...", this);
     auto *removeBtn = new QPushButton("Remove", this);
     removeBtn->setStyleSheet(
         "QPushButton {"
@@ -141,14 +217,14 @@ LayersDock::LayersDock(QWidget *parent)
     connect(addLayerBtn, &QPushButton::clicked, this, [this]() {
         if (!m_manager) return;
         const QString filePath = QFileDialog::getOpenFileName(
-            this, "Open Image",
+            this, "Add TIFF",
             m_projectPath,
-            "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)");
+            "TIFF files (*.tif *.tiff)");
         if (filePath.isEmpty()) return;
         auto *layer = new ImageLayer(filePath);
         if (layer->rasterData().isNull()) {
             delete layer;
-            QMessageBox::warning(this, "Add Image", "Could not load image.");
+            QMessageBox::warning(this, "Add TIFF", "Could not load TIFF.");
             return;
         }
         m_manager->addLayer(layer);
@@ -237,12 +313,21 @@ void LayersDock::updateList()
 
     if (!m_manager)
     {
+        if (auto *list = dynamic_cast<LayerListWidget*>(m_listWidget)) {
+            list->setPlaceholderText(
+                "Open a TIFF to start a viewer.");
+        }
         m_updatingList = false;
         m_listWidget->blockSignals(false);
         m_openTableBtn->setEnabled(false);
         if (m_propertiesWidget)
             m_propertiesWidget->setLayer(nullptr);
         return;
+    }
+
+    if (auto *list = dynamic_cast<LayerListWidget*>(m_listWidget)) {
+        list->setPlaceholderText(
+            "Use Add TIFF... or Add CSV..., or drag files here.");
     }
 
     for (int i = 0; i < m_manager->layerCount(); ++i) {
@@ -458,20 +543,14 @@ void LayersDock::addPointLayer()
         return;
 
     const QString filePath = QFileDialog::getOpenFileName(
-        this, "Select CSV points file",
+        this, "Add CSV",
         m_projectPath,
         "CSV files (*.csv)");
     if (filePath.isEmpty())
         return;
 
-    const QString dirPath = QFileInfo(filePath).absolutePath();
-    QDir dir(dirPath);
-    const QStringList csvFiles = dir.entryList({"*.csv"}, QDir::Files);
-    if (csvFiles.isEmpty()) {
-        QMessageBox::information(this, "Add Points",
-                                 "The selected CSV file's directory does not contain any CSV files.");
+    if (!validatePointCsvForLayer(this, filePath, "Add CSV"))
         return;
-    }
 
     auto *layer = new PointLayer(filePath, m_manager->scene());
     m_manager->addLayer(layer);
@@ -644,6 +723,8 @@ void LayersDock::dropEvent(QDropEvent *event)
 
         if (fileNameIsAcceptable(suffix)) {
             if (suffix == "csv") {
+                if (!validatePointCsvForLayer(this, path, "Add CSV"))
+                    continue;
                 auto *layer = new PointLayer(path, m_manager->scene());
                 m_manager->addLayer(layer);
             } else {

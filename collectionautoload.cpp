@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "collectionautoload.h"
 #include "collectionstylefile.h"
 #include "rasterdata.h"
@@ -57,6 +78,13 @@ QString normalizedPath(const QString &path)
     return normalized;
 }
 
+QString normalizedReference(const QString &projectRootPath,
+                            const QString &reference)
+{
+    const QString resolved = Project::resolveReference(projectRootPath, reference);
+    return resolved.isEmpty() ? QString() : normalizedPath(resolved);
+}
+
 QString matchingArtifact(const Collection &collection,
                          const QString &baseName,
                          const QString &openedFilePath)
@@ -94,6 +122,34 @@ QString matchingArtifact(const Collection &collection,
                    << "- using" << matches.first();
     }
     return matches.first();
+}
+
+bool isOpenedFileInCollection(const Collection &collection,
+                              const QString &openedFilePath,
+                              const QString &baseName)
+{
+    const QFileInfo openedInfo(openedFilePath);
+    if (normalizedPath(openedInfo.absolutePath())
+        != normalizedPath(collection.dirPath)) {
+        return false;
+    }
+
+    const QString artifact = matchingArtifact(collection, baseName, openedFilePath);
+    return !artifact.isEmpty()
+        && normalizedPath(artifact) == normalizedPath(openedFilePath);
+}
+
+bool referencesCollection(const QString &projectRootPath,
+                          const Collection &collection,
+                          const QString &targetCollectionPath)
+{
+    const QString parentPath =
+        normalizedReference(projectRootPath, collection.parent);
+    const QString relatedPath =
+        normalizedReference(projectRootPath, collection.related);
+
+    return (!parentPath.isEmpty() && parentPath == targetCollectionPath)
+        || (!relatedPath.isEmpty() && relatedPath == targetCollectionPath);
 }
 
 template<typename T>
@@ -149,15 +205,46 @@ QVector<AutoloadCandidate> CollectionAutoloadResolver::resolve(
     const QString &openedFilePath,
     const QVector<Collection> &collections) const
 {
-    QVector<AutoloadCandidate> available;
     const QFileInfo openedInfo(openedFilePath);
     const QString baseName = openedInfo.completeBaseName();
 
+    Collection anchorCollection;
+    bool hasAnchor = false;
+    for (const Collection &collection : collections) {
+        if (collection.collectionClass != "preprocessed_image_collection")
+            continue;
+        if (isOpenedFileInCollection(collection, openedFilePath, baseName)) {
+            anchorCollection = collection;
+            hasAnchor = true;
+            break;
+        }
+    }
+
+    if (!hasAnchor)
+        return {};
+
+    const QString anchorPath = normalizedPath(anchorCollection.dirPath);
+    QVector<AutoloadCandidate> result;
     for (const Collection &collection : collections) {
         if (!isAutoloadCollection(collection.collectionClass))
             continue;
 
-        const QString artifact = matchingArtifact(collection, baseName, openedFilePath);
+        const QString collectionPath = normalizedPath(collection.dirPath);
+        bool include = collectionPath == anchorPath;
+
+        if (!include) {
+            const QString collectionClass = collection.collectionClass;
+            if (collectionClass != "preprocessed_image_collection") {
+                include = referencesCollection(
+                    projectRootPath, collection, anchorPath);
+            }
+        }
+
+        if (!include)
+            continue;
+
+        const QString artifact =
+            matchingArtifact(collection, baseName, openedFilePath);
         if (artifact.isEmpty())
             continue;
 
@@ -166,91 +253,8 @@ QVector<AutoloadCandidate> CollectionAutoloadResolver::resolve(
         candidate.filePath = artifact;
         candidate.layerKind = layerKindFor(collection.collectionClass);
         candidate.priority = priorityFor(collection.collectionClass);
-        candidate.openedFile = normalizedPath(artifact) == normalizedPath(openedFilePath);
-        available.append(candidate);
-    }
-
-    QSet<QString> includedCollections;
-
-    // Image collections sharing the scene key establish the spatial frame.
-    for (const AutoloadCandidate &candidate : std::as_const(available)) {
-        if (isImageCollection(candidate.collection.collectionClass))
-            includedCollections.insert(normalizedPath(candidate.collection.dirPath));
-        if (candidate.openedFile)
-            includedCollections.insert(normalizedPath(candidate.collection.dirPath));
-    }
-
-    // Follow parent and related in both directions. This allows opening any
-    // participating artifact while preserving the direction stored in YAML.
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (const AutoloadCandidate &candidate : std::as_const(available)) {
-            const QString collectionPath = normalizedPath(candidate.collection.dirPath);
-            const QString parentPath = normalizedPath(
-                Project::resolveReference(
-                    projectRootPath, candidate.collection.parent));
-            const QString relatedPath = normalizedPath(
-                Project::resolveReference(
-                    projectRootPath, candidate.collection.related));
-
-            bool include = includedCollections.contains(collectionPath)
-                || (!parentPath.isEmpty() && includedCollections.contains(parentPath))
-                || (!relatedPath.isEmpty() && includedCollections.contains(relatedPath));
-
-            if (!include) {
-                for (const AutoloadCandidate &other : std::as_const(available)) {
-                    if (!includedCollections.contains(normalizedPath(other.collection.dirPath)))
-                        continue;
-
-                    const QString otherParent = normalizedPath(
-                        Project::resolveReference(
-                            projectRootPath, other.collection.parent));
-                    const QString otherRelated = normalizedPath(
-                        Project::resolveReference(
-                            projectRootPath, other.collection.related));
-                    if (otherParent == collectionPath || otherRelated == collectionPath) {
-                        include = true;
-                        break;
-                    }
-                }
-            }
-
-            if (include && !includedCollections.contains(collectionPath)) {
-                includedCollections.insert(collectionPath);
-                changed = true;
-            }
-        }
-    }
-
-    QSet<QString> includedImageCollections;
-    for (const AutoloadCandidate &candidate : std::as_const(available)) {
-        const QString path = normalizedPath(candidate.collection.dirPath);
-        if (includedCollections.contains(path)
-            && isImageCollection(candidate.collection.collectionClass)) {
-            includedImageCollections.insert(path);
-        }
-    }
-
-    QVector<AutoloadCandidate> result;
-    for (const AutoloadCandidate &candidate : std::as_const(available)) {
-        const QString collectionPath = normalizedPath(candidate.collection.dirPath);
-        if (!includedCollections.contains(collectionPath))
-            continue;
-
-        const QString collectionClass = candidate.collection.collectionClass;
-        if (collectionClass == "point_collection"
-            || collectionClass == "segmentation_collection") {
-            const QString parentPath = normalizedPath(
-                Project::resolveReference(
-                    projectRootPath, candidate.collection.parent));
-            if (parentPath.isEmpty() || !includedImageCollections.contains(parentPath)) {
-                qWarning() << "Autoload skipped:" << candidate.filePath
-                           << "has no participating image parent";
-                continue;
-            }
-        }
-
+        candidate.openedFile =
+            normalizedPath(artifact) == normalizedPath(openedFilePath);
         result.append(candidate);
     }
 

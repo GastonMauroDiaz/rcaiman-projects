@@ -111,11 +111,11 @@
    </attribute>
    <addaction name="actionPan"/>
    <addaction name="actionZoom"/>
-   <addaction name="actionEditPoints"/>
-   <addaction name="actionCancelEdit"/>
-   <addaction name="separator"/>
    <addaction name="actionSplitViewer"/>
    <addaction name="actionSyncSplitViews"/>
+   <addaction name="separator"/>
+   <addaction name="actionEditPoints"/>
+   <addaction name="actionCancelEdit"/>
   </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">

@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #ifndef COLLECTIONDIALOG_H
 #define COLLECTIONDIALOG_H
 
@@ -8,6 +29,8 @@
 #include <QVector>
 
 #include "project.h"
+
+class QLabel;
 
 class CollectionDialog : public QDialog
 {
@@ -35,9 +58,11 @@ private slots:
 private:
     void setupUI();
     void updateFieldVisibility();
+    void updateContractText();
     void populateParentCombo();
     void populateRelatedCombo();
     QStringList compatibleClasses(const QString &targetClass, bool asParent) const;
+    bool hasCompatibleCollection(const QStringList &classes) const;
 
     QString m_projectRootPath;
     QVector<Collection> m_existingCollections;
@@ -52,6 +77,7 @@ private:
     QWidget *m_relatedWidget = nullptr;
     QWidget *m_registryWidget = nullptr;
     QWidget *m_scriptWidget = nullptr;
+    QLabel *m_contractLabel = nullptr;
     QDialogButtonBox *m_buttonBox = nullptr;
 };
 

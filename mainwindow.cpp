@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "imageviewer.h"
@@ -6,6 +27,7 @@
 #include "layer.h"
 #include "imagelayer.h"
 #include "pointlayer.h"
+#include "pointcollection.h"
 #include "pointattributetablewindow.h"
 #include "histogramdock.h"
 #include "previewdock.h"
@@ -28,11 +50,14 @@
 #include "shortcuttext.h"
 
 #include <QAction>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
+#include <QDoubleSpinBox>
 #include <QDir>
 #include <QDirIterator>
 #include <QDragMoveEvent>
@@ -41,6 +66,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QFont>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
@@ -61,6 +88,7 @@
 #include <QSettings>
 #include <QSaveFile>
 #include <QSignalBlocker>
+#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
 #include <QTableWidget>
@@ -72,6 +100,59 @@
 #include <QDateTime>
 
 namespace {
+enum class ProjectExplorerSortMode {
+    Name = 0,
+    Type = 1
+};
+
+class ProjectExplorerSortProxyModel : public QSortFilterProxyModel
+{
+public:
+    explicit ProjectExplorerSortProxyModel(QObject *parent = nullptr)
+        : QSortFilterProxyModel(parent)
+    {
+        setDynamicSortFilter(true);
+        setSortCaseSensitivity(Qt::CaseInsensitive);
+    }
+
+    void setSortMode(ProjectExplorerSortMode mode)
+    {
+        if (m_sortMode == mode)
+            return;
+        m_sortMode = mode;
+        invalidate();
+    }
+
+protected:
+    bool lessThan(const QModelIndex &left,
+                  const QModelIndex &right) const override
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model)
+            return QSortFilterProxyModel::lessThan(left, right);
+
+        const QFileInfo leftInfo = model->fileInfo(left);
+        const QFileInfo rightInfo = model->fileInfo(right);
+        if (leftInfo.isDir() != rightInfo.isDir())
+            return leftInfo.isDir();
+
+        if (!leftInfo.isDir()
+            && m_sortMode == ProjectExplorerSortMode::Type) {
+            const int extensionCompare = QString::compare(
+                leftInfo.suffix(), rightInfo.suffix(), Qt::CaseInsensitive);
+            if (extensionCompare != 0)
+                return extensionCompare < 0;
+        }
+
+        return QString::compare(
+            leftInfo.fileName(), rightInfo.fileName(), Qt::CaseInsensitive) < 0;
+    }
+
+private:
+    ProjectExplorerSortMode m_sortMode = ProjectExplorerSortMode::Name;
+};
+
 QString normalizedArtifactPath(const QString &path)
 {
     if (path.isEmpty())
@@ -83,6 +164,27 @@ QString normalizedArtifactPath(const QString &path)
     normalized = normalized.toCaseFolded();
 #endif
     return normalized;
+}
+
+QString pointCsvContractMessage(const QString &errorMessage)
+{
+    return QStringLiteral(
+        "This file is not a valid point CSV for rcaiman-projects.\n\n"
+        "Point CSV contract:\n"
+        "- The file must be a .csv file.\n"
+        "- The first two columns must be row,col.\n"
+        "- Quoted headers such as \"row\",\"col\" are accepted.\n"
+        "- row and col values must be numeric.\n"
+        "- Extra columns are allowed and are loaded as attributes.\n"
+        "- Empty CSV files are allowed if they contain a valid header.\n\n"
+        "Parser error:\n%1").arg(errorMessage);
+}
+
+bool sameProjectRoot(const QString &left, const QString &right)
+{
+    return !left.isEmpty()
+        && !right.isEmpty()
+        && normalizedArtifactPath(left) == normalizedArtifactPath(right);
 }
 
 QJsonObject imageStyleToJson(const ImageLayerStyle &style)
@@ -279,6 +381,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , m_projectFileSystemModel(new ProjectFileSystemModel(this))
+    , m_projectSortProxy(new ProjectExplorerSortProxyModel(this))
     , m_artifactWatcher(new QFileSystemWatcher(this))
 {
     ui->setupUi(this);
@@ -294,9 +397,10 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
-    ui->projectTree->setModel(m_projectFileSystemModel);
-    const QModelIndex fileSystemRoot =
-        m_projectFileSystemModel->setRootPath(QString());
+    m_projectSortProxy->setSourceModel(m_projectFileSystemModel);
+    ui->projectTree->setModel(m_projectSortProxy);
+    const QModelIndex fileSystemRoot = projectProxyIndex(
+        m_projectFileSystemModel->setRootPath(QString()));
     ui->projectTree->setRootIndex(fileSystemRoot);
     ui->projectTree->setDragEnabled(true);
     ui->projectTree->setAcceptDrops(true);
@@ -317,9 +421,49 @@ MainWindow::MainWindow(QWidget *parent)
     m_newFolderButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_newFolderButton->setAutoRaise(true);
     m_newFolderButton->setEnabled(false);
-    ui->dockProjectExplorerLayout->insertWidget(0, m_newFolderButton);
+    m_projectSortCombo = new QComboBox(this);
+    m_projectSortCombo->addItem("Order files by name", static_cast<int>(ProjectExplorerSortMode::Name));
+    m_projectSortCombo->addItem("Order files by type", static_cast<int>(ProjectExplorerSortMode::Type));
+    m_projectSortCombo->setToolTip("Sort Project Explorer");
+    m_projectSortCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_projectSortCombo->setMinimumWidth(
+        m_projectSortCombo->fontMetrics().horizontalAdvance(
+            QStringLiteral("Order files by name")) + 22);
+    QSettings explorerSettings;
+    const int savedSortMode =
+        explorerSettings.value("projectExplorer/sortMode",
+                               static_cast<int>(ProjectExplorerSortMode::Name)).toInt();
+    const int savedSortIndex = m_projectSortCombo->findData(savedSortMode);
+    if (savedSortIndex >= 0)
+        m_projectSortCombo->setCurrentIndex(savedSortIndex);
+    auto *projectSortProxy =
+        static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy);
+    projectSortProxy->setSortMode(static_cast<ProjectExplorerSortMode>(
+        m_projectSortCombo->currentData().toInt()));
+    m_projectSortProxy->sort(0, Qt::AscendingOrder);
+
+    auto *projectExplorerToolbar = new QWidget(this);
+    auto *projectExplorerToolbarLayout =
+        new QHBoxLayout(projectExplorerToolbar);
+    projectExplorerToolbarLayout->setContentsMargins(0, 0, 0, 0);
+    projectExplorerToolbarLayout->setSpacing(4);
+    projectExplorerToolbarLayout->addWidget(m_newFolderButton);
+    projectExplorerToolbarLayout->addStretch(1);
+    projectExplorerToolbarLayout->addWidget(m_projectSortCombo);
+    ui->dockProjectExplorerLayout->insertWidget(0, projectExplorerToolbar);
     connect(m_newFolderButton, &QToolButton::clicked,
             this, &MainWindow::createProjectFolder);
+    connect(m_projectSortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+                auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
+                    m_projectSortProxy);
+                proxy->setSortMode(static_cast<ProjectExplorerSortMode>(
+                    m_projectSortCombo->currentData().toInt()));
+                m_projectSortProxy->sort(0, Qt::AscendingOrder);
+                QSettings settings;
+                settings.setValue("projectExplorer/sortMode",
+                                  m_projectSortCombo->currentData().toInt());
+            });
 
     connect(m_projectFileSystemModel, &QAbstractItemModel::rowsInserted,
             this, [this]() { updateProjectActions(); });
@@ -329,8 +473,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, [this]() { updateProjectActions(); });
 
     // Load recent projects
-    QSettings settings;
-    m_recentProjects = settings.value("recentProjects").toStringList();
+    QSettings recentSettings;
+    m_recentProjects = recentSettings.value("recentProjects").toStringList();
 
     connect(ui->actionNewProject,
             &QAction::triggered,
@@ -429,6 +573,30 @@ MainWindow::MainWindow(QWidget *parent)
                     viewer->setZoomModeEnabled(enabled);
             });
 
+    m_zoomPercentSpin = new QDoubleSpinBox(this);
+    m_zoomPercentSpin->setRange(1.0, 6400.0);
+    m_zoomPercentSpin->setDecimals(0);
+    m_zoomPercentSpin->setSingleStep(10.0);
+    m_zoomPercentSpin->setSuffix("%");
+    m_zoomPercentSpin->setToolTip(
+        "Viewer zoom level. Enter 100 for actual size; press 0 in the viewer for 100%.");
+    m_zoomPercentSpin->setEnabled(false);
+    m_zoomPercentSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    m_zoomPercentSpin->setMinimumWidth(
+        m_zoomPercentSpin->fontMetrics().horizontalAdvance(
+            QStringLiteral("6400%")) + 18);
+    ui->toolBar->insertWidget(ui->actionSplitViewer, m_zoomPercentSpin);
+    connect(m_zoomPercentSpin,
+            QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this,
+            [this](double value) {
+                ImageViewer *viewer = currentImageViewer();
+                if (!viewer)
+                    return;
+                if (!qFuzzyCompare(viewer->zoomPercent() + 1.0, value + 1.0))
+                    viewer->setZoomPercent(value);
+            });
+
     connect(ui->actionEditPoints,
             &QAction::toggled,
             this,
@@ -506,6 +674,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->workspaceTabs->setElideMode(Qt::ElideMiddle);
     ui->workspaceTabs->setMovable(true);
     ui->workspaceTabs->setDocumentMode(true);
+    createViewerEmptyState();
 
     // Obtain LayersDock from the UI instead of creating it again
     if (QDockWidget *dockLayers = findChild<QDockWidget *>("dockLayers")) {
@@ -604,6 +773,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_defaultWindowState = saveState(1);
     updateProjectActions();
+    updateViewerEmptyState();
     updateRecentProjectsMenu();
     restoreApplicationState();
 }
@@ -611,6 +781,126 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::createViewerEmptyState()
+{
+    if (m_viewerEmptyState)
+        return;
+
+    m_viewerEmptyState = new QWidget(ui->dockViewerContents);
+    m_viewerEmptyState->setAcceptDrops(true);
+    m_viewerEmptyState->installEventFilter(this);
+    m_viewerEmptyState->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    auto *outerLayout = new QVBoxLayout(m_viewerEmptyState);
+    outerLayout->setContentsMargins(48, 48, 48, 48);
+    outerLayout->addStretch(1);
+
+    auto *contentLayout = new QVBoxLayout();
+    contentLayout->setSpacing(10);
+    contentLayout->setAlignment(Qt::AlignCenter);
+
+    m_viewerEmptyTitle = new QLabel(m_viewerEmptyState);
+    QFont titleFont = m_viewerEmptyTitle->font();
+    titleFont.setPointSize(titleFont.pointSize() + 4);
+    m_viewerEmptyTitle->setFont(titleFont);
+    m_viewerEmptyTitle->setAlignment(Qt::AlignCenter);
+    m_viewerEmptyTitle->setStyleSheet("color: #6f7782;");
+    m_viewerEmptyTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerEmptyTitle);
+
+    auto *rule = new QFrame(m_viewerEmptyState);
+    rule->setFrameShape(QFrame::HLine);
+    rule->setFrameShadow(QFrame::Plain);
+    rule->setFixedWidth(360);
+    rule->setStyleSheet("color: #9aa0a6;");
+    rule->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(rule, 0, Qt::AlignCenter);
+
+    m_viewerEmptyBody = new QLabel(m_viewerEmptyState);
+    m_viewerEmptyBody->setWordWrap(true);
+    m_viewerEmptyBody->setTextFormat(Qt::RichText);
+    m_viewerEmptyBody->setAlignment(Qt::AlignLeft);
+    m_viewerEmptyBody->setMaximumWidth(520);
+    m_viewerEmptyBody->setStyleSheet("color: #7b8490;");
+    m_viewerEmptyBody->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerEmptyBody);
+
+    contentLayout->addSpacing(22);
+
+    m_viewerQuickTitle = new QLabel(m_viewerEmptyState);
+    m_viewerQuickTitle->setFont(titleFont);
+    m_viewerQuickTitle->setAlignment(Qt::AlignCenter);
+    m_viewerQuickTitle->setStyleSheet("color: #6f7782;");
+    m_viewerQuickTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerQuickTitle);
+
+    m_viewerQuickRule = new QFrame(m_viewerEmptyState);
+    m_viewerQuickRule->setFrameShape(QFrame::HLine);
+    m_viewerQuickRule->setFrameShadow(QFrame::Plain);
+    m_viewerQuickRule->setFixedWidth(360);
+    m_viewerQuickRule->setStyleSheet("color: #9aa0a6;");
+    m_viewerQuickRule->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerQuickRule, 0, Qt::AlignCenter);
+
+    m_viewerQuickBody = new QLabel(m_viewerEmptyState);
+    m_viewerQuickBody->setWordWrap(true);
+    m_viewerQuickBody->setTextFormat(Qt::RichText);
+    m_viewerQuickBody->setAlignment(Qt::AlignLeft);
+    m_viewerQuickBody->setMaximumWidth(520);
+    m_viewerQuickBody->setStyleSheet("color: #7b8490;");
+    m_viewerQuickBody->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerQuickBody);
+
+    outerLayout->addLayout(contentLayout);
+    outerLayout->addStretch(2);
+
+    ui->dockViewerLayout->addWidget(m_viewerEmptyState);
+}
+
+void MainWindow::updateViewerEmptyState()
+{
+    if (!m_viewerEmptyState || !ui->workspaceTabs)
+        return;
+
+    const bool isEmpty = ui->workspaceTabs->count() == 0;
+    ui->workspaceTabs->setVisible(!isEmpty);
+    m_viewerEmptyState->setVisible(isEmpty);
+    if (!isEmpty)
+        return;
+
+    if (m_project.isValid()) {
+        m_viewerEmptyTitle->setText("Open a TIFF");
+        m_viewerEmptyBody->setText(
+            "<ul>"
+            "<li>Double-click a TIFF in Project Explorer.</li>"
+            "<li>Drag and drop a TIFF here.</li>"
+            "<li>Use <b>Image &gt; Open...</b>.</li>"
+            "</ul>"
+            "<p>Point CSV layers can be added after an image viewer is open.</p>");
+        m_viewerQuickTitle->hide();
+        m_viewerQuickRule->hide();
+        m_viewerQuickBody->hide();
+    } else {
+        m_viewerEmptyTitle->setText("Open or create a project");
+        m_viewerEmptyBody->setText(
+            "<ul>"
+            "<li><b>Project &gt; New...</b></li>"
+            "<li><b>Project &gt; Open...</b></li>"
+            "<li><b>Help &gt; Example projects...</b></li>"
+            "</ul>");
+        m_viewerQuickTitle->setText("Quick view without creating a project");
+        m_viewerQuickBody->setText(
+            "<ul>"
+            "<li>Drag and drop a TIFF here to inspect it.</li>"
+            "<li>Drag and drop a compatible point CSV after a TIFF is open.</li>"
+            "</ul>");
+        m_viewerQuickTitle->show();
+        m_viewerQuickRule->show();
+        m_viewerQuickBody->show();
+    }
 }
 
 void MainWindow::showAboutDialog()
@@ -1186,7 +1476,7 @@ void MainWindow::registerCollection()
 
 void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
 {
-    const QString filePath = m_projectFileSystemModel->filePath(index);
+    const QString filePath = projectPathFromIndex(index);
     const QFileInfo fi(filePath);
 
     const QStringList imageExtensions = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
@@ -1205,7 +1495,7 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (!index.isValid())
         return;
 
-    const QFileInfo info(m_projectFileSystemModel->filePath(index));
+    const QFileInfo info(projectPathFromIndex(index));
     ui->projectTree->setCurrentIndex(index);
 
     QMenu menu(this);
@@ -1462,6 +1752,26 @@ void MainWindow::createProjectFolder()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_viewerEmptyState) {
+        if (event->type() == QEvent::DragEnter) {
+            dragEnterEvent(static_cast<QDragEnterEvent*>(event));
+            return true;
+        }
+        if (event->type() == QEvent::DragMove) {
+            auto *dragEvent = static_cast<QDragMoveEvent*>(event);
+            if (dragEvent->mimeData()->hasUrls())
+                dragEvent->acceptProposedAction();
+            else
+                dragEvent->ignore();
+            return true;
+        }
+        if (event->type() == QEvent::Drop) {
+            dropEvent(static_cast<QDropEvent*>(event));
+            updateViewerEmptyState();
+            return true;
+        }
+    }
+
     if (watched != ui->projectTree->viewport()
         || !m_project.isValid()) {
         return QMainWindow::eventFilter(watched, event);
@@ -1494,8 +1804,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        QFileInfo destination(
-            m_projectFileSystemModel->filePath(index));
+        QFileInfo destination(projectPathFromIndex(index));
         const QString destinationDirectory = destination.isDir()
             ? destination.absoluteFilePath()
             : destination.absoluteDir().absolutePath();
@@ -1592,7 +1901,7 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
     if (!m_previewDock || !m_project.isValid())
         return;
 
-    const QString filePath = m_projectFileSystemModel->filePath(index);
+    const QString filePath = projectPathFromIndex(index);
     const QFileInfo fi(filePath);
 
     if (!fi.isFile()) {
@@ -1666,6 +1975,7 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
     onActiveViewerChanged(viewer);
 
     updateProjectActions();
+    updateViewerEmptyState();
     refreshReloadableArtifactWatchers();
 }
 
@@ -1903,6 +2213,7 @@ void MainWindow::onEditPointsToggled(bool enabled)
     PointLayer *pointLayer = viewer->editingPointLayer();
     ui->actionCancelEdit->setEnabled(pointLayer && pointLayer->editMode());
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
+    refreshReloadableArtifactWatchers();
 }
 
 void MainWindow::onCancelEditTriggered()
@@ -1919,6 +2230,7 @@ void MainWindow::onCancelEditTriggered()
     viewer->setPointEditEnabled(false);
     ui->actionEditPoints->setChecked(false);
     ui->actionCancelEdit->setEnabled(false);
+    refreshReloadableArtifactWatchers();
 }
 
 void MainWindow::onWorkspaceTabChanged(int index)
@@ -1959,6 +2271,11 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         }
         ui->actionPan->setEnabled(false);
         ui->actionZoom->setEnabled(false);
+        if (m_zoomPercentSpin) {
+            const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
+            m_zoomPercentSpin->setEnabled(false);
+            m_zoomPercentSpin->setValue(100.0);
+        }
         ui->actionSyncSplitViews->setEnabled(false);
         ui->actionSyncSplitZoom->setEnabled(false);
         ui->actionEditPoints->setChecked(false);
@@ -1979,6 +2296,11 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     }
     ui->actionPan->setEnabled(true);
     ui->actionZoom->setEnabled(true);
+    if (m_zoomPercentSpin) {
+        const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
+        m_zoomPercentSpin->setEnabled(true);
+        m_zoomPercentSpin->setValue(viewer->zoomPercent());
+    }
 
     // Enable sync only if the viewer is inside a QSplitter with siblings
     auto *splitter = qobject_cast<QSplitter*>(viewer->parentWidget());
@@ -2049,6 +2371,21 @@ void MainWindow::openAttributeTable(PointLayer *layer)
     window->show();
     window->raise();
     window->activateWindow();
+}
+
+void MainWindow::closeAttributeTables()
+{
+    const auto windows = m_attributeTables.values();
+    m_attributeTables.clear();
+
+    for (const QPointer<PointAttributeTableWindow> &window : windows) {
+        if (!window)
+            continue;
+        auto *rawWindow = window.data();
+        rawWindow->setAttribute(Qt::WA_DeleteOnClose, false);
+        rawWindow->close();
+        delete rawWindow;
+    }
 }
 
 void MainWindow::splitViewer()
@@ -2125,6 +2462,7 @@ void MainWindow::openImageAtPath(const QString &filePath)
     configureViewer(viewer);
     m_activeViewer = viewer;
     updateProjectActions();
+    updateViewerEmptyState();
 }
 
 bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
@@ -2224,6 +2562,13 @@ void MainWindow::configureViewer(ImageViewer *viewer)
 
     connect(viewer, &ImageViewer::pixelInfoChanged,
             this, &MainWindow::updatePropertiesTable);
+    connect(viewer, &ImageViewer::zoomPercentChanged,
+            this, [this, viewer](double percent) {
+                if (viewer != currentImageViewer() || !m_zoomPercentSpin)
+                    return;
+                const QSignalBlocker blocker(m_zoomPercentSpin);
+                m_zoomPercentSpin->setValue(percent);
+            });
     connect(viewer->layerManager(), &LayerManager::layersChanged,
             this, &MainWindow::refreshReloadableArtifactWatchers);
     connect(viewer, &ImageViewer::activatedByClick, this, [this, viewer]() {
@@ -2237,8 +2582,8 @@ void MainWindow::configureViewer(ImageViewer *viewer)
             this, [this, viewer](const QString &path) {
                 if (!viewer || !viewer->layerManager())
                     return;
-                viewer->layerManager()->addLayer(
-                    createStyledPointLayer(path, viewer));
+                if (PointLayer *layer = createStyledPointLayer(path, viewer))
+                    viewer->layerManager()->addLayer(layer);
             });
     connect(viewer, &ImageViewer::closeRequested, this, [this, viewer]() {
         auto *v = qobject_cast<ImageViewer*>(sender());
@@ -2284,6 +2629,36 @@ void MainWindow::configureViewer(ImageViewer *viewer)
         }
     });
     refreshReloadableArtifactWatchers();
+}
+
+QModelIndex MainWindow::projectSourceIndex(const QModelIndex &index) const
+{
+    if (!index.isValid())
+        return {};
+    if (index.model() == m_projectFileSystemModel)
+        return index;
+    if (index.model() == m_projectSortProxy)
+        return m_projectSortProxy->mapToSource(index);
+    return {};
+}
+
+QModelIndex MainWindow::projectProxyIndex(const QModelIndex &index) const
+{
+    if (!index.isValid())
+        return {};
+    if (index.model() == m_projectSortProxy)
+        return index;
+    if (index.model() == m_projectFileSystemModel)
+        return m_projectSortProxy->mapFromSource(index);
+    return {};
+}
+
+QString MainWindow::projectPathFromIndex(const QModelIndex &index) const
+{
+    const QModelIndex sourceIndex = projectSourceIndex(index);
+    return sourceIndex.isValid()
+        ? m_projectFileSystemModel->filePath(sourceIndex)
+        : QString();
 }
 
 QList<Layer*> MainWindow::reloadableLayersForPath(const QString &path) const
@@ -2400,6 +2775,10 @@ void MainWindow::reloadArtifactFromDisk(const QString &path)
 
     const QString sourcePath = layers.first()->sourcePath();
     const QFileInfo info(sourcePath);
+    const bool pointsArtifact = qobject_cast<PointLayer*>(layers.first()) != nullptr;
+    const QString artifactKind = pointsArtifact
+        ? QStringLiteral("points")
+        : QStringLiteral("image");
     QString errorMessage;
     bool ok = info.exists() && info.isFile();
     if (ok) {
@@ -2418,8 +2797,8 @@ void MainWindow::reloadArtifactFromDisk(const QString &path)
         m_pendingReloadAttempts.insert(key, attempts);
         if (attempts <= 8) {
             statusBar()->showMessage(
-                QStringLiteral("Waiting for stable image: %1")
-                    .arg(info.fileName()),
+                QStringLiteral("Waiting for stable %1: %2")
+                    .arg(artifactKind, info.fileName()),
                 1500);
             scheduleArtifactReload(sourcePath, 500);
             refreshReloadableArtifactWatchers();
@@ -2428,8 +2807,8 @@ void MainWindow::reloadArtifactFromDisk(const QString &path)
 
         m_pendingReloadAttempts.remove(key);
         statusBar()->showMessage(
-            QStringLiteral("Could not reload image: %1")
-                .arg(info.fileName()),
+            QStringLiteral("Could not reload %1: %2")
+                .arg(artifactKind, info.fileName()),
             5000);
         qWarning() << "Hot reload failed for" << sourcePath << errorMessage;
         refreshReloadableArtifactWatchers();
@@ -2439,7 +2818,7 @@ void MainWindow::reloadArtifactFromDisk(const QString &path)
     m_pendingReloadAttempts.remove(key);
     refreshReloadableArtifactWatchers();
     statusBar()->showMessage(
-        QStringLiteral("Reloaded image: %1").arg(info.fileName()),
+        QStringLiteral("Reloaded %1: %2").arg(artifactKind, info.fileName()),
         3000);
 
     if (m_activeViewer)
@@ -2448,6 +2827,24 @@ void MainWindow::reloadArtifactFromDisk(const QString &path)
 
 void MainWindow::loadProject(const Project &project)
 {
+    // Only the folder containing project.yaml identifies a project. Its parent
+    // folder may contain many sibling projects and must not be treated as open.
+    if (m_project.isValid()
+        && sameProjectRoot(m_project.rootPath(), project.rootPath())) {
+        m_project = project;
+        updateProjectExplorer();
+        updateProjectActions();
+        setWindowTitle(QString("%1 - rcaiman-projects").arg(m_project.name()));
+        if (m_layersDock)
+            m_layersDock->setProjectPath(m_project.rootPath());
+        if (m_previewDock)
+            m_previewDock->show();
+        addToRecentProjects(m_project.rootPath());
+        updateViewerEmptyState();
+        statusBar()->showMessage("Project is already open", 3000);
+        return;
+    }
+
     closeCurrentProject();
 
     m_project = project;
@@ -2460,17 +2857,58 @@ void MainWindow::loadProject(const Project &project)
         m_previewDock->show();
     addToRecentProjects(m_project.rootPath());
     restoreProjectSession();
+    updateViewerEmptyState();
 }
 
 void MainWindow::closeCurrentProject()
 {
     saveProjectSession();
 
+    closeAttributeTables();
+
+    m_pendingReloadAttempts.clear();
+    m_scheduledArtifactReloads.clear();
+    if (m_artifactWatcher)
+        m_artifactWatcher->removePaths(m_artifactWatcher->files());
+
     if (m_currentPointLayer) {
         disconnect(m_pointLayerConnection);
         disconnect(m_pointCollectionConnection);
         m_currentPointLayer = nullptr;
     }
+
+    setHistogramLayer(nullptr);
+    if (m_layersDock) {
+        m_layersDock->setLayerManager(nullptr);
+        m_layersDock->setProjectPath(QString());
+    }
+    if (m_previewDock) {
+        m_previewDock->clear();
+        m_previewDock->hide();
+    }
+    clearPropertiesTable();
+
+    {
+        const QSignalBlocker panBlocker(ui->actionPan);
+        const QSignalBlocker zoomBlocker(ui->actionZoom);
+        const QSignalBlocker editBlocker(ui->actionEditPoints);
+        ui->actionPan->setChecked(false);
+        ui->actionZoom->setChecked(false);
+        ui->actionEditPoints->setChecked(false);
+    }
+    ui->actionPan->setEnabled(false);
+    ui->actionZoom->setEnabled(false);
+    if (m_zoomPercentSpin) {
+        const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
+        m_zoomPercentSpin->setEnabled(false);
+        m_zoomPercentSpin->setValue(100.0);
+    }
+    ui->actionSyncSplitViews->setEnabled(false);
+    ui->actionSyncSplitZoom->setEnabled(false);
+    ui->actionEditPoints->setEnabled(false);
+    ui->actionCancelEdit->setEnabled(false);
+
+    m_activeViewer.clear();
 
     {
         const QSignalBlocker blocker(ui->workspaceTabs);
@@ -2482,29 +2920,14 @@ void MainWindow::closeCurrentProject()
     }
 
     m_openImageTabs.clear();
-    m_pendingReloadAttempts.clear();
-    m_scheduledArtifactReloads.clear();
-    if (m_artifactWatcher)
-        m_artifactWatcher->removePaths(m_artifactWatcher->files());
-    m_activeViewer.clear();
-    onActiveViewerChanged(nullptr);
-
-    if (m_layersDock) {
-        m_layersDock->setLayerManager(nullptr);
-        m_layersDock->setProjectPath(QString());
-    }
-    if (m_previewDock) {
-        m_previewDock->clear();
-        m_previewDock->hide();
-    }
 
     m_project = Project();
     m_projectFileSystemModel->setProjectRoot(QString());
-    ui->projectTree->setRootIndex(
-        m_projectFileSystemModel->setRootPath(QString()));
-    clearPropertiesTable();
+    ui->projectTree->setRootIndex(projectProxyIndex(
+        m_projectFileSystemModel->setRootPath(QString())));
     setWindowTitle("rcaiman-projects");
     updateProjectActions();
+    updateViewerEmptyState();
 }
 
 void MainWindow::saveApplicationState()
@@ -2865,8 +3288,10 @@ void MainWindow::restoreProjectSession()
         }
     }
 
-    if (ui->workspaceTabs->count() == 0)
+    if (ui->workspaceTabs->count() == 0) {
+        updateViewerEmptyState();
         return;
+    }
 
     restoredCurrentTab = qBound(
         0, restoredCurrentTab, ui->workspaceTabs->count() - 1);
@@ -2896,6 +3321,7 @@ void MainWindow::restoreProjectSession()
     ui->actionSyncSplitZoom->setChecked(syncZoom);
     ImageViewer::setSyncZoomEnabled(syncZoom);
     updateProjectActions();
+    updateViewerEmptyState();
     refreshReloadableArtifactWatchers();
 }
 
@@ -2906,7 +3332,8 @@ void MainWindow::updateProjectExplorer()
         return;
     }
     m_projectFileSystemModel->setProjectRoot(m_project.rootPath());
-    const QModelIndex rootIndex = m_projectFileSystemModel->setRootPath(m_project.rootPath());
+    const QModelIndex rootIndex = projectProxyIndex(
+        m_projectFileSystemModel->setRootPath(m_project.rootPath()));
     ui->projectTree->setRootIndex(rootIndex);
     ui->projectTree->setColumnWidth(0, 220);
 }
@@ -3315,10 +3742,19 @@ Collection MainWindow::collectionForPath(const QString &path) const
 }
 
 PointLayer *MainWindow::createStyledPointLayer(const QString &path,
-                                               ImageViewer *viewer) const
+                                               ImageViewer *viewer)
 {
     if (!viewer)
         return nullptr;
+
+    QString errorMessage;
+    const PointCollection pointCollection =
+        PointCollection::load(path, &errorMessage);
+    if (!pointCollection.isValid()) {
+        QMessageBox::warning(this, "Add CSV",
+                             pointCsvContractMessage(errorMessage));
+        return nullptr;
+    }
 
     auto *layer = new PointLayer(path, viewer->scene());
     const Collection collection = collectionForPath(path);
@@ -3415,12 +3851,13 @@ void MainWindow::dropEvent(QDropEvent *event)
     if (suffix == "csv") {
         ImageViewer *v = currentImageViewer();
         if (!v) {
-            QMessageBox::information(this, "Add Points",
-                "Open an image first before adding a point layer.");
+            QMessageBox::information(this, "Add CSV",
+                "Open an image first before adding a point CSV layer.");
               event->acceptProposedAction();
               return;
           }
-        v->layerManager()->addLayer(createStyledPointLayer(path, v));
+        if (PointLayer *layer = createStyledPointLayer(path, v))
+            v->layerManager()->addLayer(layer);
     } else {
         openImageAtPath(path);
     }
@@ -3473,7 +3910,7 @@ QString MainWindow::selectedProjectPath() const
     if (!index.isValid())
         return {};
 
-    const QFileInfo fi(m_projectFileSystemModel->filePath(index));
+    const QFileInfo fi(projectPathFromIndex(index));
     if (!fi.isDir())
         return {};
 
@@ -3593,8 +4030,9 @@ void MainWindow::createPointsCsv()
       if (viewer && viewer->layerManager()) {
           const auto reply = QMessageBox::question(this, "Add layer",
                                                    "Add the new points file as a layer to the current viewer?");
-          if (reply == QMessageBox::Yes)
-            viewer->layerManager()->addLayer(
-                createStyledPointLayer(savePath, viewer));
+          if (reply == QMessageBox::Yes) {
+              if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
+                  viewer->layerManager()->addLayer(layer);
+          }
       }
   }

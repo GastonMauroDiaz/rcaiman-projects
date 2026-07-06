@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
@@ -27,6 +48,12 @@ class LayersDock;
 class QTableWidget;
 class QSplitter;
 class QToolButton;
+class QComboBox;
+class QDoubleSpinBox;
+class QFrame;
+class QLabel;
+class QModelIndex;
+class QSortFilterProxyModel;
 class PointLayer;
 class PointAttributeTableWindow;
 class PreviewDock;
@@ -108,6 +135,7 @@ private:
     void configureViewer(ImageViewer *viewer);
     void createProjectFolder();
     void openAttributeTable(PointLayer *layer);
+    void closeAttributeTables();
     ImageViewer *viewerForLayer(PointLayer *layer) const;
     bool copyDroppedFiles(const QList<QUrl> &urls,
                           const QString &destinationDirectory);
@@ -115,15 +143,21 @@ private:
                           const QString &registryPath = {});
     Collection collectionForPath(const QString &path) const;
     PointLayer *createStyledPointLayer(const QString &path,
-                                       ImageViewer *viewer) const;
+                                       ImageViewer *viewer);
     void refreshReloadableArtifactWatchers();
     void scheduleArtifactReload(const QString &path, int delayMs = 500);
     void reloadArtifactFromDisk(const QString &path);
     QList<Layer*> reloadableLayersForPath(const QString &path) const;
     void setHistogramLayer(Layer *layer);
+    void createViewerEmptyState();
+    void updateViewerEmptyState();
+    QModelIndex projectSourceIndex(const QModelIndex &index) const;
+    QModelIndex projectProxyIndex(const QModelIndex &index) const;
+    QString projectPathFromIndex(const QModelIndex &index) const;
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
+    QSortFilterProxyModel *m_projectSortProxy = nullptr;
     QFileSystemWatcher *m_artifactWatcher = nullptr;
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
@@ -131,6 +165,14 @@ private:
     HistogramDock *m_histogramDock = nullptr;
     PreviewDock *m_previewDock = nullptr;
     QToolButton *m_newFolderButton = nullptr;
+    QComboBox *m_projectSortCombo = nullptr;
+    QDoubleSpinBox *m_zoomPercentSpin = nullptr;
+    QWidget *m_viewerEmptyState = nullptr;
+    QLabel *m_viewerEmptyTitle = nullptr;
+    QLabel *m_viewerEmptyBody = nullptr;
+    QFrame *m_viewerQuickRule = nullptr;
+    QLabel *m_viewerQuickTitle = nullptr;
+    QLabel *m_viewerQuickBody = nullptr;
     QStringList m_recentProjects;
     PointLayer *m_currentPointLayer = nullptr;
     QMetaObject::Connection m_pointLayerConnection;

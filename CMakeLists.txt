@@ -91,6 +91,12 @@ qt_add_executable(rcaiman_projects
     resources.qrc
 )
 
+if(WIN32)
+    target_sources(rcaiman_projects PRIVATE
+        assets/branding/rcaiman-projects.rc
+    )
+endif()
+
 set_target_properties(rcaiman_projects PROPERTIES
     OUTPUT_NAME "rcaiman-projects"
 )

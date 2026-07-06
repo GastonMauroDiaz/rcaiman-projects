@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "imageviewer.h"
 #include "imagelayer.h"
 #include "layermanager.h"
@@ -146,6 +167,25 @@ void ImageViewer::restoreView(const QTransform &viewTransform,
     m_autoFitImage = false;
     setTransform(viewTransform);
     centerOn(center);
+    emitZoomPercentChanged();
+}
+
+double ImageViewer::zoomPercent() const
+{
+    const QTransform current = transform();
+    return std::hypot(current.m11(), current.m21()) * 100.0;
+}
+
+void ImageViewer::setZoomPercent(double percent)
+{
+    percent = qBound(1.0, percent, 6400.0);
+    const QPointF center = viewCenter();
+    m_autoFitImage = false;
+    const double scaleFactor = percent / 100.0;
+    setTransform(QTransform::fromScale(scaleFactor, scaleFactor));
+    centerOn(center);
+    emitZoomPercentChanged();
+    syncTransformToSiblings();
 }
 
 void ImageViewer::zoomToPointIndices(PointLayer *layer,
@@ -186,6 +226,7 @@ void ImageViewer::zoomToPointIndices(PointLayer *layer,
     bounds.adjust(-margin, -margin, margin, margin);
     resetTransform();
     fitInView(bounds, Qt::KeepAspectRatio);
+    emitZoomPercentChanged();
 }
 
 bool ImageViewer::panModeEnabled() const
@@ -240,6 +281,8 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
         return;
     if (handleTemporaryZoomKeyEvent(event))
         return;
+    if (handleResetZoomKeyEvent(event))
+        return;
 
     QGraphicsView::keyPressEvent(event);
 }
@@ -271,20 +314,8 @@ void ImageViewer::wheelEvent(QWheelEvent *event)
     else
         scale(1.0 / zoomFactor, 1.0 / zoomFactor);
 
-    if (ms_syncEnabled && ms_syncZoomEnabled) {
-        const QTransform t = transform();
-        if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
-            for (int i = 0; i < splitter->count(); ++i) {
-                if (ImageViewer *sib = qobject_cast<ImageViewer*>(splitter->widget(i))) {
-                    if (sib != this) {
-                        sib->m_syncingScroll = true;
-                        sib->setTransform(t);
-                        sib->m_syncingScroll = false;
-                    }
-                }
-            }
-        }
-    }
+    emitZoomPercentChanged();
+    syncTransformToSiblings();
 }
 
 void ImageViewer::fitImageToView()
@@ -293,6 +324,7 @@ void ImageViewer::fitImageToView()
         return;
     resetTransform();
     fitInView(m_imageLayer->pixmapItem(), Qt::KeepAspectRatio);
+    emitZoomPercentChanged();
 }
 
 void ImageViewer::updateDragMode()
@@ -357,6 +389,23 @@ bool ImageViewer::handleTemporaryZoomKeyEvent(QEvent *event)
     return true;
 }
 
+bool ImageViewer::handleResetZoomKeyEvent(QEvent *event)
+{
+    if (event->type() != QEvent::KeyPress)
+        return false;
+
+    auto *keyEvent = static_cast<QKeyEvent*>(event);
+    if (keyEvent->key() != Qt::Key_0
+        || keyEvent->isAutoRepeat()
+        || keyEvent->modifiers() != Qt::NoModifier) {
+        return false;
+    }
+
+    setZoomPercent(100.0);
+    keyEvent->accept();
+    return true;
+}
+
 void ImageViewer::setPointItemsInteractionBlocked(bool blocked)
 {
     if (!m_scene)
@@ -393,8 +442,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         && !zoomInteractionActive()
         && event->button() == Qt::LeftButton
         && event->modifiers().testFlag(Qt::ControlModifier)) {
-        const QPointF scenePos = mapToScene(event->pos());
-        QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, transform()) : nullptr;
+        QGraphicsItem *itemUnder = itemAt(event->pos());
         if (!belongsToPointItem(itemUnder) && boxSelectionPointLayer()) {
             beginPointBoxSelection(event->pos());
             event->accept();
@@ -404,7 +452,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
 
     if (m_pointEditEnabled && !panInteractionActive() && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
-        QGraphicsItem *itemUnder = m_scene ? m_scene->itemAt(scenePos, QTransform()) : nullptr;
+        QGraphicsItem *itemUnder = itemAt(event->pos());
         const bool isPointItem = belongsToPointItem(itemUnder);
         if (!isPointItem) {
             if (m_editingPointLayer) {
@@ -434,21 +482,33 @@ void ImageViewer::applyDragZoom(const QPoint &pos)
     scale(factor, factor);
     centerOn(center);
     m_zoomDragLastPos = pos;
+    emitZoomPercentChanged();
+    syncTransformToSiblings();
+}
 
-    if (ms_syncEnabled && ms_syncZoomEnabled) {
-        const QTransform t = transform();
-        if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
-            for (int i = 0; i < splitter->count(); ++i) {
-                if (ImageViewer *sib = qobject_cast<ImageViewer*>(splitter->widget(i))) {
-                    if (sib != this) {
-                        sib->m_syncingScroll = true;
-                        sib->setTransform(t);
-                        sib->m_syncingScroll = false;
-                    }
+void ImageViewer::syncTransformToSiblings()
+{
+    if (!ms_syncEnabled || !ms_syncZoomEnabled)
+        return;
+
+    const QTransform t = transform();
+    if (QSplitter *splitter = qobject_cast<QSplitter*>(parentWidget())) {
+        for (int i = 0; i < splitter->count(); ++i) {
+            if (ImageViewer *sib = qobject_cast<ImageViewer*>(splitter->widget(i))) {
+                if (sib != this) {
+                    sib->m_syncingScroll = true;
+                    sib->setTransform(t);
+                    sib->m_syncingScroll = false;
+                    sib->emitZoomPercentChanged();
                 }
             }
         }
     }
+}
+
+void ImageViewer::emitZoomPercentChanged()
+{
+    emit zoomPercentChanged(zoomPercent());
 }
 
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
@@ -607,6 +667,8 @@ bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
         if (handleSpacePanKeyEvent(event))
             return true;
         if (handleTemporaryZoomKeyEvent(event))
+            return true;
+        if (handleResetZoomKeyEvent(event))
             return true;
         if (event->type() == QEvent::DragEnter) {
             auto *de = static_cast<QDragEnterEvent*>(event);

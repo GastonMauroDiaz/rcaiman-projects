@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "pointlayer.h"
 #include "pointitem.h"
 
@@ -39,6 +60,57 @@ const QVector<QGraphicsItem*> &PointLayer::buildItems(QGraphicsScene *scene)
     rebuildItems(scene);
     m_itemsBuilt = true;
     return m_items;
+}
+
+bool PointLayer::supportsReloadFromDisk() const
+{
+    const QFileInfo fi(sourcePath());
+    return !m_editMode
+        && fi.isFile()
+        && fi.suffix().compare(QStringLiteral("csv"), Qt::CaseInsensitive) == 0;
+}
+
+bool PointLayer::reloadFromDisk(QString *errorMessage)
+{
+    if (m_editMode) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Point layer is currently being edited.");
+        return false;
+    }
+
+    const QFileInfo fi(sourcePath());
+    if (!fi.isFile()
+        || fi.suffix().compare(QStringLiteral("csv"), Qt::CaseInsensitive) != 0) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Source path is not a CSV file: %1")
+                .arg(sourcePath());
+        return false;
+    }
+
+    QString loadError;
+    PointCollection reloaded = PointCollection::load(sourcePath(), &loadError);
+    if (!reloaded.isValid()) {
+        if (errorMessage)
+            *errorMessage = loadError.isEmpty()
+                ? QStringLiteral("Could not reload points file.")
+                : loadError;
+        return false;
+    }
+
+    m_collection = reloaded;
+    m_selectedPointIndices.clear();
+    m_primarySelectedPointIndex = -1;
+
+    if (m_scene) {
+        m_itemsBuilt = false;
+        rebuildItems(m_scene);
+        m_itemsBuilt = true;
+    }
+
+    emit collectionChanged();
+    emit selectionChanged();
+    emit dataChanged();
+    return true;
 }
 
 void PointLayer::rebuildItems(QGraphicsScene *scene)

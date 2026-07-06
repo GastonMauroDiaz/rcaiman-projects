@@ -9,7 +9,7 @@ Scientific processing is performed by *rcaiman*.
 Instrument calibration records are managed by *rcaiman.registry* and
 distributed through *rcaiman.registry.data*.
 
-Copyright © 2026 Gastón Mauro Díaz
+Copyright © 2026 GASTON MAURO DIAZ
 
 Licensed under the GNU General Public License v3.0.
 

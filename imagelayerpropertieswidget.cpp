@@ -1,3 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Copyright (C) 2026 GASTON MAURO DIAZ
+//
+// This file is part of rcaiman-projects.
+//
+// rcaiman-projects is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// rcaiman-projects is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
+//
+// Part of the rcaiman suite.
+
 #include "imagelayerpropertieswidget.h"
 #include "imagelayer.h"
 
@@ -299,6 +320,7 @@ void ImageLayerPropertiesWidget::updateFromLayer()
         m_redBandSpin->setValue(qBound(1, style.render.redBand + 1, bandCount));
         m_greenBandSpin->setValue(qBound(1, style.render.greenBand + 1, bandCount));
         m_blueBandSpin->setValue(qBound(1, style.render.blueBand + 1, bandCount));
+        updateBandSpinTexts();
         m_tailTrimCheck->setChecked(style.render.tailTrim);
         m_trimLeftCheck->setChecked(style.render.trimLeftTail);
         m_trimRightCheck->setChecked(style.render.trimRightTail);
@@ -315,6 +337,8 @@ void ImageLayerPropertiesWidget::updateFromLayer()
             m_manualMinSpin->setValue(minValue);
             m_manualMaxSpin->setValue(maxValue);
         }
+    } else {
+        updateBandSpinTexts();
     }
 
     updateControlVisibility();
@@ -368,6 +392,41 @@ void ImageLayerPropertiesWidget::updateControlVisibility()
     m_trimPercentSpin->setEnabled(trimRangeEnabled);
     m_manualMinSpin->setEnabled(manualRangeEnabled);
     m_manualMaxSpin->setEnabled(manualRangeEnabled);
+}
+
+void ImageLayerPropertiesWidget::updateBandSpinTexts()
+{
+    updateBandSpinText(m_bandSpin, m_bandSpin ? m_bandSpin->value() - 1 : -1);
+    updateBandSpinText(
+        m_redBandSpin,
+        m_redBandSpin ? m_redBandSpin->value() - 1 : -1);
+    updateBandSpinText(
+        m_greenBandSpin,
+        m_greenBandSpin ? m_greenBandSpin->value() - 1 : -1);
+    updateBandSpinText(
+        m_blueBandSpin,
+        m_blueBandSpin ? m_blueBandSpin->value() - 1 : -1);
+}
+
+void ImageLayerPropertiesWidget::updateBandSpinText(
+    QSpinBox *spin,
+    int band) const
+{
+    if (!spin)
+        return;
+
+    spin->setSuffix(QString());
+    spin->setToolTip(QString());
+    if (!m_layer)
+        return;
+
+    const RasterData &data = m_layer->rasterData();
+    if (!data.hasBandName(band))
+        return;
+
+    const QString name = data.bandName(band).trimmed();
+    spin->setSuffix(QStringLiteral(" (%1)").arg(name));
+    spin->setToolTip(name);
 }
 
 void ImageLayerPropertiesWidget::automaticRenderRange(
