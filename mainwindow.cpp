@@ -68,6 +68,7 @@
 #include <QFileSystemWatcher>
 #include <QFont>
 #include <QFrame>
+#include <QGraphicsScene>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
@@ -1981,33 +1982,43 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
 
 void MainWindow::onLayerSelectionChanged(int index)
 {
+    if (m_currentPointLayer) {
+        disconnect(m_pointLayerConnection);
+        disconnect(m_pointCollectionConnection);
+        m_currentPointLayer = nullptr;
+    }
+
     ImageViewer *viewer = currentImageViewer();
     if (!viewer) {
         setHistogramLayer(nullptr);
+        ui->actionEditPoints->setChecked(false);
+        ui->actionEditPoints->setEnabled(false);
+        ui->actionCancelEdit->setEnabled(false);
         return;
     }
 
     LayerManager *mgr = viewer->layerManager();
     if (!mgr) {
         setHistogramLayer(nullptr);
+        ui->actionEditPoints->setChecked(false);
+        ui->actionEditPoints->setEnabled(false);
+        ui->actionCancelEdit->setEnabled(false);
         return;
     }
 
     if (index < 0 || index >= mgr->layerCount()) {
+        mgr->setActiveLayer(nullptr);
         setHistogramLayer(nullptr);
+        ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
+        ui->actionEditPoints->setEnabled(viewer->pointEditEnabled());
+        PointLayer *editingLayer = viewer->editingPointLayer();
+        ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
         return;
     }
 
     Layer *layer = mgr->layerAt(index);
     mgr->setActiveLayer(layer);
     setHistogramLayer(layer);
-
-    // Disconnect previous point layer connection
-    if (m_currentPointLayer) {
-        disconnect(m_pointLayerConnection);
-        disconnect(m_pointCollectionConnection);
-        m_currentPointLayer = nullptr;
-    }
 
     if (auto *pointLayer = qobject_cast<PointLayer*>(layer)) {
         m_currentPointLayer = pointLayer;
@@ -2628,6 +2639,13 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                 remainingViewer->setFocus();
         }
     });
+    connect(viewer, &ImageViewer::reloadRequested,
+            this, [this, viewer]() {
+                auto *v = qobject_cast<ImageViewer*>(sender());
+                if (!v || v != viewer)
+                    return;
+                reloadViewerLayers(v);
+            });
     refreshReloadableArtifactWatchers();
 }
 
@@ -2692,6 +2710,60 @@ QList<Layer*> MainWindow::reloadableLayersForPath(const QString &path) const
     }
 
     return result;
+}
+
+void MainWindow::reloadViewerLayers(ImageViewer *viewer)
+{
+    if (!viewer || !viewer->layerManager())
+        return;
+
+    LayerManager *manager = viewer->layerManager();
+    int attempted = 0;
+    int reloaded = 0;
+    QStringList failures;
+
+    for (int layerIndex = 0; layerIndex < manager->layerCount(); ++layerIndex) {
+        Layer *layer = manager->layerAt(layerIndex);
+        if (!layer || !layer->supportsReloadFromDisk())
+            continue;
+
+        ++attempted;
+        QString errorMessage;
+        if (layer->reloadFromDisk(&errorMessage)) {
+            ++reloaded;
+        } else {
+            failures.append(QStringLiteral("%1: %2")
+                                .arg(QFileInfo(layer->sourcePath()).fileName(),
+                                     errorMessage));
+        }
+    }
+
+    if (attempted == 0) {
+        statusBar()->showMessage("No reloadable layers in this panel", 3000);
+        return;
+    }
+
+    if (QGraphicsScene *scene = viewer->scene()) {
+        const QRectF bounds = scene->itemsBoundingRect();
+        scene->setSceneRect(bounds);
+    }
+
+    refreshReloadableArtifactWatchers();
+    if (m_activeViewer == viewer)
+        onActiveViewerChanged(viewer);
+
+    if (failures.isEmpty()) {
+        statusBar()->showMessage(
+            QStringLiteral("Reloaded %1 layer(s)").arg(reloaded), 3000);
+    } else {
+        statusBar()->showMessage(
+            QStringLiteral("Reloaded %1 of %2 layer(s); %3 failed")
+                .arg(reloaded)
+                .arg(attempted)
+                .arg(failures.size()),
+            5000);
+        qWarning() << "Manual panel reload failures:" << failures;
+    }
 }
 
 void MainWindow::refreshReloadableArtifactWatchers()

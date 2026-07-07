@@ -308,8 +308,8 @@ void LayersDock::setLayerManager(LayerManager *manager)
 void LayersDock::updateList()
 {
     m_updatingList = true;
-    m_listWidget->clear();
     m_listWidget->blockSignals(true);
+    m_listWidget->clear();
 
     if (!m_manager)
     {
@@ -512,6 +512,9 @@ QIcon LayersDock::pointLayerIcon(const Layer *layer) const
 
 void LayersDock::updateActiveLayerFromUi(int row)
 {
+    if (m_updatingList)
+        return;
+
     if (!m_manager)
         return;
 

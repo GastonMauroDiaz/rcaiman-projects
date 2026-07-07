@@ -84,6 +84,7 @@ public:
 signals:
     void pixelInfoChanged(const PixelInfo &info);
     void closeRequested();
+    void reloadRequested();
     void activatedByClick();
     void pointLayerFileDropped(const QString &path);
     void zoomPercentChanged(double percent);

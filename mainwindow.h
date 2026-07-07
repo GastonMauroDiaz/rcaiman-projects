@@ -147,6 +147,7 @@ private:
     void refreshReloadableArtifactWatchers();
     void scheduleArtifactReload(const QString &path, int delayMs = 500);
     void reloadArtifactFromDisk(const QString &path);
+    void reloadViewerLayers(ImageViewer *viewer);
     QList<Layer*> reloadableLayersForPath(const QString &path) const;
     void setHistogramLayer(Layer *layer);
     void createViewerEmptyState();

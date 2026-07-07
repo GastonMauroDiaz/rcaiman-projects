@@ -802,8 +802,12 @@ void ImageViewer::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
     QAction *closeAct = menu.addAction("Close panel");
-    if (menu.exec(event->globalPos()) == closeAct)
+    QAction *reloadAct = menu.addAction("Reload");
+    QAction *selected = menu.exec(event->globalPos());
+    if (selected == closeAct)
         emit closeRequested();
+    else if (selected == reloadAct)
+        emit reloadRequested();
 }
 
 void ImageViewer::dropEvent(QDropEvent *event)

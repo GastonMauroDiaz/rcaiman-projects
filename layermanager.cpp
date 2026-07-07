@@ -97,10 +97,16 @@ void LayerManager::removeLayer(int index)
         return;
 
     Layer *layer = m_layers.takeAt(index);
+    const bool activeChanged = (m_activeLayer == layer);
 
-    if (m_activeLayer == layer) {
+    if (activeChanged) {
         m_activeLayer->setActive(false);
         m_activeLayer = nullptr;
+        if (!m_layers.isEmpty()) {
+            const int nextIndex = qMin(index, m_layers.size() - 1);
+            m_activeLayer = m_layers.at(nextIndex);
+            m_activeLayer->setActive(true);
+        }
     }
 
     if (m_scene)
@@ -109,10 +115,14 @@ void LayerManager::removeLayer(int index)
     delete layer;
     rebuildZOrder();
     emit layersChanged();
+    if (activeChanged)
+        emit activeLayerChanged(m_activeLayer);
 }
 
 void LayerManager::clearAll()
 {
+    const bool hadActiveLayer = (m_activeLayer != nullptr);
+
     if (m_scene) {
         for (Layer *layer : std::as_const(m_layers)) {
             layer->removeFromScene(m_scene);
@@ -126,6 +136,8 @@ void LayerManager::clearAll()
     qDeleteAll(m_layers);
     m_layers.clear();
     emit layersChanged();
+    if (hadActiveLayer)
+        emit activeLayerChanged(nullptr);
 }
 
 void LayerManager::moveUp(int index)
