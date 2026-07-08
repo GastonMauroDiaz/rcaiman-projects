@@ -83,6 +83,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -94,6 +95,7 @@
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
+#include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -102,6 +104,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QDateTime>
+
+#include <cmath>
 
 namespace {
 enum class ProjectExplorerSortMode {
@@ -155,6 +159,114 @@ protected:
 
 private:
     ProjectExplorerSortMode m_sortMode = ProjectExplorerSortMode::Name;
+};
+
+constexpr int ProjectFileMarkAreaWidth = 24;
+constexpr int ProjectFileMarkSize = 15;
+
+QRect projectFileMarkAreaRect(const QRect &rowRect)
+{
+    return QRect(rowRect.right() - ProjectFileMarkAreaWidth + 1,
+                 rowRect.top(),
+                 ProjectFileMarkAreaWidth,
+                 rowRect.height());
+}
+
+QRect projectFileMarkIconRect(const QRect &rowRect)
+{
+    const QRect area = projectFileMarkAreaRect(rowRect);
+    return QRect(area.left() + (area.width() - ProjectFileMarkSize) / 2,
+                 area.top() + (area.height() - ProjectFileMarkSize) / 2,
+                 ProjectFileMarkSize,
+                 ProjectFileMarkSize);
+}
+
+QPainterPath starPath(const QRectF &rect)
+{
+    constexpr double pi = 3.14159265358979323846;
+    const QPointF center = rect.center();
+    const double outerRadius = qMin(rect.width(), rect.height()) / 2.0;
+    const double innerRadius = outerRadius * 0.48;
+
+    QPainterPath path;
+    for (int i = 0; i < 10; ++i) {
+        const double angle = -pi / 2.0 + i * pi / 5.0;
+        const double radius = (i % 2 == 0) ? outerRadius : innerRadius;
+        const QPointF point(center.x() + std::cos(angle) * radius,
+                            center.y() + std::sin(angle) * radius);
+        if (i == 0)
+            path.moveTo(point);
+        else
+            path.lineTo(point);
+    }
+    path.closeSubpath();
+    return path;
+}
+
+void drawProjectFileMark(QPainter *painter,
+                         const QRect &rowRect,
+                         bool marked)
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    const QRectF iconRect =
+        QRectF(projectFileMarkIconRect(rowRect)).adjusted(1.5, 1.5, -1.5, -1.5);
+    const QPainterPath path = starPath(iconRect);
+    if (marked) {
+        painter->setPen(QPen(QColor(170, 110, 0), 1.1));
+        painter->setBrush(QColor(255, 183, 36));
+    } else {
+        painter->setPen(QPen(QColor(174, 181, 190), 1.15));
+        painter->setBrush(Qt::NoBrush);
+    }
+    painter->drawPath(path);
+    painter->restore();
+}
+
+void drawProjectExplorerRowGuide(QPainter *painter,
+                                 const QRect &rowRect,
+                                 bool selected)
+{
+    if (selected)
+        return;
+
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, false);
+    painter->setPen(QPen(QColor(232, 237, 242), 1));
+    painter->drawLine(rowRect.left() + 2,
+                      rowRect.bottom(),
+                      rowRect.right() - 2,
+                      rowRect.bottom());
+    painter->restore();
+}
+
+class ProjectExplorerDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter,
+               const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        if (index.column() != 0) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem contentOption = option;
+        contentOption.rect.setRight(
+            option.rect.right() - ProjectFileMarkAreaWidth);
+        QStyledItemDelegate::paint(painter, contentOption, index);
+        drawProjectExplorerRowGuide(
+            painter,
+            option.rect,
+            option.state.testFlag(QStyle::State_Selected));
+        drawProjectFileMark(
+            painter,
+            option.rect,
+            index.data(ProjectFileMarkedRole).toBool());
+    }
 };
 
 QString normalizedArtifactPath(const QString &path)
@@ -466,6 +578,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     m_projectSortProxy->setSourceModel(m_projectFileSystemModel);
     ui->projectTree->setModel(m_projectSortProxy);
+    ui->projectTree->setItemDelegate(
+        new ProjectExplorerDelegate(ui->projectTree));
     const QModelIndex fileSystemRoot = projectProxyIndex(
         m_projectFileSystemModel->setRootPath(QString()));
     ui->projectTree->setRootIndex(fileSystemRoot);
@@ -1792,6 +1906,21 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                 this, "Delete", "The selected item could not be deleted.");
             return;
         }
+        const QString deletedRelativePath = projectRelativePath(
+            info.absoluteFilePath());
+        if (!deletedRelativePath.isEmpty()
+            && deletedRelativePath != ".") {
+            const QString childPrefix = deletedRelativePath + "/";
+            const QStringList markedPaths = m_projectFileMarks.values();
+            for (const QString &relativePath : markedPaths) {
+                if (relativePath == deletedRelativePath
+                    || relativePath.startsWith(childPrefix)) {
+                    m_projectFileMarks.remove(relativePath);
+                }
+            }
+            saveProjectFileMarks();
+            m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        }
         if (m_previewDock)
             m_previewDock->clear();
         m_projectFileSystemModel->refreshDirectory(parentPath);
@@ -1981,6 +2110,20 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (watched != ui->projectTree->viewport()
         || !m_project.isValid()) {
         return QMainWindow::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::MouseButtonRelease
+        || event->type() == QEvent::MouseButtonDblClick) {
+        auto *mouseEvent = static_cast<QMouseEvent*>(event);
+        QModelIndex markIndex;
+        if (mouseEvent->button() == Qt::LeftButton
+            && projectFileMarkHitTest(
+                mouseEvent->position().toPoint(), &markIndex)) {
+            if (event->type() == QEvent::MouseButtonPress)
+                toggleProjectFileMark(projectPathFromIndex(markIndex));
+            return true;
+        }
     }
 
     if (event->type() == QEvent::DragEnter
@@ -3196,6 +3339,7 @@ void MainWindow::loadProject(const Project &project)
     closeCurrentProject();
 
     m_project = project;
+    loadProjectFileMarks();
     updateProjectExplorer();
     updateProjectActions();
     setWindowTitle(QString("%1 - rcaiman-projects").arg(m_project.name()));
@@ -3211,6 +3355,7 @@ void MainWindow::loadProject(const Project &project)
 void MainWindow::closeCurrentProject()
 {
     saveProjectSession();
+    saveProjectFileMarks();
 
     closeAttributeTables();
 
@@ -3270,6 +3415,8 @@ void MainWindow::closeCurrentProject()
     m_openImageTabs.clear();
 
     m_project = Project();
+    m_projectFileMarks.clear();
+    m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
     m_projectFileSystemModel->setProjectRoot(QString());
     ui->projectTree->setRootIndex(projectProxyIndex(
         m_projectFileSystemModel->setRootPath(QString())));
@@ -3337,6 +3484,164 @@ QString MainWindow::projectAbsolutePath(const QString &relativePath) const
         return {};
     return QFileInfo(
         QDir(m_project.rootPath()).filePath(relativePath)).absoluteFilePath();
+}
+
+QString MainWindow::projectFileMarksPath() const
+{
+    if (!m_project.isValid())
+        return {};
+    return QDir(m_project.rootPath()).filePath(".rcaiman/file_marks.json");
+}
+
+void MainWindow::loadProjectFileMarks()
+{
+    m_projectFileMarks.clear();
+    if (!m_project.isValid()) {
+        if (m_projectFileSystemModel)
+            m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        return;
+    }
+
+    QFile file(projectFileMarksPath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (m_projectFileSystemModel)
+            m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        if (m_projectFileSystemModel)
+            m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        return;
+    }
+
+    const QJsonValue marksValue = document.object().value("marks");
+    if (marksValue.isArray()) {
+        const QJsonArray marks = marksValue.toArray();
+        for (const QJsonValue &value : marks) {
+            const QString relativePath =
+                QDir::fromNativeSeparators(value.toString());
+            if (relativePath.isEmpty())
+                continue;
+            const QString absolutePath = projectAbsolutePath(relativePath);
+            if (!QFileInfo::exists(absolutePath))
+                continue;
+            m_projectFileMarks.insert(relativePath);
+        }
+    } else if (marksValue.isObject()) {
+        const QJsonObject marks = marksValue.toObject();
+        for (auto it = marks.constBegin(); it != marks.constEnd(); ++it) {
+            const QString relativePath = QDir::fromNativeSeparators(it.key());
+            if (relativePath.isEmpty())
+                continue;
+            if (it.value().isBool() && !it.value().toBool())
+                continue;
+            if (it.value().isNull() || it.value().isUndefined())
+                continue;
+            const QString absolutePath = projectAbsolutePath(relativePath);
+            if (!QFileInfo::exists(absolutePath))
+                continue;
+            m_projectFileMarks.insert(relativePath);
+        }
+    } else {
+        if (m_projectFileSystemModel)
+            m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        return;
+    }
+
+    if (m_projectFileSystemModel)
+        m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+}
+
+void MainWindow::saveProjectFileMarks() const
+{
+    if (!m_project.isValid())
+        return;
+
+    const QString marksPath = projectFileMarksPath();
+    if (m_projectFileMarks.isEmpty()) {
+        QFile::remove(marksPath);
+        return;
+    }
+
+    const QString sessionDirectory =
+        QDir(m_project.rootPath()).filePath(".rcaiman");
+    if (!QDir().mkpath(sessionDirectory))
+        return;
+
+    QStringList paths = m_projectFileMarks.values();
+    paths.sort(Qt::CaseInsensitive);
+    QJsonArray marks;
+    for (const QString &relativePath : paths)
+        marks.append(relativePath);
+
+    QJsonObject root;
+    root["schema_version"] = 2;
+    root["marks"] = marks;
+
+    QSaveFile file(marksPath);
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    file.commit();
+}
+
+bool MainWindow::projectFileMarkHitTest(
+    const QPoint &position,
+    QModelIndex *rowIndex) const
+{
+    if (!ui->projectTree || !m_project.isValid())
+        return false;
+
+    const QModelIndex index = ui->projectTree->indexAt(position);
+    if (!index.isValid())
+        return false;
+
+    const QModelIndex markIndex = index.sibling(index.row(), 0);
+    const QRect rowRect = ui->projectTree->visualRect(markIndex);
+    if (!projectFileMarkAreaRect(rowRect).contains(position))
+        return false;
+
+    if (rowIndex)
+        *rowIndex = markIndex;
+    return true;
+}
+
+void MainWindow::toggleProjectFileMark(const QString &path)
+{
+    if (!m_project.isValid() || path.isEmpty())
+        return;
+
+    const QFileInfo info(path);
+    if (!info.exists())
+        return;
+
+    const QString relativePath =
+        projectRelativePath(info.absoluteFilePath());
+    if (relativePath.isEmpty()
+        || relativePath == "."
+        || relativePath.startsWith("../")) {
+        return;
+    }
+
+    const bool marked = m_projectFileMarks.contains(relativePath);
+    if (marked)
+        m_projectFileMarks.remove(relativePath);
+    else
+        m_projectFileMarks.insert(relativePath);
+
+    saveProjectFileMarks();
+    if (m_projectFileSystemModel) {
+        m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        m_projectFileSystemModel->refreshDirectory(info.absoluteFilePath());
+    }
+    statusBar()->showMessage(
+        marked ? "Mark cleared" : "Marked",
+        2000);
 }
 
 void MainWindow::saveProjectSession()
@@ -3676,6 +3981,8 @@ void MainWindow::restoreProjectSession()
 void MainWindow::updateProjectExplorer()
 {
     if (!m_project.isValid()) {
+        m_projectFileMarks.clear();
+        m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
         ui->projectTree->setRootIndex(QModelIndex());
         return;
     }

@@ -23,8 +23,11 @@
 #define PROJECTFILESYSTEMMODEL_H
 
 #include <QFileSystemModel>
+#include <QSet>
 
 class QFileInfo;
+
+constexpr int ProjectFileMarkedRole = Qt::UserRole + 100;
 
 class ProjectFileSystemModel : public QFileSystemModel
 {
@@ -37,15 +40,18 @@ public:
                   int role = Qt::DisplayRole) const override;
 
     void setProjectRoot(const QString &path);
+    void setFileMarks(const QSet<QString> &marks);
     void refreshDirectory(const QString &path);
 
 private:
     bool isDirectProjectChild(const QFileInfo &info) const;
+    QString projectRelativePath(const QFileInfo &info) const;
     QString collectionClass(const QString &directoryPath) const;
     int relevantFileCount(const QFileInfo &info,
                           const QString &collectionClass) const;
 
     QString m_projectRoot;
+    QSet<QString> m_fileMarks;
 };
 
 #endif // PROJECTFILESYSTEMMODEL_H

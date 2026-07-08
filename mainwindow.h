@@ -124,6 +124,12 @@ private:
     void restoreProjectSession();
     QString projectRelativePath(const QString &absolutePath) const;
     QString projectAbsolutePath(const QString &relativePath) const;
+    QString projectFileMarksPath() const;
+    void loadProjectFileMarks();
+    void saveProjectFileMarks() const;
+    bool projectFileMarkHitTest(const QPoint &position,
+                                QModelIndex *rowIndex = nullptr) const;
+    void toggleProjectFileMark(const QString &path);
     void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -196,6 +202,7 @@ private:
     CollectionStyleData m_copiedCollectionStyle;
     QString m_copiedCollectionStyleKind;
     QString m_copiedCollectionStyleSource;
+    QSet<QString> m_projectFileMarks;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

@@ -60,6 +60,9 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
         return QFileSystemModel::data(index, role);
 
     const QFileInfo info = fileInfo(index);
+    if (role == ProjectFileMarkedRole)
+        return m_fileMarks.contains(projectRelativePath(info));
+
     if (!info.isDir())
         return QFileSystemModel::data(index, role);
 
@@ -109,11 +112,18 @@ void ProjectFileSystemModel::setProjectRoot(const QString &path)
     m_projectRoot = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
+void ProjectFileSystemModel::setFileMarks(const QSet<QString> &marks)
+{
+    m_fileMarks = marks;
+}
+
 void ProjectFileSystemModel::refreshDirectory(const QString &path)
 {
     const QModelIndex directoryIndex = index(path);
     if (directoryIndex.isValid())
-        emit dataChanged(directoryIndex, directoryIndex, {Qt::DisplayRole});
+        emit dataChanged(directoryIndex, directoryIndex,
+                         {Qt::DisplayRole, ProjectFileMarkedRole,
+                          Qt::ForegroundRole, Qt::ToolTipRole});
 }
 
 bool ProjectFileSystemModel::isDirectProjectChild(const QFileInfo &info) const
@@ -128,6 +138,19 @@ bool ProjectFileSystemModel::isDirectProjectChild(const QFileInfo &info) const
 #else
     return parentPath == m_projectRoot;
 #endif
+}
+
+QString ProjectFileSystemModel::projectRelativePath(
+    const QFileInfo &info) const
+{
+    if (m_projectRoot.isEmpty())
+        return {};
+
+    const QString relative = QDir(m_projectRoot).relativeFilePath(
+        info.absoluteFilePath());
+    if (relative == "." || relative.startsWith("../"))
+        return {};
+    return QDir::fromNativeSeparators(relative);
 }
 
 QString ProjectFileSystemModel::collectionClass(

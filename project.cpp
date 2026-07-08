@@ -964,6 +964,13 @@ ProjectCleanupPlan Project::buildCleanupPlan() const
                     QDir::fromNativeSeparators(
                         QDir(m_rootPath).relativeFilePath(sessionPath)));
             }
+            const QString marksPath =
+                QDir(m_rootPath).filePath(".rcaiman/file_marks.json");
+            if (QFileInfo::exists(marksPath)) {
+                temporaryFiles.append(
+                    QDir::fromNativeSeparators(
+                        QDir(m_rootPath).relativeFilePath(marksPath)));
+            }
             return temporaryFiles;
         }());
 
