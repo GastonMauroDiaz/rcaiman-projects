@@ -475,6 +475,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->projectTree->viewport()->installEventFilter(this);
     ui->projectTree->setDropIndicatorShown(true);
     setAcceptDrops(true);
+    ui->projectTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    ui->projectTree->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->projectTree->setHeaderHidden(true);
     ui->projectTree->hideColumn(1);
     ui->projectTree->hideColumn(2);
@@ -1625,8 +1627,17 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (!index.isValid())
         return;
 
-    const QFileInfo info(projectPathFromIndex(index));
-    ui->projectTree->setCurrentIndex(index);
+    const QModelIndex rowIndex = index.sibling(index.row(), 0);
+    if (!ui->projectTree->selectionModel()->isSelected(rowIndex)) {
+        ui->projectTree->setCurrentIndex(rowIndex);
+        ui->projectTree->selectionModel()->select(
+            rowIndex,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    } else {
+        ui->projectTree->setCurrentIndex(rowIndex);
+    }
+
+    const QFileInfo info(projectPathFromIndex(rowIndex));
 
     QMenu menu(this);
     QAction *openDefaultAction =
