@@ -25,6 +25,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMetaObject>
+#include <QVector>
 #include <QWidget>
 
 class QListWidget;
@@ -78,6 +79,7 @@ protected:
 
 private:
     QIcon pointLayerIcon(const Layer *layer) const;
+    QVector<int> selectedLayerRows() const;
 
     LayerManager *m_manager = nullptr;
     QListWidget *m_listWidget = nullptr;

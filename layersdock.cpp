@@ -42,6 +42,7 @@
 #include <QDragMoveEvent>
 #include <QGroupBox>
 #include <QIcon>
+#include <QItemSelectionModel>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
@@ -51,6 +52,8 @@
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
+
+#include <algorithm>
 
 namespace {
 QString pointCsvContractMessage(const QString &errorMessage)
@@ -153,6 +156,13 @@ public:
     }
 
 protected:
+    void startDrag(Qt::DropActions supportedActions) override
+    {
+        if (selectedItems().size() > 1)
+            return;
+        QListWidget::startDrag(supportedActions);
+    }
+
     void paintEvent(QPaintEvent *event) override
     {
         QListWidget::paintEvent(event);
@@ -199,7 +209,7 @@ LayersDock::LayersDock(QWidget *parent)
     mainLayout->setSpacing(4);
 
     m_listWidget = new LayerListWidget(this);
-    m_listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_listWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_listWidget->setIconSize(QSize(18, 18));
     m_listWidget->setDragDropMode(QAbstractItemView::InternalMove);
     m_listWidget->setDefaultDropAction(Qt::MoveAction);
@@ -472,17 +482,25 @@ void LayersDock::onLayerContextMenuRequested(const QPoint &position)
     if (row < 0 || row >= m_manager->layerCount())
         return;
 
-    m_listWidget->setCurrentRow(row);
+    const bool preserveSelection = item->isSelected();
+    m_listWidget->setCurrentItem(
+        item,
+        preserveSelection
+            ? QItemSelectionModel::NoUpdate
+            : QItemSelectionModel::ClearAndSelect);
     Layer *layer = m_manager->layerAt(row);
     if (!layer)
         return;
+
+    const QVector<int> selectedRows = selectedLayerRows();
 
     const QFileInfo sourceInfo(layer->sourcePath());
     const bool hasSource = !sourceInfo.absoluteFilePath().isEmpty()
         && sourceInfo.exists();
 
     QMenu menu(this);
-    QAction *removeAction = menu.addAction("Remove");
+    QAction *removeAction = menu.addAction(
+        selectedRows.size() > 1 ? "Remove selected layers" : "Remove");
     menu.addSeparator();
     QAction *openDefaultAction =
         menu.addAction("Open with default app");
@@ -569,6 +587,22 @@ QIcon LayersDock::pointLayerIcon(const Layer *layer) const
     return QIcon(pixmap);
 }
 
+QVector<int> LayersDock::selectedLayerRows() const
+{
+    QVector<int> rows;
+    if (!m_listWidget)
+        return rows;
+
+    for (QListWidgetItem *item : m_listWidget->selectedItems()) {
+        const int row = m_listWidget->row(item);
+        if (row >= 0 && !rows.contains(row))
+            rows.append(row);
+    }
+
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
 void LayersDock::updateActiveLayerFromUi(int row)
 {
     if (m_updatingList)
@@ -624,14 +658,25 @@ void LayersDock::removeLayer()
     if (!m_manager)
         return;
 
-    const int currentRow = m_listWidget->currentRow();
-    if (currentRow < 0 || currentRow >= m_manager->layerCount())
+    QVector<int> rows = selectedLayerRows();
+    if (rows.isEmpty()) {
+        const int currentRow = m_listWidget->currentRow();
+        if (currentRow >= 0)
+            rows.append(currentRow);
+    }
+
+    rows.erase(std::remove_if(rows.begin(), rows.end(), [this](int row) {
+        return row < 0 || row >= m_manager->layerCount();
+    }), rows.end());
+
+    if (rows.isEmpty())
         return;
 
-    // Disable flicker on the layer being removed
-    Layer *layer = m_manager->layerAt(currentRow);
-    if (layer && layer->flickerEnabled())
-        layer->setFlickerEnabled(false);
+    for (const int row : rows) {
+        Layer *layer = m_manager->layerAt(row);
+        if (layer && layer->flickerEnabled())
+            layer->setFlickerEnabled(false);
+    }
 
     if (m_trackedLayer) {
         disconnect(m_trackedFlickerConnection);
@@ -646,7 +691,7 @@ void LayersDock::removeLayer()
     m_flickerBtn->blockSignals(false);
     m_flickerSpeed->setEnabled(false);
 
-    m_manager->removeLayer(currentRow);
+    m_manager->removeLayers(rows);
 }
 
 void LayersDock::moveUp()

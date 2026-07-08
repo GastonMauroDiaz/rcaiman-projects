@@ -46,6 +46,7 @@ public:
 
     void addLayer(Layer *layer);   // toma ownership
     void removeLayer(int index);   // elimina y borra
+    void removeLayers(const QVector<int> &indexes);
     void clearAll();                // remueve todas las capas
     void moveUp(int index);
     void moveDown(int index);

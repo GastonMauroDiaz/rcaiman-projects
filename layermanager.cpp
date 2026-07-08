@@ -24,6 +24,8 @@
 
 #include <QGraphicsScene>
 
+#include <algorithm>
+
 LayerManager::LayerManager(QObject *parent)
     : QObject(parent)
 {
@@ -93,26 +95,46 @@ void LayerManager::addLayer(Layer *layer)
 
 void LayerManager::removeLayer(int index)
 {
-    if (index < 0 || index >= m_layers.size())
-        return;
+    removeLayers(QVector<int>{index});
+}
 
-    Layer *layer = m_layers.takeAt(index);
-    const bool activeChanged = (m_activeLayer == layer);
-
-    if (activeChanged) {
-        m_activeLayer->setActive(false);
-        m_activeLayer = nullptr;
-        if (!m_layers.isEmpty()) {
-            const int nextIndex = qMin(index, m_layers.size() - 1);
-            m_activeLayer = m_layers.at(nextIndex);
-            m_activeLayer->setActive(true);
-        }
+void LayerManager::removeLayers(const QVector<int> &indexes)
+{
+    QVector<int> rows;
+    rows.reserve(indexes.size());
+    for (const int index : indexes) {
+        if (index >= 0 && index < m_layers.size() && !rows.contains(index))
+            rows.append(index);
     }
 
-    if (m_scene)
-        layer->removeFromScene(m_scene);
+    if (rows.isEmpty())
+        return;
 
-    delete layer;
+    std::sort(rows.begin(), rows.end());
+
+    const int activeIndex = indexOf(m_activeLayer);
+    const bool activeChanged = rows.contains(activeIndex);
+    if (activeChanged && m_activeLayer) {
+        m_activeLayer->setActive(false);
+        m_activeLayer = nullptr;
+    }
+
+    QVector<Layer*> removedLayers;
+    removedLayers.reserve(rows.size());
+    for (int i = rows.size() - 1; i >= 0; --i) {
+        Layer *layer = m_layers.takeAt(rows.at(i));
+        if (m_scene)
+            layer->removeFromScene(m_scene);
+        removedLayers.append(layer);
+    }
+
+    if (activeChanged && !m_layers.isEmpty()) {
+        const int nextIndex = qMin(rows.first(), m_layers.size() - 1);
+        m_activeLayer = m_layers.at(nextIndex);
+        m_activeLayer->setActive(true);
+    }
+
+    qDeleteAll(removedLayers);
     rebuildZOrder();
     emit layersChanged();
     if (activeChanged)
