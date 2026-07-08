@@ -21,7 +21,9 @@
 
 #include "imagelayer.h"
 #include "tiffreader.h"
+#include "tiffwriter.h"
 
+#include <QFile>
 #include <QFileInfo>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
@@ -33,6 +35,7 @@
 #include <QWidget>
 #include <QtGlobal>
 
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -108,6 +111,11 @@ ImageLayer::ImageLayer(const QString &filePath, QObject *parent)
     }
 }
 
+ImageLayer::~ImageLayer()
+{
+    removeBinaryMaskBackup();
+}
+
 const QVector<QGraphicsItem*> &ImageLayer::buildItems(QGraphicsScene *scene)
 {
     if (m_itemsBuilt)
@@ -136,7 +144,7 @@ const QVector<QGraphicsItem*> &ImageLayer::buildItems(QGraphicsScene *scene)
 
 bool ImageLayer::supportsReloadFromDisk() const
 {
-    return true;
+    return !m_binaryMaskEditMode;
 }
 
 bool ImageLayer::reloadFromDisk(QString *errorMessage)
@@ -169,6 +177,179 @@ bool ImageLayer::reloadFromDisk(QString *errorMessage)
 
     emit dataChanged();
     return true;
+}
+
+bool ImageLayer::isEditableBinaryMask() const
+{
+    const QFileInfo info(sourcePath());
+    const QString suffix = info.suffix().toLower();
+    return info.isFile()
+        && (suffix == QStringLiteral("tif") || suffix == QStringLiteral("tiff"))
+        && m_rasterData.dataType() == RasterData::DataType::UInt8
+        && m_rasterData.bands() == 1
+        && m_rasterData.width() > 0
+        && m_rasterData.height() > 0;
+}
+
+bool ImageLayer::setBinaryMaskEditMode(bool enabled,
+                                       QString *errorMessage)
+{
+    if (m_binaryMaskEditMode == enabled)
+        return true;
+
+    if (enabled) {
+        if (!isEditableBinaryMask()) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral(
+                    "Only single-band UInt8 TIFF masks can be edited.");
+            return false;
+        }
+        if (!ensureBinaryMaskBackup(errorMessage))
+            return false;
+        m_binaryMaskEditMode = true;
+        return true;
+    }
+
+    removeBinaryMaskBackup();
+    m_binaryMaskEditMode = false;
+    return true;
+}
+
+bool ImageLayer::cancelBinaryMaskEdit(QString *errorMessage)
+{
+    if (m_binaryMaskBackupPath.isEmpty()
+        || !QFile::exists(m_binaryMaskBackupPath)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No mask edit backup is available.");
+        return false;
+    }
+
+    const QString src = sourcePath();
+    QFile::remove(src);
+    if (!QFile::copy(m_binaryMaskBackupPath, src)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Could not restore mask backup.");
+        return false;
+    }
+
+    QString loadError;
+    RasterData restored = TiffReader::load(src, &loadError);
+    if (restored.isNull()) {
+        if (errorMessage)
+            *errorMessage = loadError.isEmpty()
+                ? QStringLiteral("Could not reload restored mask.")
+                : loadError;
+        return false;
+    }
+
+    m_rasterData = std::move(restored);
+    m_renderer.clearCache();
+    ++m_dataRevision;
+    m_binaryMaskEditMode = false;
+    removeBinaryMaskBackup();
+    refreshRenderedImageNow();
+    emit dataChanged();
+    return true;
+}
+
+bool ImageLayer::paintBinaryMaskAtScenePos(const QPointF &scenePos,
+                                           int brushSize,
+                                           bool erase)
+{
+    if (!m_binaryMaskEditMode || !isEditableBinaryMask() || !m_pixmapItem)
+        return false;
+
+    const QPointF itemPos = m_pixmapItem->mapFromScene(scenePos);
+    const int centerCol = static_cast<int>(std::floor(itemPos.x()));
+    const int centerRow = static_cast<int>(std::floor(itemPos.y()));
+    if (centerRow < 0 || centerRow >= m_rasterData.height()
+        || centerCol < 0 || centerCol >= m_rasterData.width()) {
+        return false;
+    }
+
+    brushSize = qBound(1, brushSize, 200);
+    const double radius = qMax(0.5, brushSize / 2.0);
+    const double radiusSquared = radius * radius;
+    const int pixelRadius = static_cast<int>(std::ceil(radius));
+    const quint8 value = erase ? 0 : 1;
+    bool changed = false;
+
+    quint8 *pixels = reinterpret_cast<quint8 *>(m_rasterData.rawData().data());
+    const int width = m_rasterData.width();
+    const int height = m_rasterData.height();
+    for (int row = qMax(0, centerRow - pixelRadius);
+         row <= qMin(height - 1, centerRow + pixelRadius);
+         ++row) {
+        for (int col = qMax(0, centerCol - pixelRadius);
+             col <= qMin(width - 1, centerCol + pixelRadius);
+             ++col) {
+            const double dx = (col + 0.5) - (centerCol + 0.5);
+            const double dy = (row + 0.5) - (centerRow + 0.5);
+            if (dx * dx + dy * dy > radiusSquared)
+                continue;
+
+            quint8 &pixel = pixels[static_cast<qsizetype>(row) * width + col];
+            if (pixel == value)
+                continue;
+            pixel = value;
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        m_renderer.clearCache();
+        ++m_dataRevision;
+        refreshRenderedImageNow();
+        emit dataChanged();
+    }
+    return changed;
+}
+
+bool ImageLayer::saveBinaryMask(QString *errorMessage)
+{
+    if (!m_binaryMaskEditMode || !isEditableBinaryMask()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No editable binary mask is active.");
+        return false;
+    }
+    return TiffWriter::write(sourcePath(), m_rasterData, errorMessage);
+}
+
+bool ImageLayer::ensureBinaryMaskBackup(QString *errorMessage)
+{
+    const QString src = sourcePath();
+    QFileInfo info(src);
+    if (!info.isFile()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Mask source file does not exist.");
+        return false;
+    }
+
+    m_binaryMaskBackupPath = src + QStringLiteral(".bak");
+    if (QFile::exists(m_binaryMaskBackupPath)
+        && !QFile::remove(m_binaryMaskBackupPath)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Could not remove old mask backup.");
+        m_binaryMaskBackupPath.clear();
+        return false;
+    }
+
+    if (!QFile::copy(src, m_binaryMaskBackupPath)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Could not create mask backup.");
+        m_binaryMaskBackupPath.clear();
+        return false;
+    }
+    return true;
+}
+
+void ImageLayer::removeBinaryMaskBackup()
+{
+    if (!m_binaryMaskBackupPath.isEmpty()
+        && QFile::exists(m_binaryMaskBackupPath)) {
+        QFile::remove(m_binaryMaskBackupPath);
+    }
+    m_binaryMaskBackupPath.clear();
 }
 
 void ImageLayer::setStyle(const ImageLayerStyle &style)

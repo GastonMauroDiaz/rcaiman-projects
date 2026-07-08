@@ -28,6 +28,7 @@
 #include <QKeyEvent>
 #include <QMutex>
 #include <QMouseEvent>
+#include <QPointF>
 #include <QPointer>
 #include <QRubberBand>
 #include <QResizeEvent>
@@ -75,6 +76,12 @@ public:
     void setPointEditEnabled(bool enabled);
     bool pointEditEnabled() const { return m_pointEditEnabled; }
     PointLayer *editingPointLayer() const { return m_editingPointLayer; }
+    bool setMaskEditEnabled(bool enabled, QString *errorMessage = nullptr);
+    bool maskEditEnabled() const { return m_maskEditEnabled; }
+    ImageLayer *editingMaskLayer() const;
+    bool cancelMaskEdit(QString *errorMessage = nullptr);
+    void setMaskBrushSize(int size);
+    int maskBrushSize() const { return m_maskBrushSize; }
 
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
@@ -124,6 +131,9 @@ private:
     bool handleResetZoomKeyEvent(QEvent *event);
     void setPointItemsInteractionBlocked(bool blocked);
     void applyDragZoom(const QPoint &pos);
+    bool paintMaskAtViewportPos(const QPoint &pos, bool erase);
+    bool paintMaskStrokeToViewportPos(const QPoint &pos, bool erase);
+    void finishMaskStroke();
     void syncTransformToSiblings();
     void emitZoomPercentChanged();
     PointLayer *boxSelectionPointLayer() const;
@@ -140,6 +150,11 @@ private:
     bool m_pointBoxSelecting = false;
     bool m_autoFitImage = false;
     bool m_pointEditEnabled = false;
+    bool m_maskEditEnabled = false;
+    bool m_maskPainting = false;
+    bool m_maskPaintingErase = false;
+    bool m_hasLastMaskPaintScenePos = false;
+    int m_maskBrushSize = 9;
     PixelInfo m_lastPixelInfo;
     QPoint m_lastMousePos;
     QGraphicsScene *m_scene = nullptr;
@@ -147,6 +162,8 @@ private:
     ImageLayer *m_imageLayer = nullptr;
     QString m_primarySourcePath;
     QPointer<PointLayer> m_editingPointLayer;
+    QPointer<ImageLayer> m_editingMaskLayer;
+    QPointF m_lastMaskPaintScenePos;
     QPoint m_zoomDragLastPos;
     ZoomCursorDirection m_zoomCursorDirection = ZoomCursorDirection::In;
     QPoint m_pointBoxOrigin;

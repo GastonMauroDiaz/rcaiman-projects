@@ -120,7 +120,8 @@ ImageViewer::ImageViewer(QWidget *parent)
                 break;
             }
         }
-        setPointItemsInteractionBlocked(panInteractionActive());
+        setPointItemsInteractionBlocked(
+            panInteractionActive() || zoomInteractionActive() || m_maskEditEnabled);
     });
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
@@ -255,6 +256,9 @@ void ImageViewer::setZoomModeEnabled(bool enabled)
 
 void ImageViewer::setPointEditEnabled(bool enabled)
 {
+    if (enabled && m_maskEditEnabled)
+        setMaskEditEnabled(false);
+
     if (enabled) {
         if (!m_editingPointLayer && m_layerManager) {
             Layer *active = m_layerManager->activeLayer();
@@ -273,6 +277,81 @@ void ImageViewer::setPointEditEnabled(bool enabled)
         if (!enabled)
             m_editingPointLayer.clear();
     }
+}
+
+bool ImageViewer::setMaskEditEnabled(bool enabled, QString *errorMessage)
+{
+    if (m_maskEditEnabled == enabled)
+        return true;
+
+    if (enabled) {
+        if (m_pointEditEnabled)
+            setPointEditEnabled(false);
+
+        Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
+        auto *maskLayer = qobject_cast<ImageLayer*>(active);
+        if (!maskLayer) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("The active layer is not an image layer.");
+            return false;
+        }
+
+        if (!maskLayer->setBinaryMaskEditMode(true, errorMessage))
+            return false;
+
+        m_editingMaskLayer = maskLayer;
+        m_maskEditEnabled = true;
+        m_maskPainting = false;
+        m_hasLastMaskPaintScenePos = false;
+        updateDragMode();
+        return true;
+    }
+
+    if (m_maskPainting)
+        finishMaskStroke();
+
+    if (m_editingMaskLayer
+        && !m_editingMaskLayer->setBinaryMaskEditMode(false, errorMessage)) {
+        return false;
+    }
+
+    m_maskPainting = false;
+    m_maskPaintingErase = false;
+    m_hasLastMaskPaintScenePos = false;
+    m_maskEditEnabled = false;
+    m_editingMaskLayer.clear();
+    updateDragMode();
+    return true;
+}
+
+ImageLayer *ImageViewer::editingMaskLayer() const
+{
+    return m_editingMaskLayer;
+}
+
+bool ImageViewer::cancelMaskEdit(QString *errorMessage)
+{
+    if (!m_editingMaskLayer) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No mask layer is being edited.");
+        return false;
+    }
+
+    m_maskPainting = false;
+    m_maskPaintingErase = false;
+    m_hasLastMaskPaintScenePos = false;
+    if (!m_editingMaskLayer->cancelBinaryMaskEdit(errorMessage))
+        return false;
+
+    m_maskEditEnabled = false;
+    m_editingMaskLayer.clear();
+    updateDragMode();
+    return true;
+}
+
+void ImageViewer::setMaskBrushSize(int size)
+{
+    m_maskBrushSize = qBound(1, size, 200);
 }
 
 void ImageViewer::keyPressEvent(QKeyEvent *event)
@@ -331,11 +410,14 @@ void ImageViewer::updateDragMode()
 {
     const bool shouldPan = panInteractionActive();
     setDragMode(shouldPan ? QGraphicsView::ScrollHandDrag : QGraphicsView::NoDrag);
-    setPointItemsInteractionBlocked(shouldPan || zoomInteractionActive());
+    setPointItemsInteractionBlocked(
+        shouldPan || zoomInteractionActive() || m_maskEditEnabled);
     if (shouldPan) {
         viewport()->setCursor(Qt::OpenHandCursor);
     } else if (zoomInteractionActive()) {
         viewport()->setCursor(zoomCursor(m_zoomCursorDirection));
+    } else if (m_maskEditEnabled) {
+        viewport()->setCursor(Qt::CrossCursor);
     } else if (m_pointEditEnabled) {
         viewport()->setCursor(editPointsCursor());
     } else {
@@ -438,6 +520,19 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    if (m_maskEditEnabled
+        && !panInteractionActive()
+        && !zoomInteractionActive()
+        && event->button() == Qt::LeftButton) {
+        m_maskPainting = true;
+        m_maskPaintingErase =
+            event->modifiers().testFlag(Qt::AltModifier);
+        m_hasLastMaskPaintScenePos = false;
+        paintMaskAtViewportPos(event->pos(), m_maskPaintingErase);
+        event->accept();
+        return;
+    }
+
     if (!panInteractionActive()
         && !zoomInteractionActive()
         && event->button() == Qt::LeftButton
@@ -511,11 +606,80 @@ void ImageViewer::emitZoomPercentChanged()
     emit zoomPercentChanged(zoomPercent());
 }
 
+bool ImageViewer::paintMaskAtViewportPos(const QPoint &pos, bool erase)
+{
+    if (!m_maskEditEnabled || !m_editingMaskLayer)
+        return false;
+
+    const QPointF scenePos = mapToScene(pos);
+    m_lastMaskPaintScenePos = scenePos;
+    m_hasLastMaskPaintScenePos = true;
+    return m_editingMaskLayer->paintBinaryMaskAtScenePos(
+        scenePos, m_maskBrushSize, erase);
+}
+
+bool ImageViewer::paintMaskStrokeToViewportPos(const QPoint &pos, bool erase)
+{
+    if (!m_maskEditEnabled || !m_editingMaskLayer)
+        return false;
+
+    const QPointF scenePos = mapToScene(pos);
+    if (!m_hasLastMaskPaintScenePos) {
+        m_lastMaskPaintScenePos = scenePos;
+        m_hasLastMaskPaintScenePos = true;
+        return m_editingMaskLayer->paintBinaryMaskAtScenePos(
+            scenePos, m_maskBrushSize, erase);
+    }
+
+    const QPointF delta = scenePos - m_lastMaskPaintScenePos;
+    const double distance = std::hypot(delta.x(), delta.y());
+    const double spacing = qMax(1.0, m_maskBrushSize / 3.0);
+    const int steps = qMax(1, static_cast<int>(std::ceil(distance / spacing)));
+    bool changed = false;
+    for (int step = 1; step <= steps; ++step) {
+        const double t = static_cast<double>(step) / steps;
+        const QPointF interpolated =
+            m_lastMaskPaintScenePos + delta * t;
+        changed |= m_editingMaskLayer->paintBinaryMaskAtScenePos(
+            interpolated, m_maskBrushSize, erase);
+    }
+
+    m_lastMaskPaintScenePos = scenePos;
+    return changed;
+}
+
+void ImageViewer::finishMaskStroke()
+{
+    if (!m_maskPainting)
+        return;
+
+    m_maskPainting = false;
+    m_hasLastMaskPaintScenePos = false;
+    if (!m_editingMaskLayer)
+        return;
+
+    QString errorMessage;
+    if (!m_editingMaskLayer->saveBinaryMask(&errorMessage)) {
+        QMessageBox::warning(
+            this, "Edit mask",
+            errorMessage.isEmpty()
+                ? QStringLiteral("Could not save mask changes.")
+                : errorMessage);
+    }
+}
+
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
     if (m_pointBoxSelecting) {
         updatePointBoxSelection(event->pos());
+        event->accept();
+        return;
+    }
+
+    if (m_maskPainting && event->buttons().testFlag(Qt::LeftButton)) {
+        if (!panInteractionActive() && !zoomInteractionActive())
+            paintMaskStrokeToViewportPos(event->pos(), m_maskPaintingErase);
         event->accept();
         return;
     }
@@ -564,6 +728,14 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 
 void ImageViewer::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_maskPainting && event->button() == Qt::LeftButton) {
+        if (!panInteractionActive() && !zoomInteractionActive())
+            paintMaskStrokeToViewportPos(event->pos(), m_maskPaintingErase);
+        finishMaskStroke();
+        event->accept();
+        return;
+    }
+
     if (m_pointBoxSelecting && event->button() == Qt::LeftButton) {
         finishPointBoxSelection(event->pos());
         event->accept();

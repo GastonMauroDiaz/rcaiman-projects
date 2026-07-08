@@ -27,6 +27,8 @@
 #include "rasterdata.h"
 #include "rasterrenderer.h"
 
+#include <QPointF>
+
 class QTimer;
 
 class ImageLayer : public Layer
@@ -35,6 +37,7 @@ class ImageLayer : public Layer
 
 public:
     explicit ImageLayer(const QString &filePath, QObject *parent = nullptr);
+    ~ImageLayer() override;
 
     const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) override;
 
@@ -45,6 +48,14 @@ public:
     quint64 dataRevision() const { return m_dataRevision; }
     bool supportsReloadFromDisk() const override;
     bool reloadFromDisk(QString *errorMessage = nullptr) override;
+    bool isEditableBinaryMask() const;
+    bool binaryMaskEditMode() const { return m_binaryMaskEditMode; }
+    bool setBinaryMaskEditMode(bool enabled, QString *errorMessage = nullptr);
+    bool cancelBinaryMaskEdit(QString *errorMessage = nullptr);
+    bool paintBinaryMaskAtScenePos(const QPointF &scenePos,
+                                   int brushSize,
+                                   bool erase);
+    bool saveBinaryMask(QString *errorMessage = nullptr);
     void setStyle(const ImageLayerStyle &style);
     void setOpacity(double opacity);
     void setBlendMode(ImageBlendMode blendMode);
@@ -71,6 +82,8 @@ private:
     void scheduleRenderRefresh();
     void applyStyleToItem();
     void refreshRenderedImage();
+    bool ensureBinaryMaskBackup(QString *errorMessage = nullptr);
+    void removeBinaryMaskBackup();
 
     RasterData m_rasterData;
     RasterRenderer m_renderer;
@@ -79,6 +92,8 @@ private:
     quint64 m_dataRevision = 0;
     QTimer *m_renderRefreshTimer = nullptr;
     bool m_renderRefreshPending = false;
+    bool m_binaryMaskEditMode = false;
+    QString m_binaryMaskBackupPath;
 };
 
 #endif // IMAGELAYER_H

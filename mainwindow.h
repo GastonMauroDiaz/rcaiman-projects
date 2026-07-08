@@ -56,6 +56,7 @@ class QFrame;
 class QLabel;
 class QModelIndex;
 class QSortFilterProxyModel;
+class QSpinBox;
 class PointLayer;
 class PointAttributeTableWindow;
 class PreviewDock;
@@ -80,7 +81,6 @@ private slots:
     void newProject();
     void openProject();
     void closeProject();
-    void saveProject();
     void saveProjectAs();
     void saveProjectAsCleanCopy();
     void createProjectReport();
@@ -97,6 +97,8 @@ private slots:
     void onLayerSelectionChanged(int index);
     void onEditPointsToggled(bool enabled);
     void onCancelEditTriggered();
+    void onEditMaskToggled(bool enabled);
+    void onCancelMaskEditTriggered();
     void onPointSelectionChanged();
     void onProjectTreeItemClicked(const QModelIndex &index);
     void splitViewer();
@@ -105,6 +107,7 @@ private slots:
     void onSyncSplitZoomToggled(bool checked);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
+    void createMaskTiff();
     void buildMetadataRules();
     void validateImageMetadata();
     void validateCollectionMetadata();
@@ -154,6 +157,8 @@ private:
     bool validateRawImage(const QString &rawPath,
                           const QString &registryPath = {});
     Collection collectionForPath(const QString &path) const;
+    bool isEditableMaskLayer(ImageLayer *layer) const;
+    void updateMaskEditControls(ImageViewer *viewer);
     ImageLayer *createStyledImageLayer(const QString &path);
     PointLayer *createStyledPointLayer(const QString &path,
                                        ImageViewer *viewer);
@@ -181,6 +186,7 @@ private:
     QToolButton *m_newFolderButton = nullptr;
     QComboBox *m_projectSortCombo = nullptr;
     QDoubleSpinBox *m_zoomPercentSpin = nullptr;
+    QSpinBox *m_maskBrushSpin = nullptr;
     QWidget *m_viewerEmptyState = nullptr;
     QLabel *m_viewerEmptyTitle = nullptr;
     QLabel *m_viewerEmptyBody = nullptr;

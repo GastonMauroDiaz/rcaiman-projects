@@ -45,6 +45,7 @@
 #include "collectionvalidationdialog.h"
 #include "acquisitionmetadata.h"
 #include "tiffreader.h"
+#include "tiffwriter.h"
 #include "rasterrenderer.h"
 #include "exampleprojectsdialog.h"
 #include "hspimportdialog.h"
@@ -95,6 +96,7 @@
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
+#include <QSpinBox>
 #include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTableWidget>
@@ -105,6 +107,7 @@
 #include <QVBoxLayout>
 #include <QDateTime>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -674,11 +677,6 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::closeProject);
 
-    connect(ui->actionSaveProject,
-            &QAction::triggered,
-            this,
-            &MainWindow::saveProject);
-
     connect(ui->actionSaveProjectAs,
             &QAction::triggered,
             this,
@@ -739,6 +737,21 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::createPointsCsv);
 
+    connect(ui->actionCreateMask,
+            &QAction::triggered,
+            this,
+            &MainWindow::createMaskTiff);
+
+    connect(ui->actionEditMask,
+            &QAction::toggled,
+            this,
+            &MainWindow::onEditMaskToggled);
+
+    connect(ui->actionCancelMaskEdit,
+            &QAction::triggered,
+            this,
+            &MainWindow::onCancelMaskEditTriggered);
+
     connect(ui->actionPan,
             &QAction::toggled,
             this,
@@ -794,6 +807,24 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::onCancelEditTriggered);
+
+    m_maskBrushSpin = new QSpinBox(this);
+    m_maskBrushSpin->setRange(1, 200);
+    m_maskBrushSpin->setValue(9);
+    m_maskBrushSpin->setSuffix(" px");
+    m_maskBrushSpin->setToolTip("Mask brush size in raster pixels.");
+    m_maskBrushSpin->setEnabled(false);
+    m_maskBrushSpin->setMinimumWidth(
+        m_maskBrushSpin->fontMetrics().horizontalAdvance(
+            QStringLiteral("200 px")) + 32);
+    ui->toolBar->addWidget(m_maskBrushSpin);
+    connect(m_maskBrushSpin,
+            QOverload<int>::of(&QSpinBox::valueChanged),
+            this,
+            [this](int value) {
+                if (ImageViewer *viewer = currentImageViewer())
+                    viewer->setMaskBrushSize(value);
+            });
 
     connect(ui->actionSplitViewer,
             &QAction::triggered,
@@ -1380,16 +1411,6 @@ void MainWindow::closeProject()
 
     closeCurrentProject();
     statusBar()->showMessage("Project closed", 3000);
-}
-
-void MainWindow::saveProject()
-{
-    QString errorMessage;
-    if (!m_project.save(&errorMessage)) {
-        QMessageBox::warning(this, "Save Project", errorMessage);
-        return;
-    }
-    statusBar()->showMessage("Project saved", 3000);
 }
 
 void MainWindow::saveProjectAs()
@@ -2401,6 +2422,7 @@ void MainWindow::onLayerSelectionChanged(int index)
         ui->actionEditPoints->setChecked(false);
         ui->actionEditPoints->setEnabled(false);
         ui->actionCancelEdit->setEnabled(false);
+        updateMaskEditControls(nullptr);
         return;
     }
 
@@ -2410,6 +2432,7 @@ void MainWindow::onLayerSelectionChanged(int index)
         ui->actionEditPoints->setChecked(false);
         ui->actionEditPoints->setEnabled(false);
         ui->actionCancelEdit->setEnabled(false);
+        updateMaskEditControls(viewer);
         return;
     }
 
@@ -2420,6 +2443,7 @@ void MainWindow::onLayerSelectionChanged(int index)
         ui->actionEditPoints->setEnabled(viewer->pointEditEnabled());
         PointLayer *editingLayer = viewer->editingPointLayer();
         ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
+        updateMaskEditControls(viewer);
         return;
     }
 
@@ -2444,6 +2468,7 @@ void MainWindow::onLayerSelectionChanged(int index)
     PointLayer *editingLayer = viewer->editingPointLayer();
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
     ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
+    updateMaskEditControls(viewer);
 }
 
 void MainWindow::setHistogramLayer(Layer *layer)
@@ -2619,6 +2644,8 @@ void MainWindow::onEditPointsToggled(bool enabled)
         return;
 
     if (enabled) {
+        if (ui->actionEditMask->isChecked())
+            ui->actionEditMask->setChecked(false);
         if (ui->actionPan->isChecked())
             ui->actionPan->setChecked(false);
         if (ui->actionZoom->isChecked())
@@ -2631,6 +2658,7 @@ void MainWindow::onEditPointsToggled(bool enabled)
     PointLayer *pointLayer = viewer->editingPointLayer();
     ui->actionCancelEdit->setEnabled(pointLayer && pointLayer->editMode());
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
+    updateMaskEditControls(viewer);
     refreshReloadableArtifactWatchers();
 }
 
@@ -2648,6 +2676,63 @@ void MainWindow::onCancelEditTriggered()
     viewer->setPointEditEnabled(false);
     ui->actionEditPoints->setChecked(false);
     ui->actionCancelEdit->setEnabled(false);
+    updateMaskEditControls(viewer);
+    refreshReloadableArtifactWatchers();
+}
+
+void MainWindow::onEditMaskToggled(bool enabled)
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer)
+        return;
+
+    if (enabled) {
+        if (ui->actionEditPoints->isChecked())
+            ui->actionEditPoints->setChecked(false);
+        if (ui->actionPan->isChecked())
+            ui->actionPan->setChecked(false);
+        if (ui->actionZoom->isChecked())
+            ui->actionZoom->setChecked(false);
+        if (m_maskBrushSpin)
+            viewer->setMaskBrushSize(m_maskBrushSpin->value());
+    }
+
+    QString errorMessage;
+    if (!viewer->setMaskEditEnabled(enabled, &errorMessage)) {
+        QMessageBox::warning(
+            this, "Edit mask",
+            errorMessage.isEmpty()
+                ? QStringLiteral("Could not change mask edit mode.")
+                : errorMessage);
+        const QSignalBlocker blocker(ui->actionEditMask);
+        ui->actionEditMask->setChecked(viewer->maskEditEnabled());
+    }
+
+    updateMaskEditControls(viewer);
+    refreshReloadableArtifactWatchers();
+}
+
+void MainWindow::onCancelMaskEditTriggered()
+{
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer || !viewer->maskEditEnabled())
+        return;
+
+    QString errorMessage;
+    if (!viewer->cancelMaskEdit(&errorMessage)) {
+        QMessageBox::warning(
+            this, "Cancel mask edit",
+            errorMessage.isEmpty()
+                ? QStringLiteral("Could not cancel mask editing.")
+                : errorMessage);
+        return;
+    }
+
+    {
+        const QSignalBlocker blocker(ui->actionEditMask);
+        ui->actionEditMask->setChecked(false);
+    }
+    updateMaskEditControls(viewer);
     refreshReloadableArtifactWatchers();
 }
 
@@ -2699,6 +2784,7 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         ui->actionEditPoints->setChecked(false);
         ui->actionEditPoints->setEnabled(false);
         ui->actionCancelEdit->setEnabled(false);
+        updateMaskEditControls(nullptr);
         if (m_layersDock)
             m_layersDock->setLayerManager(nullptr);
         setHistogramLayer(nullptr);
@@ -2734,6 +2820,7 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     ui->actionEditPoints->setEnabled(isPointLayer || viewer->pointEditEnabled());
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
     ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
+    updateMaskEditControls(viewer);
 
     if (m_layersDock)
         m_layersDock->setLayerManager(mgr);
@@ -3385,9 +3472,11 @@ void MainWindow::closeCurrentProject()
         const QSignalBlocker panBlocker(ui->actionPan);
         const QSignalBlocker zoomBlocker(ui->actionZoom);
         const QSignalBlocker editBlocker(ui->actionEditPoints);
+        const QSignalBlocker maskEditBlocker(ui->actionEditMask);
         ui->actionPan->setChecked(false);
         ui->actionZoom->setChecked(false);
         ui->actionEditPoints->setChecked(false);
+        ui->actionEditMask->setChecked(false);
     }
     ui->actionPan->setEnabled(false);
     ui->actionZoom->setEnabled(false);
@@ -3400,6 +3489,10 @@ void MainWindow::closeCurrentProject()
     ui->actionSyncSplitZoom->setEnabled(false);
     ui->actionEditPoints->setEnabled(false);
     ui->actionCancelEdit->setEnabled(false);
+    ui->actionEditMask->setEnabled(false);
+    ui->actionCancelMaskEdit->setEnabled(false);
+    if (m_maskBrushSpin)
+        m_maskBrushSpin->setEnabled(false);
 
     m_activeViewer.clear();
 
@@ -3996,7 +4089,6 @@ void MainWindow::updateProjectExplorer()
 void MainWindow::updateProjectActions()
 {
     const bool hasProject = m_project.isValid();
-    ui->actionSaveProject->setEnabled(hasProject);
     ui->actionSaveProjectAs->setEnabled(hasProject);
     ui->actionSaveProjectAsCleanCopy->setEnabled(hasProject);
     ui->actionProjectReport->setEnabled(hasProject);
@@ -4013,9 +4105,11 @@ void MainWindow::updateProjectActions()
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
+    ui->actionCreateMask->setEnabled(hasProject);
     ui->actionBuildMetadataRules->setEnabled(hasProject);
     ui->actionValidateImageMetadata->setEnabled(hasProject);
     ui->actionValidateCollectionMetadata->setEnabled(hasProject);
+    updateMaskEditControls(viewer);
     if (m_newFolderButton)
         m_newFolderButton->setEnabled(hasProject);
 
@@ -4396,6 +4490,47 @@ Collection MainWindow::collectionForPath(const QString &path) const
     return {};
 }
 
+bool MainWindow::isEditableMaskLayer(ImageLayer *layer) const
+{
+    if (!layer || !layer->isEditableBinaryMask())
+        return false;
+
+    const Collection collection = collectionForPath(layer->sourcePath());
+    return collection.collectionClass == "segmentation_collection";
+}
+
+void MainWindow::updateMaskEditControls(ImageViewer *viewer)
+{
+    const bool hasViewer = viewer != nullptr;
+    ImageLayer *activeImageLayer = nullptr;
+    if (hasViewer && viewer->layerManager())
+        activeImageLayer =
+            qobject_cast<ImageLayer*>(viewer->layerManager()->activeLayer());
+
+    ImageLayer *editingLayer =
+        hasViewer ? viewer->editingMaskLayer() : nullptr;
+    const bool editing =
+        hasViewer
+        && viewer->maskEditEnabled()
+        && editingLayer
+        && editingLayer->binaryMaskEditMode();
+    const bool canEdit = editing || isEditableMaskLayer(activeImageLayer);
+
+    {
+        const QSignalBlocker blocker(ui->actionEditMask);
+        ui->actionEditMask->setChecked(editing);
+        ui->actionEditMask->setEnabled(canEdit);
+    }
+    ui->actionCancelMaskEdit->setEnabled(editing);
+
+    if (m_maskBrushSpin) {
+        const QSignalBlocker blocker(m_maskBrushSpin);
+        if (hasViewer)
+            m_maskBrushSpin->setValue(viewer->maskBrushSize());
+        m_maskBrushSpin->setEnabled(editing);
+    }
+}
+
 ImageLayer *MainWindow::createStyledImageLayer(const QString &path)
 {
     auto *layer = new ImageLayer(path);
@@ -4720,12 +4855,197 @@ void MainWindow::createPointsCsv()
 
     // If an image viewer is active, offer to add the new layer
     ImageViewer *viewer = currentImageViewer();
-      if (viewer && viewer->layerManager()) {
-          const auto reply = QMessageBox::question(this, "Add layer",
-                                                   "Add the new points file as a layer to the current viewer?");
-          if (reply == QMessageBox::Yes) {
-              if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
-                  viewer->layerManager()->addLayer(layer);
-          }
-      }
-  }
+    if (viewer && viewer->layerManager()) {
+        const auto reply = QMessageBox::question(this, "Add layer",
+                                                 "Add the new points file as a layer to the current viewer?");
+        if (reply == QMessageBox::Yes) {
+            if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
+                viewer->layerManager()->addLayer(layer);
+        }
+    }
+}
+
+void MainWindow::createMaskTiff()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Create mask",
+                                 "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    const QVector<Collection> collections = Project::discoverCollections(m_project.rootPath());
+    QVector<Collection> segmentationCollections;
+    for (const Collection &col : collections) {
+        if (col.collectionClass == "segmentation_collection")
+            segmentationCollections.append(col);
+    }
+
+    if (segmentationCollections.isEmpty()) {
+        QMessageBox::information(this, "Create mask",
+                                 "No segmentation collection is registered in this project.\n"
+                                 "Register a segmentation collection first using Project > Register collection...");
+        return;
+    }
+
+    Collection selectedCollection = collectionForPath(selectedProjectPath());
+    if (selectedCollection.collectionClass != "segmentation_collection")
+        selectedCollection = {};
+
+    if (selectedCollection.collectionClass != "segmentation_collection"
+        && segmentationCollections.size() == 1) {
+        selectedCollection = segmentationCollections.first();
+    } else if (selectedCollection.collectionClass != "segmentation_collection") {
+        QStringList collectionNames;
+        for (const Collection &collection : segmentationCollections)
+            collectionNames.append(collection.dirName);
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(this, "Select segmentation collection",
+                                                     "Segmentation collection:", collectionNames, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        for (const Collection &collection : segmentationCollections) {
+            if (collection.dirName == choice) {
+                selectedCollection = collection;
+                break;
+            }
+        }
+    }
+
+    const QString selectedDir = selectedCollection.dirPath;
+    const QString parentPath = Project::resolveReference(
+        m_project.rootPath(), selectedCollection.parent);
+    QDir parentDir(parentPath);
+    if (!parentDir.exists()) {
+        QMessageBox::warning(this, "Create mask",
+                             "The selected segmentation collection does not have a valid parent folder.");
+        return;
+    }
+
+    QSet<QString> usedBaseNames;
+    const QFileInfoList existingMasks = QDir(selectedDir).entryInfoList(
+        {"*.tif", "*.tiff", "*.TIF", "*.TIFF"}, QDir::Files | QDir::NoSymLinks);
+    for (const QFileInfo &file : existingMasks)
+        usedBaseNames.insert(file.completeBaseName().toCaseFolded());
+
+    QMap<QString, QString> parentTiffsByBaseName;
+    QStringList ambiguousParentBaseNames;
+    const QFileInfoList parentImages = parentDir.entryInfoList(
+        {"*.tif", "*.tiff", "*.TIF", "*.TIFF"},
+        QDir::Files | QDir::NoSymLinks, QDir::Name);
+    for (const QFileInfo &image : parentImages) {
+        const QString baseName = image.completeBaseName();
+        const QString foldedBaseName = baseName.toCaseFolded();
+        if (parentTiffsByBaseName.contains(foldedBaseName)) {
+            if (!ambiguousParentBaseNames.contains(baseName, Qt::CaseInsensitive))
+                ambiguousParentBaseNames.append(baseName);
+            parentTiffsByBaseName[foldedBaseName] = QString();
+        } else {
+            parentTiffsByBaseName.insert(foldedBaseName, image.absoluteFilePath());
+        }
+    }
+
+    QStringList availableBaseNames;
+    for (const QFileInfo &image : parentImages) {
+        const QString baseName = image.completeBaseName();
+        const QString foldedBaseName = baseName.toCaseFolded();
+        if (!usedBaseNames.contains(foldedBaseName)
+            && !parentTiffsByBaseName.value(foldedBaseName).isEmpty()
+            && !availableBaseNames.contains(baseName, Qt::CaseInsensitive)) {
+            availableBaseNames.append(baseName);
+        }
+    }
+
+    QString savePath;
+    QString parentImagePath;
+    if (!availableBaseNames.isEmpty()) {
+        QStringList choices = availableBaseNames;
+        choices.append("Custom name...");
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(
+            this, "Create mask TIFF", "Image or filename:",
+            choices, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        if (choice != "Custom name...") {
+            savePath = QDir(selectedDir).filePath(choice + ".tif");
+            parentImagePath = parentTiffsByBaseName.value(choice.toCaseFolded());
+        }
+    }
+
+    if (savePath.isEmpty()) {
+        const QString defaultName =
+            QDir(selectedDir).dirName() + ".tif";
+        savePath = QFileDialog::getSaveFileName(
+            this, "Create mask TIFF",
+            QDir(selectedDir).filePath(defaultName),
+            "TIFF files (*.tif *.tiff)");
+    }
+    if (savePath.isEmpty())
+        return;
+
+    QFileInfo saveInfo(savePath);
+    const QString suffix = saveInfo.suffix().toLower();
+    if (suffix.isEmpty()) {
+        savePath += ".tif";
+        saveInfo = QFileInfo(savePath);
+    } else if (!isTiffSuffix(suffix)) {
+        QMessageBox::warning(this, "Create mask",
+                             "Mask files must use the .tif or .tiff extension.");
+        return;
+    }
+
+    if (parentImagePath.isEmpty()) {
+        const QString foldedBaseName = saveInfo.completeBaseName().toCaseFolded();
+        parentImagePath = parentTiffsByBaseName.value(foldedBaseName);
+        if (parentImagePath.isEmpty()) {
+            const bool ambiguous = std::any_of(
+                ambiguousParentBaseNames.cbegin(),
+                ambiguousParentBaseNames.cend(),
+                [&saveInfo](const QString &baseName) {
+                    return baseName.compare(saveInfo.completeBaseName(),
+                                            Qt::CaseInsensitive) == 0;
+                });
+            QMessageBox::warning(
+                this, "Create mask",
+                ambiguous
+                    ? QStringLiteral("The parent collection contains multiple TIFF files named \"%1\". "
+                                     "Use a unique basename before creating a mask.")
+                          .arg(saveInfo.completeBaseName())
+                    : QStringLiteral("No parent TIFF named \"%1\" was found. "
+                                     "The mask name must match a TIFF in the parent collection.")
+                          .arg(saveInfo.completeBaseName()));
+            return;
+        }
+    }
+
+    QString errorMsg;
+    const RasterData parentRaster = TiffReader::load(parentImagePath, &errorMsg);
+    if (parentRaster.isNull()) {
+        QMessageBox::warning(this, "Create mask",
+                             errorMsg.isEmpty()
+                                 ? "Could not read the parent TIFF."
+                                 : errorMsg);
+        return;
+    }
+
+    RasterData maskRaster;
+    maskRaster.allocate(parentRaster.width(), parentRaster.height(),
+                        1, RasterData::DataType::UInt8);
+    if (!TiffWriter::write(savePath, maskRaster, &errorMsg)) {
+        QMessageBox::warning(this, "Create mask", errorMsg);
+        return;
+    }
+
+    statusBar()->showMessage(QStringLiteral("Created mask file: %1").arg(QFileInfo(savePath).fileName()), 5000);
+    m_projectFileSystemModel->refreshDirectory(QFileInfo(savePath).absolutePath());
+
+    ImageViewer *viewer = currentImageViewer();
+    if (viewer && viewer->layerManager()) {
+        const auto reply = QMessageBox::question(this, "Add layer",
+                                                 "Add the new mask file as a layer to the current viewer?");
+        if (reply == QMessageBox::Yes) {
+            if (ImageLayer *layer = createStyledImageLayer(savePath))
+                viewer->layerManager()->addLayer(layer);
+        }
+    }
+}

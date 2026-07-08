@@ -31,7 +31,6 @@
     <addaction name="actionOpenProject"/>
     <addaction name="actionImportLegacyHspProject"/>
     <addaction name="separator"/>
-    <addaction name="actionSaveProject"/>
     <addaction name="actionSaveProjectAs"/>
     <addaction name="actionSaveProjectAsCleanCopy"/>
     <addaction name="actionProjectReport"/>
@@ -59,6 +58,14 @@
     <addaction name="actionEditPoints"/>
     <addaction name="actionCancelEdit"/>
    </widget>
+   <widget class="QMenu" name="menuMask">
+    <property name="title">
+     <string>Mask</string>
+   </property>
+   <addaction name="actionCreateMask"/>
+   <addaction name="actionEditMask"/>
+   <addaction name="actionCancelMaskEdit"/>
+  </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
      <string>View</string>
@@ -90,6 +97,7 @@
    <addaction name="menuProject"/>
    <addaction name="menuImage"/>
    <addaction name="menuPoint"/>
+   <addaction name="menuMask"/>
    <addaction name="menuRegistry"/>
    <addaction name="menuView"/>
    <addaction name="menuHelp"/>
@@ -118,6 +126,9 @@
    <addaction name="separator"/>
    <addaction name="actionEditPoints"/>
    <addaction name="actionCancelEdit"/>
+   <addaction name="separator"/>
+   <addaction name="actionEditMask"/>
+   <addaction name="actionCancelMaskEdit"/>
   </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">
@@ -249,11 +260,6 @@
     <string>Import legacy HSP project...</string>
    </property>
   </action>
-  <action name="actionSaveProject">
-   <property name="text">
-    <string>Save</string>
-   </property>
-  </action>
   <action name="actionSaveProjectAs">
    <property name="text">
     <string>Save As...</string>
@@ -358,6 +364,40 @@ Hold Z for temporary zoom from any interaction mode.</string>
   <action name="actionCreatePoints">
    <property name="text">
     <string>Create empty point layer...</string>
+   </property>
+  </action>
+  <action name="actionCreateMask">
+   <property name="text">
+    <string>Create...</string>
+   </property>
+  </action>
+  <action name="actionEditMask">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="QIcon::ThemeIcon::MailMessageNew"/>
+   </property>
+   <property name="text">
+    <string>Edit mask</string>
+   </property>
+   <property name="toolTip">
+    <string>Edit the active binary mask layer.
+Drag to paint, and hold Alt/Option to erase.</string>
+   </property>
+  </action>
+  <action name="actionCancelMaskEdit">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset theme="QIcon::ThemeIcon::EditUndo"/>
+   </property>
+   <property name="text">
+    <string>Cancel mask edit</string>
+   </property>
+   <property name="toolTip">
+    <string>Revert the mask layer to its state before editing started.</string>
    </property>
   </action>
   <action name="actionEditPoints">
