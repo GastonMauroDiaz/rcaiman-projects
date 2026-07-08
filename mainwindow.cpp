@@ -47,6 +47,8 @@
 #include "tiffreader.h"
 #include "rasterrenderer.h"
 #include "exampleprojectsdialog.h"
+#include "hspimportdialog.h"
+#include "hspprojectimporter.h"
 #include "shortcuttext.h"
 
 #include <QAction>
@@ -193,6 +195,7 @@ QJsonObject imageStyleToJson(const ImageLayerStyle &style)
     const RasterRenderStyle &render = style.render;
     QJsonObject object;
     object["opacity"] = style.opacity;
+    object["blend_mode"] = static_cast<int>(style.blendMode);
     object["mode"] = static_cast<int>(render.mode);
     object["ramp"] = static_cast<int>(render.colorRamp);
     object["stretch"] = static_cast<int>(render.stretchMode);
@@ -216,6 +219,8 @@ ImageLayerStyle imageStyleFromJson(const QJsonObject &object,
 {
     ImageLayerStyle style = fallback;
     style.opacity = object.value("opacity").toDouble(style.opacity);
+    style.blendMode = static_cast<ImageBlendMode>(
+        object.value("blend_mode").toInt(static_cast<int>(style.blendMode)));
     RasterRenderStyle &render = style.render;
     render.mode = static_cast<RasterRenderMode>(
         object.value("mode").toInt(static_cast<int>(render.mode)));
@@ -376,6 +381,28 @@ QPixmap circularThumbnail(const QString &resourcePath, int size)
     return thumbnail;
 }
 
+QString collectionStyleKind(const Collection &collection)
+{
+    if (collection.collectionClass == "point_collection")
+        return QStringLiteral("point");
+    if (collection.collectionClass == "preprocessed_image_collection"
+        || collection.collectionClass == "processed_image_collection"
+        || collection.collectionClass == "segmentation_collection") {
+        return QStringLiteral("image");
+    }
+    return {};
+}
+
+bool collectionStyleMatchesKind(const CollectionStyleData &style,
+                                const QString &kind)
+{
+    if (kind == "point")
+        return style.kind == CollectionStyleData::Kind::Point;
+    if (kind == "image")
+        return style.kind == CollectionStyleData::Kind::Image;
+    return false;
+}
+
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -511,6 +538,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::createProjectReport);
+
+    connect(ui->actionImportLegacyHspProject,
+            &QAction::triggered,
+            this,
+            &MainWindow::importLegacyHspProject);
 
     connect(ui->actionOpen_Image,
             &QAction::triggered,
@@ -1128,6 +1160,53 @@ void MainWindow::openProject()
     loadProject(project);
 }
 
+void MainWindow::importLegacyHspProject()
+{
+    HspImportDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    HspImportOptions options;
+    options.sourceProjectPath = dialog.sourceDirectory();
+    options.destinationProjectPath =
+        QDir(dialog.parentDirectory()).filePath(dialog.folderName());
+    options.projectName = dialog.folderName();
+    options.description = dialog.description();
+
+    HspImportReport report;
+    QString errorMessage;
+    const Project project =
+        HspProjectImporter::importProject(options, &report, &errorMessage);
+    if (!project.isValid()) {
+        QMessageBox::warning(this, "Import legacy HSP project", errorMessage);
+        return;
+    }
+
+    loadProject(project);
+
+    QString message = QStringLiteral(
+        "Imported legacy HSP project.\n\n"
+        "RAW files copied: %1\n"
+        "PGM images converted: %2\n"
+        "Sky point CSV files: %3\n"
+        "Sun mark CSV files: %4\n"
+        "Optimized sky coefficient TSV files: %5")
+        .arg(report.rawFilesCopied)
+        .arg(report.pgmFilesConverted)
+        .arg(report.skyPointFilesWritten)
+        .arg(report.sunMarkFilesWritten)
+        .arg(report.optSkyCoefTablesWritten);
+    if (!report.warnings.isEmpty()) {
+        message += QStringLiteral(
+            "\n\nWarnings were written to legacy_hsp_import.md.");
+    }
+    QMessageBox::information(this, "Import legacy HSP project", message);
+    statusBar()->showMessage(
+        QStringLiteral("Imported legacy HSP project: %1")
+            .arg(project.rootPath()),
+        5000);
+}
+
 void MainWindow::closeProject()
 {
     if (!m_project.isValid())
@@ -1418,7 +1497,7 @@ void MainWindow::extractRawData()
         details.append(
             "Inspect the TSV files in sensor_data for per-image details.");
         QMessageBox::warning(
-            this, "Extract raw data", details.join("\n"));
+            this, "Extract raw data and metadata", details.join("\n"));
     }
 
     updateProjectActions();
@@ -1511,6 +1590,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     QAction *registerAction = nullptr;
     QAction *createPointsAction = nullptr;
     QAction *styleAction = nullptr;
+    QAction *copyStyleAction = nullptr;
+    QAction *pasteStyleAction = nullptr;
     QAction *validateCollectionAction = nullptr;
     if (info.isDir()) {
         menu.addSeparator();
@@ -1518,6 +1599,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         createPointsAction =
             menu.addAction("Create empty point layer...");
         styleAction = menu.addAction("Edit collection style...");
+        copyStyleAction = menu.addAction("Copy collection style");
+        pasteStyleAction = menu.addAction("Paste collection style");
         validateCollectionAction =
             menu.addAction("Validate collection...");
     }
@@ -1542,6 +1625,18 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     }
     const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
+    const QString selectedStyleKind =
+        hasRegisteredCollection ? collectionStyleKind(selectedCollection) : QString();
+    const CollectionStyleData selectedStyle = supportsStyle
+        ? CollectionStyleFile::load(selectedCollection.dirPath)
+        : CollectionStyleData();
+    const bool hasValidPersistedStyle = supportsStyle
+        && collectionStyleMatchesKind(selectedStyle, selectedStyleKind);
+    const bool canPasteStyle = supportsStyle
+        && !m_copiedCollectionStyleKind.isEmpty()
+        && m_copiedCollectionStyleKind == selectedStyleKind
+        && collectionStyleMatchesKind(
+            m_copiedCollectionStyle, m_copiedCollectionStyleKind);
     const bool supportsCreatePoints = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass == "point_collection";
     const bool supportsCollectionValidation =
@@ -1552,6 +1647,10 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         createPointsAction->setEnabled(supportsCreatePoints);
     if (styleAction)
         styleAction->setEnabled(supportsStyle);
+    if (copyStyleAction)
+        copyStyleAction->setEnabled(hasValidPersistedStyle);
+    if (pasteStyleAction)
+        pasteStyleAction->setEnabled(canPasteStyle);
     if (validateCollectionAction)
         validateCollectionAction->setEnabled(
             supportsCollectionValidation);
@@ -1655,6 +1754,47 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     if (dialog.exec() == QDialog::Accepted)
                         m_projectFileSystemModel->refreshDirectory(
                             selectedCollection.dirPath);
+                });
+    }
+    if (copyStyleAction) {
+        connect(copyStyleAction, &QAction::triggered,
+                this, [this, selectedCollection, selectedStyle,
+                       selectedStyleKind, hasValidPersistedStyle]() {
+                    if (!hasValidPersistedStyle)
+                        return;
+                    m_copiedCollectionStyle = selectedStyle;
+                    m_copiedCollectionStyleKind = selectedStyleKind;
+                    m_copiedCollectionStyleSource =
+                        selectedCollection.dirName;
+                    statusBar()->showMessage(
+                        QStringLiteral("Copied collection style from %1")
+                            .arg(selectedCollection.dirName),
+                        3000);
+                });
+    }
+    if (pasteStyleAction) {
+        connect(pasteStyleAction, &QAction::triggered,
+                this, [this, selectedCollection, selectedStyleKind,
+                       canPasteStyle]() {
+                    if (!canPasteStyle)
+                        return;
+                    QString errorMessage;
+                    if (!CollectionStyleFile::save(
+                            selectedCollection.dirPath,
+                            m_copiedCollectionStyle,
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this, "Paste Collection Style",
+                            errorMessage);
+                        return;
+                    }
+                    m_projectFileSystemModel->refreshDirectory(
+                        selectedCollection.dirPath);
+                    statusBar()->showMessage(
+                        QStringLiteral("Pasted %1 collection style to %2")
+                            .arg(selectedStyleKind,
+                                 selectedCollection.dirName),
+                        3000);
                 });
     }
     if (validateCollectionAction) {
@@ -2595,6 +2735,18 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                     return;
                 if (PointLayer *layer = createStyledPointLayer(path, viewer))
                     viewer->layerManager()->addLayer(layer);
+            });
+    connect(viewer, &ImageViewer::imageLayerFileDropped,
+            this, [this, viewer](const QString &path) {
+                if (!viewer || !viewer->layerManager())
+                    return;
+                auto *layer = createStyledImageLayer(path);
+                if (!layer)
+                    return;
+                viewer->layerManager()->addLayer(layer);
+                if (viewer->primarySourcePath().isEmpty())
+                    viewer->setPrimarySourcePath(
+                        QFileInfo(path).absoluteFilePath());
             });
     connect(viewer, &ImageViewer::closeRequested, this, [this, viewer]() {
         auto *v = qobject_cast<ImageViewer*>(sender());
@@ -3811,6 +3963,24 @@ Collection MainWindow::collectionForPath(const QString &path) const
         }
     }
     return {};
+}
+
+ImageLayer *MainWindow::createStyledImageLayer(const QString &path)
+{
+    auto *layer = new ImageLayer(path);
+    if (layer->rasterData().isNull()) {
+        delete layer;
+        QMessageBox::warning(this, "Add TIFF", "Could not load TIFF.");
+        return nullptr;
+    }
+
+    const Collection collection = collectionForPath(path);
+    if (!collection.collectionClass.isEmpty()) {
+        CollectionStyleResolver styleResolver;
+        layer->setStyle(styleResolver.imageStyle(
+            collection, layer->rasterData()));
+    }
+    return layer;
 }
 
 PointLayer *MainWindow::createStyledPointLayer(const QString &path,

@@ -153,16 +153,13 @@ bool RawReader::readBlackLevels(const QString &rawFilePath,
 
     RawBlackLevels values;
     const libraw_colordata_t &color = processor.imgdata.color;
-    if (color.black > 0) {
-        values.hasBlack = true;
-        values.black = static_cast<double>(color.black);
-    }
+    values.hasBlack = true;
+    values.black = static_cast<double>(color.black);
 
+    values.hasCblack = true;
     for (int i = 0; i < 4; ++i) {
         values.cblack[static_cast<size_t>(i)] =
             static_cast<double>(color.cblack[i]);
-        if (color.cblack[i] != 0)
-            values.hasCblack = true;
     }
 
     *blackLevels = values;

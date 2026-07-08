@@ -65,6 +65,7 @@ private:
     QDoubleSpinBox *m_labelSize = nullptr;
 
     QDoubleSpinBox *m_opacity = nullptr;
+    QComboBox *m_blend = nullptr;
     QComboBox *m_mode = nullptr;
     QComboBox *m_ramp = nullptr;
     QComboBox *m_stretch = nullptr;

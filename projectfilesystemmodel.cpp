@@ -68,6 +68,14 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
         && Project::reservedDirectories().contains(
             info.fileName(), Qt::CaseInsensitive);
 
+    QString className;
+    if (directProjectChild)
+        className = collectionClass(info.absoluteFilePath());
+    const bool otherCollection = className == "other";
+
+    if (role == Qt::ForegroundRole && otherCollection)
+        return QBrush(QColor(170, 90, 0));
+
     if (role == Qt::ForegroundRole && reserved)
         return QBrush(QColor(35, 105, 190));
 
@@ -82,9 +90,8 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (role != Qt::DisplayRole)
         return QFileSystemModel::data(index, role);
 
-    QString className;
-    if (directProjectChild)
-        className = collectionClass(info.absoluteFilePath());
+    if (otherCollection)
+        return QFileSystemModel::data(index, role);
 
     const bool countedReserved =
         reserved

@@ -47,6 +47,7 @@ public:
     bool reloadFromDisk(QString *errorMessage = nullptr) override;
     void setStyle(const ImageLayerStyle &style);
     void setOpacity(double opacity);
+    void setBlendMode(ImageBlendMode blendMode);
     void setRenderStyle(const RasterRenderStyle &renderStyle);
     void setColorRamp(ColorRamp ramp);
     void setStretchMode(StretchMode mode);

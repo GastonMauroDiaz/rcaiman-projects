@@ -90,6 +90,30 @@ StretchMode parseStretch(const QString &value)
     return StretchMode::None;
 }
 
+QString blendModeName(ImageBlendMode mode)
+{
+    switch (mode) {
+    case ImageBlendMode::Multiply:
+        return "multiply";
+    case ImageBlendMode::Maximum:
+        return "maximum";
+    default:
+        return "normal";
+    }
+}
+
+ImageBlendMode parseBlendMode(const QString &value)
+{
+    if (value.compare("multiply", Qt::CaseInsensitive) == 0)
+        return ImageBlendMode::Multiply;
+    if (value.compare("maximum", Qt::CaseInsensitive) == 0
+        || value.compare("max", Qt::CaseInsensitive) == 0
+        || value.compare("lighten", Qt::CaseInsensitive) == 0) {
+        return ImageBlendMode::Maximum;
+    }
+    return ImageBlendMode::Normal;
+}
+
 bool parseBool(const QString &value)
 {
     return value.compare("true", Qt::CaseInsensitive) == 0
@@ -137,6 +161,8 @@ CollectionStyleData CollectionStyleFile::load(
             data.pointStyle.labelSize = value.toDouble();
         } else if (key == "opacity") {
             data.imageStyle.opacity = value.toDouble();
+        } else if (key == "blend_mode") {
+            data.imageStyle.blendMode = parseBlendMode(value);
         } else if (key == "mode") {
             data.imageStyle.render.mode = parseMode(value);
         } else if (key == "band") {
@@ -200,6 +226,8 @@ bool CollectionStyleFile::save(const QString &collectionDirectory,
         const RasterRenderStyle &render = data.imageStyle.render;
         stream << "layer: image\n";
         stream << "opacity: " << data.imageStyle.opacity << "\n";
+        stream << "blend_mode: "
+               << blendModeName(data.imageStyle.blendMode) << "\n";
         stream << "render:\n";
         stream << "  mode: " << modeName(render.mode) << "\n";
         stream << "  band: " << render.band + 1 << "\n";

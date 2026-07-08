@@ -112,6 +112,12 @@ QWidget *CollectionStyleDialog::createImageEditor()
     m_opacity->setDecimals(2);
     form->addRow("Opacity:", m_opacity);
 
+    m_blend = new QComboBox(widget);
+    m_blend->addItem("Normal", static_cast<int>(ImageBlendMode::Normal));
+    m_blend->addItem("Multiply", static_cast<int>(ImageBlendMode::Multiply));
+    m_blend->addItem("Maximum", static_cast<int>(ImageBlendMode::Maximum));
+    form->addRow("Blend:", m_blend);
+
     m_mode = new QComboBox(widget);
     m_mode->addItem("Single band", static_cast<int>(RasterRenderMode::SingleBand));
     m_mode->addItem("RGB", static_cast<int>(RasterRenderMode::Rgb));
@@ -210,6 +216,9 @@ void CollectionStyleDialog::loadInitialStyle()
         style = m_initialData.imageStyle;
 
     m_opacity->setValue(style.opacity);
+    const int blendIndex =
+        m_blend->findData(static_cast<int>(style.blendMode));
+    m_blend->setCurrentIndex(blendIndex >= 0 ? blendIndex : 0);
     m_mode->setCurrentIndex(m_mode->findData(static_cast<int>(style.render.mode)));
     m_ramp->setCurrentIndex(m_ramp->findData(static_cast<int>(style.render.colorRamp)));
     m_stretch->setCurrentIndex(m_stretch->findData(static_cast<int>(style.render.stretchMode)));
@@ -241,6 +250,8 @@ CollectionStyleData CollectionStyleDialog::imageData() const
     CollectionStyleData data;
     data.kind = CollectionStyleData::Kind::Image;
     data.imageStyle.opacity = m_opacity->value();
+    data.imageStyle.blendMode =
+        static_cast<ImageBlendMode>(m_blend->currentData().toInt());
     RasterRenderStyle &render = data.imageStyle.render;
     render.mode = static_cast<RasterRenderMode>(m_mode->currentData().toInt());
     render.colorRamp = static_cast<ColorRamp>(m_ramp->currentData().toInt());

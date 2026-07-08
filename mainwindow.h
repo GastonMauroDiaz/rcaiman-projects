@@ -22,6 +22,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "collectionstylefile.h"
 #include "project.h"
 
 #include <QMainWindow>
@@ -40,6 +41,7 @@ class QCloseEvent;
 class QEvent;
 class QFileSystemWatcher;
 class ProjectFileSystemModel;
+class ImageLayer;
 class ImageViewer;
 class HistogramDock;
 class Layer;
@@ -82,6 +84,7 @@ private slots:
     void saveProjectAs();
     void saveProjectAsCleanCopy();
     void createProjectReport();
+    void importLegacyHspProject();
     void openImage();
     void importRaw();
     void extractRawData();
@@ -142,6 +145,7 @@ private:
     bool validateRawImage(const QString &rawPath,
                           const QString &registryPath = {});
     Collection collectionForPath(const QString &path) const;
+    ImageLayer *createStyledImageLayer(const QString &path);
     PointLayer *createStyledPointLayer(const QString &path,
                                        ImageViewer *viewer);
     void refreshReloadableArtifactWatchers();
@@ -175,7 +179,7 @@ private:
     QLabel *m_viewerQuickTitle = nullptr;
     QLabel *m_viewerQuickBody = nullptr;
     QStringList m_recentProjects;
-    PointLayer *m_currentPointLayer = nullptr;
+    QPointer<PointLayer> m_currentPointLayer;
     QMetaObject::Connection m_pointLayerConnection;
     QMetaObject::Connection m_pointCollectionConnection;
     QPointer<ImageViewer> m_activeViewer;
@@ -186,6 +190,9 @@ private:
     bool m_resetLayoutPending = false;
     QHash<QString, int> m_pendingReloadAttempts;
     QSet<QString> m_scheduledArtifactReloads;
+    CollectionStyleData m_copiedCollectionStyle;
+    QString m_copiedCollectionStyleKind;
+    QString m_copiedCollectionStyleSource;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

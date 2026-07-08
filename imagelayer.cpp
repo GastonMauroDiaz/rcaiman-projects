@@ -27,11 +27,70 @@
 #include <QGraphicsScene>
 #include <QImage>
 #include <QMessageBox>
+#include <QPainter>
+#include <QStyleOptionGraphicsItem>
 #include <QTimer>
 #include <QWidget>
 #include <QtGlobal>
 
 #include <utility>
+
+namespace {
+
+class BlendedPixmapItem : public QGraphicsPixmapItem
+{
+public:
+    explicit BlendedPixmapItem(const QPixmap &pixmap)
+        : QGraphicsPixmapItem(pixmap)
+    {
+    }
+
+    void setLayerOpacity(double opacity)
+    {
+        const double bounded = qBound(0.0, opacity, 1.0);
+        if (qFuzzyCompare(m_opacity, bounded))
+            return;
+        m_opacity = bounded;
+        update();
+    }
+
+    void setBlendMode(ImageBlendMode blendMode)
+    {
+        if (m_blendMode == blendMode)
+            return;
+        m_blendMode = blendMode;
+        update();
+    }
+
+    void paint(QPainter *painter,
+               const QStyleOptionGraphicsItem *option,
+               QWidget *widget) override
+    {
+        Q_UNUSED(option);
+        Q_UNUSED(widget);
+
+        const QPixmap currentPixmap = pixmap();
+        if (currentPixmap.isNull())
+            return;
+
+        painter->save();
+        painter->setOpacity(m_opacity);
+        if (m_blendMode == ImageBlendMode::Multiply)
+            painter->setCompositionMode(QPainter::CompositionMode_Multiply);
+        else if (m_blendMode == ImageBlendMode::Maximum)
+            painter->setCompositionMode(QPainter::CompositionMode_Lighten);
+        else
+            painter->setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter->drawPixmap(offset(), currentPixmap);
+        painter->restore();
+    }
+
+private:
+    double m_opacity = 1.0;
+    ImageBlendMode m_blendMode = ImageBlendMode::Normal;
+};
+
+}
 
 ImageLayer::ImageLayer(const QString &filePath, QObject *parent)
     : Layer(QFileInfo(filePath).fileName(), filePath, parent)
@@ -64,7 +123,9 @@ const QVector<QGraphicsItem*> &ImageLayer::buildItems(QGraphicsScene *scene)
     }
 
     QPixmap pixmap = QPixmap::fromImage(image);
-    m_pixmapItem = scene->addPixmap(pixmap);
+    auto *item = new BlendedPixmapItem(pixmap);
+    scene->addItem(item);
+    m_pixmapItem = item;
     m_pixmapItem->setVisible(isVisible());
     applyStyleToItem();
     m_items.append(m_pixmapItem);
@@ -119,6 +180,7 @@ void ImageLayer::setStyleInternal(const ImageLayerStyle &style,
                                   bool deferRender)
 {
     const bool opacityChanged = !qFuzzyCompare(m_style.opacity, style.opacity);
+    const bool blendModeChanged = m_style.blendMode != style.blendMode;
     const bool renderChanged =
         m_style.render.mode != style.render.mode ||
         m_style.render.colorRamp != style.render.colorRamp ||
@@ -136,7 +198,7 @@ void ImageLayer::setStyleInternal(const ImageLayerStyle &style,
         m_style.render.greenBand != style.render.greenBand ||
         m_style.render.blueBand != style.render.blueBand;
 
-    if (!opacityChanged && !renderChanged)
+    if (!opacityChanged && !blendModeChanged && !renderChanged)
         return;
 
     m_style = style;
@@ -155,6 +217,13 @@ void ImageLayer::setOpacity(double opacity)
 {
     ImageLayerStyle next = m_style;
     next.opacity = qBound(0.0, opacity, 1.0);
+    setStyle(next);
+}
+
+void ImageLayer::setBlendMode(ImageBlendMode blendMode)
+{
+    ImageLayerStyle next = m_style;
+    next.blendMode = blendMode;
     setStyle(next);
 }
 
@@ -283,8 +352,15 @@ void ImageLayer::setRgbBands(int redBand, int greenBand, int blueBand)
 
 void ImageLayer::applyStyleToItem()
 {
-    if (m_pixmapItem)
+    if (!m_pixmapItem)
+        return;
+
+    if (auto *item = dynamic_cast<BlendedPixmapItem*>(m_pixmapItem)) {
+        item->setLayerOpacity(m_style.opacity);
+        item->setBlendMode(m_style.blendMode);
+    } else {
         m_pixmapItem->setOpacity(m_style.opacity);
+    }
 }
 
 void ImageLayer::scheduleRenderRefresh()

@@ -66,6 +66,12 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
     m_opacitySpin->setSingleStep(0.05);
     layout->addRow("Opacity value:", m_opacitySpin);
 
+    m_blendCombo = new QComboBox(this);
+    m_blendCombo->addItem("Normal", static_cast<int>(ImageBlendMode::Normal));
+    m_blendCombo->addItem("Multiply", static_cast<int>(ImageBlendMode::Multiply));
+    m_blendCombo->addItem("Maximum", static_cast<int>(ImageBlendMode::Maximum));
+    layout->addRow("Blend:", m_blendCombo);
+
     m_modeCombo = new QComboBox(this);
     m_modeCombo->addItem("Single band", static_cast<int>(RasterRenderMode::SingleBand));
     m_modeCombo->addItem("RGB", static_cast<int>(RasterRenderMode::Rgb));
@@ -160,6 +166,13 @@ ImageLayerPropertiesWidget::ImageLayerPropertiesWidget(QWidget *parent)
                 if (!m_layer || m_updating)
                     return;
                 m_layer->setOpacity(value);
+            });
+    connect(m_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+                if (!m_layer || m_updating || index < 0)
+                    return;
+                m_layer->setBlendMode(
+                    static_cast<ImageBlendMode>(m_blendCombo->currentData().toInt()));
             });
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
@@ -306,6 +319,9 @@ void ImageLayerPropertiesWidget::updateFromLayer()
         const double opacity = style.opacity;
         m_opacitySlider->setValue(static_cast<int>(opacity * 100.0));
         m_opacitySpin->setValue(opacity);
+        const int blendIndex =
+            m_blendCombo->findData(static_cast<int>(style.blendMode));
+        m_blendCombo->setCurrentIndex(blendIndex >= 0 ? blendIndex : 0);
         m_modeCombo->setCurrentIndex(m_modeCombo->findData(static_cast<int>(style.render.mode)));
         m_rampCombo->setCurrentIndex(m_rampCombo->findData(static_cast<int>(style.render.colorRamp)));
         m_stretchCombo->setCurrentIndex(m_stretchCombo->findData(static_cast<int>(style.render.stretchMode)));

@@ -49,6 +49,12 @@ enum class PointSymbol {
     Cross
 };
 
+enum class ImageBlendMode {
+    Normal,
+    Multiply,
+    Maximum
+};
+
 struct PointLayerStyle
 {
     QColor color = Qt::yellow;
@@ -80,6 +86,7 @@ struct RasterRenderStyle
 struct ImageLayerStyle
 {
     double opacity = 1.0;
+    ImageBlendMode blendMode = ImageBlendMode::Normal;
     RasterRenderStyle render;
 };
 

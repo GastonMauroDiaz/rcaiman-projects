@@ -22,6 +22,7 @@
 #ifndef POINTLAYERPROPERTIESWIDGET_H
 #define POINTLAYERPROPERTIESWIDGET_H
 
+#include <QPointer>
 #include <QWidget>
 
 class PointLayer;
@@ -44,7 +45,7 @@ private:
     void updateColorButton();
     void updateLabelFields();
 
-    PointLayer *m_layer = nullptr;
+    QPointer<PointLayer> m_layer;
     QPushButton *m_colorButton = nullptr;
     QDoubleSpinBox *m_sizeSpin = nullptr;
     QComboBox *m_symbolCombo = nullptr;

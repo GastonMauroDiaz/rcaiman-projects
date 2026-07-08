@@ -75,6 +75,8 @@ qt_add_executable(rcaiman_projects
     rasterdata.h rasterdata.cpp
     rasterrenderer.h rasterrenderer.cpp
     tiffreader.h tiffreader.cpp
+    tiffwriter.h tiffwriter.cpp
+    pgmreader.h pgmreader.cpp
     rawreader.h rawreader.cpp
     collectiondialog.h collectiondialog.cpp
     collectionautoload.h collectionautoload.cpp
@@ -86,6 +88,8 @@ qt_add_executable(rcaiman_projects
     collectionvalidation.h collectionvalidation.cpp
     collectionvalidationdialog.h collectionvalidationdialog.cpp
     acquisitionmetadata.h acquisitionmetadata.cpp
+    hspimportdialog.h hspimportdialog.cpp
+    hspprojectimporter.h hspprojectimporter.cpp
     exampleprojectsdialog.h exampleprojectsdialog.cpp
     shortcuttext.h shortcuttext.cpp
     resources.qrc
@@ -185,10 +189,17 @@ if(BUILD_TESTING)
         collectionvalidation.h collectionvalidation.cpp
         project.h project.cpp
         acquisitionmetadata.h acquisitionmetadata.cpp
+        collectionstylefile.h collectionstylefile.cpp
+        hspprojectimporter.h hspprojectimporter.cpp
+        pgmreader.h pgmreader.cpp
+        rasterdata.h rasterdata.cpp
         rawreader.h rawreader.cpp
+        tiffreader.h tiffreader.cpp
+        tiffwriter.h tiffwriter.cpp
     )
     target_link_libraries(metadataregistry_tests PRIVATE
         Qt::Core
+        Qt::Widgets
         TIFF
         LibRaw
         yaml-cpp

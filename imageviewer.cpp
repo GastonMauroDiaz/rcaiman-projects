@@ -823,15 +823,7 @@ void ImageViewer::dropEvent(QDropEvent *event)
         const QString suffix = QFileInfo(path).suffix().toLower();
 
         if (imgExts.contains(suffix)) {
-            // Add image as a new layer on top of existing content
-            auto *imgLayer = new ImageLayer(path);
-            if (imgLayer->rasterData().isNull()) {
-                delete imgLayer;
-                continue;
-            }
-            m_layerManager->addLayer(imgLayer);
-            if (m_primarySourcePath.isEmpty())
-                m_primarySourcePath = QFileInfo(path).absoluteFilePath();
+            emit imageLayerFileDropped(path);
         } else if (csvExts.contains(suffix)) {
             if (!m_imageLayer) {
                 QMessageBox::information(this, "Add Points",

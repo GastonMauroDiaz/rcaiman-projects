@@ -22,7 +22,11 @@
 #include "metadataregistry.h"
 #include "collectionvalidation.h"
 #include "acquisitionmetadata.h"
+#include "collectionstylefile.h"
+#include "hspprojectimporter.h"
 #include "project.h"
+#include "pgmreader.h"
+#include "tiffreader.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -51,6 +55,224 @@ int main(int argc, char *argv[])
     QTemporaryDir directory;
     if (!directory.isValid())
         return 4;
+
+    AcquisitionMetadataValues zeroBlackValues;
+    zeroBlackValues.hasLibRawBlack = true;
+    zeroBlackValues.libRawBlack = 0.0;
+    zeroBlackValues.hasLibRawCblack = true;
+    const QString zeroBlackSidecar =
+        QDir(directory.path()).filePath("zero_black.tsv");
+    if (!AcquisitionMetadata::writeSidecar(
+            zeroBlackSidecar,
+            directory.path(),
+            QDir(directory.path()).filePath("raw_files/raw.NEF"),
+            QDir(directory.path()).filePath("sensor_data/raw.tif"),
+            zeroBlackValues,
+            "ok",
+            {},
+            &error)) {
+        return 82;
+    }
+    QFile zeroBlackFile(zeroBlackSidecar);
+    if (!zeroBlackFile.open(QIODevice::ReadOnly | QIODevice::Text))
+        return 83;
+    const QList<QByteArray> zeroBlackLines =
+        zeroBlackFile.readAll().split('\n');
+    if (zeroBlackLines.size() < 2)
+        return 84;
+    const QList<QByteArray> zeroBlackFields =
+        zeroBlackLines.at(1).split('\t');
+    if (zeroBlackFields.size() < 12
+        || zeroBlackFields.at(7) != "0"
+        || zeroBlackFields.at(8) != "0"
+        || zeroBlackFields.at(9) != "0"
+        || zeroBlackFields.at(10) != "0"
+        || zeroBlackFields.at(11) != "0") {
+        return 85;
+    }
+
+    const QString pgm8Path = QDir(directory.path()).filePath("pgm8.pgm");
+    QFile pgm8(pgm8Path);
+    if (!pgm8.open(QIODevice::WriteOnly)
+        || pgm8.write("P5\n2 2\n255\n") < 0
+        || pgm8.write(QByteArray::fromRawData("\x00\x7f\x80\xff", 4)) < 0) {
+        return 60;
+    }
+    pgm8.close();
+    RasterData pgm8Data = PgmReader::load(pgm8Path, &error);
+    if (pgm8Data.isNull()
+        || pgm8Data.width() != 2
+        || pgm8Data.height() != 2
+        || pgm8Data.dataType() != RasterData::DataType::UInt8
+        || pgm8Data.sample(0, 1, 1).toInt() != 255) {
+        return 61;
+    }
+
+    const QString pgm16Path = QDir(directory.path()).filePath("pgm16.pgm");
+    QFile pgm16(pgm16Path);
+    const char pgm16Pixels[] = {
+        '\x00', '\x01', '\x01', '\x02',
+        '\x03', '\xff', '\x04', '\x00'
+    };
+    if (!pgm16.open(QIODevice::WriteOnly)
+        || pgm16.write("P5\n2 2\n1024\n") < 0
+        || pgm16.write(pgm16Pixels, sizeof(pgm16Pixels)) < 0) {
+        return 62;
+    }
+    pgm16.close();
+    RasterData pgm16Data = PgmReader::load(pgm16Path, &error);
+    if (pgm16Data.isNull()
+        || pgm16Data.dataType() != RasterData::DataType::UInt16
+        || pgm16Data.sample(0, 0, 1).toInt() != 258
+        || pgm16Data.sample(0, 1, 1).toInt() != 1024) {
+        return 63;
+    }
+
+    const QString hspSource = QDir(directory.path()).filePath("legacy_hsp");
+    QDir().mkpath(QDir(hspSource).filePath("raw"));
+    QDir().mkpath(QDir(hspSource).filePath("manipulate"));
+    QDir().mkpath(QDir(hspSource).filePath("info"));
+    QFile hspProject(QDir(hspSource).filePath("project.conf"));
+    if (!hspProject.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspProject.write(
+            "#Thu Apr 30 11:44:41 EEST 2020\n"
+            "name=legacy_hsp\n"
+            "comment = Field note from HSP\n") < 0) {
+        return 64;
+    }
+    hspProject.close();
+    if (!QFile::copy(executable, QDir(hspSource).filePath("raw/test.NEF")))
+        return 65;
+    if (!QFile::copy(pgm16Path, QDir(hspSource).filePath("manipulate/test.pgm")))
+        return 66;
+    QFile hspInfo(QDir(hspSource).filePath("info/test.conf"));
+    if (!hspInfo.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspInfo.write("group_name=Group A\n") < 0) {
+        return 67;
+    }
+    hspInfo.close();
+    QFile hspPoints(QDir(hspSource).filePath("manipulate/test_points.conf"));
+    if (!hspPoints.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspPoints.write("2\n10.20.3 30.40.3\n") < 0) {
+        return 68;
+    }
+    hspPoints.close();
+    QFile hspSun(QDir(hspSource).filePath("manipulate/test_sun.conf"));
+    if (!hspSun.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspSun.write("50.60\n") < 0) {
+        return 69;
+    }
+    hspSun.close();
+    QFile hspOpt(QDir(hspSource).filePath("manipulate/test_opt-parameters.conf"));
+    if (!hspOpt.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspOpt.write(
+            "#Tue Feb 18 11:14:19 ART 2025\n"
+            "b=-0,5\n"
+            "a=3,25\n"
+            "e=4,5\n"
+            "d=-1\n"
+            "c=0,125\n") < 0) {
+        return 75;
+    }
+    hspOpt.close();
+
+    HspImportOptions hspOptions;
+    hspOptions.sourceProjectPath = hspSource;
+    hspOptions.destinationProjectPath =
+        QDir(directory.path()).filePath("imported_hsp");
+    hspOptions.projectName = "imported_hsp";
+    hspOptions.description = "Imported from test HSP";
+    HspImportReport hspReport;
+    const Project importedHsp =
+        HspProjectImporter::importProject(hspOptions, &hspReport, &error);
+    if (!importedHsp.isValid()
+        || hspReport.rawFilesCopied != 1
+        || hspReport.pgmFilesConverted != 1
+        || hspReport.skyPointFilesWritten != 1
+        || hspReport.sunMarkFilesWritten != 1
+        || hspReport.optSkyCoefTablesWritten != 1) {
+        return 70;
+    }
+    RasterData importedTiff = TiffReader::load(
+        QDir(importedHsp.rootPath()).filePath("preprocessed_Group_A/test.tif"),
+        &error);
+    if (importedTiff.isNull()
+        || importedTiff.bands() != 1
+        || importedTiff.sample(0, 1, 1).toInt() != 1024) {
+        return 71;
+    }
+    QFile importedPoints(
+        QDir(importedHsp.rootPath()).filePath("sky_points_Group_A/test.csv"));
+    if (!importedPoints.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !importedPoints.readAll().contains("20,10,3")) {
+        return 72;
+    }
+    QFile importedSun(
+        QDir(importedHsp.rootPath()).filePath("sun_marks_Group_A/test.csv"));
+    if (!importedSun.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !importedSun.readAll().contains("60,50")) {
+        return 73;
+    }
+    QFile importedNote(
+        QDir(importedHsp.rootPath()).filePath("field_notes/comment.md"));
+    if (!importedNote.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 74;
+    }
+    const QByteArray importedNoteText = importedNote.readAll();
+    if (!importedNoteText.contains("Thu Apr 30 11:44:41 EEST 2020")
+        || !importedNoteText.contains("Field note from HSP")) {
+        return 74;
+    }
+    const CollectionStyleData importedStyle = CollectionStyleFile::load(
+        QDir(importedHsp.rootPath()).filePath("preprocessed_Group_A"));
+    if (importedStyle.kind != CollectionStyleData::Kind::Image
+        || importedStyle.imageStyle.render.stretchMode != StretchMode::None
+        || importedStyle.imageStyle.render.tailTrim) {
+        return 76;
+    }
+    QFile importedOptSky(
+        QDir(importedHsp.rootPath()).filePath("opt_sky_coef_Group_A/opt_sky_coef.tsv"));
+    if (!importedOptSky.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !importedOptSky.readAll().contains(
+            "test\t3.25\t-0.5\t0.125\t-1\t4.5\tmanipulate/test_opt-parameters.conf\tok\t")) {
+        return 77;
+    }
+    QFile importedOptSkyReadme(
+        QDir(importedHsp.rootPath()).filePath("opt_sky_coef_Group_A/README.md"));
+    if (!importedOptSkyReadme.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !importedOptSkyReadme.readAll().contains("read.delim()")) {
+        return 78;
+    }
+
+    const QString emptyCommentHsp = QDir(directory.path()).filePath("empty_comment_hsp");
+    QDir().mkpath(QDir(emptyCommentHsp).filePath("raw"));
+    QDir().mkpath(QDir(emptyCommentHsp).filePath("manipulate"));
+    QFile emptyCommentProject(QDir(emptyCommentHsp).filePath("project.conf"));
+    if (!emptyCommentProject.open(QIODevice::WriteOnly | QIODevice::Text)
+        || emptyCommentProject.write(
+            "#Wed Dec 17 09:02:39 ART 2025\n"
+            "name=empty_comment_hsp\n"
+            "comments=\n") < 0) {
+        return 79;
+    }
+    emptyCommentProject.close();
+    HspImportOptions emptyCommentOptions;
+    emptyCommentOptions.sourceProjectPath = emptyCommentHsp;
+    emptyCommentOptions.destinationProjectPath =
+        QDir(directory.path()).filePath("imported_empty_comment_hsp");
+    emptyCommentOptions.projectName = "imported_empty_comment_hsp";
+    emptyCommentOptions.description = "Imported empty comment HSP";
+    const Project importedEmptyComment =
+        HspProjectImporter::importProject(emptyCommentOptions, nullptr, &error);
+    if (!importedEmptyComment.isValid())
+        return 80;
+    QFile emptyCommentNote(
+        QDir(importedEmptyComment.rootPath()).filePath("field_notes/comment.md"));
+    if (!emptyCommentNote.open(QIODevice::ReadOnly | QIODevice::Text)
+        || !emptyCommentNote.readAll().contains("Wed Dec 17 09:02:39 ART 2025")) {
+        return 81;
+    }
+
     const MetadataRule rule = {
         "camera_model", "IFD0", "Model", "Camera Model Name", "E5700"
     };

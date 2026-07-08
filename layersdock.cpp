@@ -26,6 +26,8 @@
 #include "imagelayer.h"
 #include "pointlayer.h"
 #include "pointcollection.h"
+#include "collectionautoload.h"
+#include "project.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -78,6 +80,63 @@ bool validatePointCsvForLayer(QWidget *parent,
     QMessageBox::warning(parent, title,
                          pointCsvContractMessage(errorMessage));
     return false;
+}
+
+Collection collectionForPath(const QString &projectPath, const QString &path)
+{
+    if (projectPath.isEmpty() || path.isEmpty())
+        return {};
+
+    const QString absolute = QFileInfo(path).isDir()
+        ? QFileInfo(path).absoluteFilePath()
+        : QFileInfo(path).absolutePath();
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+    const QVector<Collection> collections =
+        Project::discoverCollections(projectPath);
+    for (const Collection &collection : collections) {
+        if (QDir::cleanPath(collection.dirPath).compare(
+                QDir::cleanPath(absolute), sensitivity) == 0) {
+            return collection;
+        }
+    }
+    return {};
+}
+
+ImageLayer *createStyledImageLayer(const QString &path,
+                                   const QString &projectPath)
+{
+    auto *layer = new ImageLayer(path);
+    if (layer->rasterData().isNull())
+        return layer;
+
+    const Collection collection = collectionForPath(projectPath, path);
+    if (!collection.collectionClass.isEmpty()) {
+        CollectionStyleResolver styleResolver;
+        layer->setStyle(styleResolver.imageStyle(
+            collection, layer->rasterData()));
+    }
+    return layer;
+}
+
+PointLayer *createStyledPointLayer(const QString &path,
+                                   const QString &projectPath,
+                                   QGraphicsScene *scene)
+{
+    auto *layer = new PointLayer(path, scene);
+    if (!layer->collection().isValid())
+        return layer;
+
+    const Collection collection = collectionForPath(projectPath, path);
+    if (collection.collectionClass == "point_collection") {
+        CollectionStyleResolver styleResolver;
+        layer->setStyle(styleResolver.pointStyle(
+            collection, layer->collection().recordCount()));
+    }
+    return layer;
 }
 
 class LayerListWidget : public QListWidget
@@ -221,7 +280,7 @@ LayersDock::LayersDock(QWidget *parent)
             m_projectPath,
             "TIFF files (*.tif *.tiff)");
         if (filePath.isEmpty()) return;
-        auto *layer = new ImageLayer(filePath);
+        auto *layer = createStyledImageLayer(filePath, m_projectPath);
         if (layer->rasterData().isNull()) {
             delete layer;
             QMessageBox::warning(this, "Add TIFF", "Could not load TIFF.");
@@ -555,7 +614,8 @@ void LayersDock::addPointLayer()
     if (!validatePointCsvForLayer(this, filePath, "Add CSV"))
         return;
 
-    auto *layer = new PointLayer(filePath, m_manager->scene());
+    auto *layer = createStyledPointLayer(
+        filePath, m_projectPath, m_manager->scene());
     m_manager->addLayer(layer);
 }
 
@@ -572,6 +632,19 @@ void LayersDock::removeLayer()
     Layer *layer = m_manager->layerAt(currentRow);
     if (layer && layer->flickerEnabled())
         layer->setFlickerEnabled(false);
+
+    if (m_trackedLayer) {
+        disconnect(m_trackedFlickerConnection);
+        m_trackedLayer = nullptr;
+    }
+    if (m_propertiesWidget)
+        m_propertiesWidget->setLayer(nullptr);
+    m_openTableBtn->setEnabled(false);
+    m_flickerBtn->blockSignals(true);
+    m_flickerBtn->setChecked(false);
+    m_flickerBtn->setEnabled(false);
+    m_flickerBtn->blockSignals(false);
+    m_flickerSpeed->setEnabled(false);
 
     m_manager->removeLayer(currentRow);
 }
@@ -728,10 +801,11 @@ void LayersDock::dropEvent(QDropEvent *event)
             if (suffix == "csv") {
                 if (!validatePointCsvForLayer(this, path, "Add CSV"))
                     continue;
-                auto *layer = new PointLayer(path, m_manager->scene());
+                auto *layer = createStyledPointLayer(
+                    path, m_projectPath, m_manager->scene());
                 m_manager->addLayer(layer);
             } else {
-                auto *imgLayer = new ImageLayer(path);
+                auto *imgLayer = createStyledImageLayer(path, m_projectPath);
                 if (imgLayer->rasterData().isNull()) {
                     delete imgLayer;
                     continue;

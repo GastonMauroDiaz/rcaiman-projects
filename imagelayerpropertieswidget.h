@@ -22,6 +22,7 @@
 #ifndef IMAGELAYERPROPERTIESWIDGET_H
 #define IMAGELAYERPROPERTIESWIDGET_H
 
+#include <QPointer>
 #include <QWidget>
 
 class ImageLayer;
@@ -48,7 +49,7 @@ private:
     void updateBandSpinTexts();
     void updateBandSpinText(QSpinBox *spin, int band) const;
 
-    ImageLayer *m_layer = nullptr;
+    QPointer<ImageLayer> m_layer;
     QComboBox *m_modeCombo = nullptr;
     QComboBox *m_rampCombo = nullptr;
     QComboBox *m_stretchCombo = nullptr;
@@ -69,6 +70,7 @@ private:
     QDoubleSpinBox *m_gammaSpin = nullptr;
     QSlider *m_opacitySlider = nullptr;
     QDoubleSpinBox *m_opacitySpin = nullptr;
+    QComboBox *m_blendCombo = nullptr;
     bool m_updating = false;
 };
 

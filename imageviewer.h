@@ -86,6 +86,7 @@ signals:
     void closeRequested();
     void reloadRequested();
     void activatedByClick();
+    void imageLayerFileDropped(const QString &path);
     void pointLayerFileDropped(const QString &path);
     void zoomPercentChanged(double percent);
 
