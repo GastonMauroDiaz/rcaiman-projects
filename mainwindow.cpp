@@ -94,6 +94,7 @@
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
+#include <QTabBar>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QTextBrowser>
@@ -181,6 +182,44 @@ QString pointCsvContractMessage(const QString &errorMessage)
         "- Extra columns are allowed and are loaded as attributes.\n"
         "- Empty CSV files are allowed if they contain a valid header.\n\n"
         "Parser error:\n%1").arg(errorMessage);
+}
+
+struct DroppedArtifactBatch
+{
+    QStringList tiffPaths;
+    QStringList csvPaths;
+    QStringList unsupportedPaths;
+};
+
+bool isTiffSuffix(const QString &suffix)
+{
+    return suffix == "tif" || suffix == "tiff";
+}
+
+bool isCsvSuffix(const QString &suffix)
+{
+    return suffix == "csv";
+}
+
+DroppedArtifactBatch classifyDroppedArtifacts(const QList<QUrl> &urls)
+{
+    DroppedArtifactBatch batch;
+    for (const QUrl &url : urls) {
+        const QString path = url.toLocalFile();
+        if (path.isEmpty()) {
+            batch.unsupportedPaths.append(url.toString());
+            continue;
+        }
+
+        const QString suffix = QFileInfo(path).suffix().toLower();
+        if (isTiffSuffix(suffix))
+            batch.tiffPaths.append(path);
+        else if (isCsvSuffix(suffix))
+            batch.csvPaths.append(path);
+        else
+            batch.unsupportedPaths.append(path);
+    }
+    return batch;
 }
 
 bool sameProjectRoot(const QString &left, const QString &right)
@@ -707,6 +746,17 @@ MainWindow::MainWindow(QWidget *parent)
     ui->workspaceTabs->setElideMode(Qt::ElideMiddle);
     ui->workspaceTabs->setMovable(true);
     ui->workspaceTabs->setDocumentMode(true);
+    ui->workspaceTabs->setAcceptDrops(true);
+    ui->workspaceTabs->installEventFilter(this);
+    if (ui->workspaceTabs->tabBar()) {
+        ui->workspaceTabs->tabBar()->setAcceptDrops(true);
+        ui->workspaceTabs->tabBar()->installEventFilter(this);
+        ui->workspaceTabs->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(ui->workspaceTabs->tabBar(),
+                &QWidget::customContextMenuRequested,
+                this,
+                &MainWindow::onWorkspaceTabContextMenu);
+    }
     createViewerEmptyState();
 
     // Obtain LayersDock from the UI instead of creating it again
@@ -1893,7 +1943,11 @@ void MainWindow::createProjectFolder()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_viewerEmptyState) {
+    const bool viewerDropArea =
+        watched == m_viewerEmptyState
+        || watched == ui->workspaceTabs
+        || (ui->workspaceTabs && watched == ui->workspaceTabs->tabBar());
+    if (viewerDropArea) {
         if (event->type() == QEvent::DragEnter) {
             dragEnterEvent(static_cast<QDragEnterEvent*>(event));
             return true;
@@ -2118,6 +2172,65 @@ void MainWindow::onWorkspaceTabCloseRequested(int index)
     updateProjectActions();
     updateViewerEmptyState();
     refreshReloadableArtifactWatchers();
+}
+
+void MainWindow::onWorkspaceTabContextMenu(const QPoint &position)
+{
+    if (!ui->workspaceTabs || !ui->workspaceTabs->tabBar())
+        return;
+
+    const int tabIndex = ui->workspaceTabs->tabBar()->tabAt(position);
+    if (tabIndex < 0)
+        return;
+
+    QMenu menu(this);
+    QAction *closeTabAction = menu.addAction("Close tab");
+    QAction *closeOtherTabsAction = menu.addAction("Close other tabs");
+    QAction *closeAllTabsAction = menu.addAction("Close all tabs");
+    closeOtherTabsAction->setEnabled(ui->workspaceTabs->count() > 1);
+    closeAllTabsAction->setEnabled(ui->workspaceTabs->count() > 0);
+
+    QAction *selected = menu.exec(
+        ui->workspaceTabs->tabBar()->mapToGlobal(position));
+    if (!selected)
+        return;
+
+    if (selected == closeTabAction) {
+        onWorkspaceTabCloseRequested(tabIndex);
+    } else if (selected == closeOtherTabsAction) {
+        closeOtherWorkspaceTabs(tabIndex);
+    } else if (selected == closeAllTabsAction) {
+        closeAllWorkspaceTabs();
+    }
+}
+
+void MainWindow::closeOtherWorkspaceTabs(int preservedIndex)
+{
+    if (!ui->workspaceTabs
+        || preservedIndex < 0
+        || preservedIndex >= ui->workspaceTabs->count()) {
+        return;
+    }
+
+    QWidget *preservedWidget = ui->workspaceTabs->widget(preservedIndex);
+    for (int i = ui->workspaceTabs->count() - 1; i >= 0; --i) {
+        if (ui->workspaceTabs->widget(i) == preservedWidget)
+            continue;
+        onWorkspaceTabCloseRequested(i);
+    }
+
+    const int newIndex = ui->workspaceTabs->indexOf(preservedWidget);
+    if (newIndex >= 0)
+        ui->workspaceTabs->setCurrentIndex(newIndex);
+}
+
+void MainWindow::closeAllWorkspaceTabs()
+{
+    if (!ui->workspaceTabs)
+        return;
+
+    for (int i = ui->workspaceTabs->count() - 1; i >= 0; --i)
+        onWorkspaceTabCloseRequested(i);
 }
 
 void MainWindow::onLayerSelectionChanged(int index)
@@ -4072,9 +4185,11 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
         return;
     }
 
-    const QString suffix = QFileInfo(event->mimeData()->urls().first().toLocalFile()).suffix().toLower();
-    const QStringList ok = {"tif", "tiff", "png", "jpg", "jpeg", "bmp", "csv"};
-    if (ok.contains(suffix))
+    const DroppedArtifactBatch batch =
+        classifyDroppedArtifacts(event->mimeData()->urls());
+    const bool hasSupported =
+        !batch.tiffPaths.isEmpty() || !batch.csvPaths.isEmpty();
+    if (hasSupported && batch.unsupportedPaths.isEmpty())
         event->acceptProposedAction();
     else
         event->ignore();
@@ -4082,27 +4197,45 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 
 void MainWindow::dropEvent(QDropEvent *event)
 {
-    const QUrl url = event->mimeData()->urls().first();
-    const QString path = url.toLocalFile();
-    if (path.isEmpty()) {
+    if (!event->mimeData()->hasUrls()) {
         event->ignore();
         return;
     }
 
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    if (suffix == "csv") {
-        ImageViewer *v = currentImageViewer();
-        if (!v) {
-            QMessageBox::information(this, "Add CSV",
-                "Open an image first before adding a point CSV layer.");
-              event->acceptProposedAction();
-              return;
-          }
-        if (PointLayer *layer = createStyledPointLayer(path, v))
-            v->layerManager()->addLayer(layer);
-    } else {
-        openImageAtPath(path);
+    const DroppedArtifactBatch batch =
+        classifyDroppedArtifacts(event->mimeData()->urls());
+    if (!batch.unsupportedPaths.isEmpty()) {
+        QMessageBox::information(
+            this, "Drop files",
+            "Only TIFF image files and compatible point CSV files can be dropped here.");
+        event->ignore();
+        return;
     }
+
+    if (!batch.tiffPaths.isEmpty() && !batch.csvPaths.isEmpty()) {
+        QMessageBox::information(
+            this, "Drop files",
+            "Drop TIFF files here to open viewers. Drop CSV files directly "
+            "onto an image panel or the Layers dock.");
+        event->ignore();
+        return;
+    }
+
+    if (!batch.csvPaths.isEmpty()) {
+        QMessageBox::information(
+            this, "Add CSV",
+            "Drop point CSV files directly onto an image panel or the Layers dock.");
+        event->acceptProposedAction();
+        return;
+    }
+
+    if (batch.tiffPaths.isEmpty()) {
+        event->ignore();
+        return;
+    }
+
+    for (const QString &path : batch.tiffPaths)
+        openImageAtPath(path);
     event->acceptProposedAction();
 }
 

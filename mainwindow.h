@@ -91,6 +91,7 @@ private slots:
     void registerCollection();
     void onProjectTreeDoubleClicked(const QModelIndex &index);
     void onProjectTreeContextMenu(const QPoint &position);
+    void onWorkspaceTabContextMenu(const QPoint &position);
     void onWorkspaceTabCloseRequested(int index);
     void onWorkspaceTabChanged(int index);
     void onLayerSelectionChanged(int index);
@@ -136,6 +137,8 @@ private:
     void clearPropertiesTable();
     void configureDockSizing();
     void configureViewer(ImageViewer *viewer);
+    void closeOtherWorkspaceTabs(int preservedIndex);
+    void closeAllWorkspaceTabs();
     void createProjectFolder();
     void openAttributeTable(PointLayer *layer);
     void closeAttributeTables();
