@@ -466,6 +466,28 @@ void PointLayer::clearSelection()
     setSelectedPointIndices({}, -1);
 }
 
+void PointLayer::invertSelection()
+{
+    QSet<int> inverted;
+    const int count = m_collection.recordCount();
+    for (int index = 0; index < count; ++index) {
+        if (!m_selectedPointIndices.contains(index))
+            inverted.insert(index);
+    }
+    setSelectedPointIndices(inverted, inverted.isEmpty() ? -1 : *inverted.constBegin());
+}
+
+void PointLayer::deleteSelectedPoints()
+{
+    if (m_selectedPointIndices.isEmpty())
+        return;
+
+    const int primary = m_primarySelectedPointIndex >= 0
+        ? m_primarySelectedPointIndex
+        : *m_selectedPointIndices.constBegin();
+    onPointDeleted(primary);
+}
+
 // --- Slots ---
 
 void PointLayer::onPointClicked(int index, Qt::KeyboardModifiers modifiers)

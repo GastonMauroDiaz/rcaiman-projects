@@ -47,6 +47,7 @@ private:
     void applyTableSelectionToLayer();
     void updateCounter();
     void zoomToSelection();
+    void deleteSelectedPoints();
 
     QPointer<PointLayer> m_layer;
     QPointer<ImageViewer> m_viewer;

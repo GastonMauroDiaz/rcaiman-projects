@@ -27,6 +27,7 @@
 #include <QAbstractItemView>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QTableView>
@@ -107,12 +108,19 @@ PointAttributeTableWindow::PointAttributeTableWindow(
     auto *selectedFirstButton = new QPushButton("Selected first", this);
     selectedFirstButton->setCheckable(true);
     auto *zoomButton = new QPushButton("Zoom", this);
+    auto *invertButton = new QPushButton("Invert selection", this);
     auto *clearButton = new QPushButton("Clear selection", this);
+    auto *deleteButton = new QPushButton("Delete selected", this);
+    deleteButton->setStyleSheet(
+        "QPushButton { color: #8a1f1f; }"
+        "QPushButton:disabled { color: #9a9a9a; }");
     m_counter = new QLabel(this);
     toolbar->addStretch(1);
     toolbar->addWidget(selectedFirstButton);
     toolbar->addWidget(zoomButton);
+    toolbar->addWidget(invertButton);
     toolbar->addWidget(clearButton);
+    toolbar->addWidget(deleteButton);
     toolbar->addWidget(m_counter);
     layout->addLayout(toolbar);
 
@@ -137,6 +145,11 @@ PointAttributeTableWindow::PointAttributeTableWindow(
 
     connect(zoomButton, &QPushButton::clicked,
             this, &PointAttributeTableWindow::zoomToSelection);
+    connect(invertButton, &QPushButton::clicked,
+            this, [this]() {
+                if (m_layer)
+                    m_layer->invertSelection();
+            });
     connect(selectedFirstButton, &QPushButton::toggled,
             this, [this](bool checked) {
                 if (m_proxy)
@@ -153,6 +166,8 @@ PointAttributeTableWindow::PointAttributeTableWindow(
         if (m_layer)
             m_layer->clearSelection();
     });
+    connect(deleteButton, &QPushButton::clicked,
+            this, &PointAttributeTableWindow::deleteSelectedPoints);
     connect(m_table->selectionModel(),
             &QItemSelectionModel::selectionChanged,
             this, [this]() { scheduleTableSelectionSync(); });
@@ -190,6 +205,7 @@ PointAttributeTableWindow::PointAttributeTableWindow(
         connect(m_viewer, &QObject::destroyed, this, &QWidget::close);
 
     syncSelectionFromLayer();
+    updateCounter();
 }
 
 void PointAttributeTableWindow::syncSelectionFromLayer()
@@ -281,4 +297,25 @@ void PointAttributeTableWindow::zoomToSelection()
     if (m_viewer && m_layer)
         m_viewer->zoomToPointIndices(
             m_layer, m_layer->selectedPointIndices());
+}
+
+void PointAttributeTableWindow::deleteSelectedPoints()
+{
+    if (!m_layer || m_layer->selectedPointIndices().isEmpty())
+        return;
+
+    const int count = m_layer->selectedPointIndices().size();
+    const QString question = count == 1
+        ? QStringLiteral("Delete 1 selected point?")
+        : QStringLiteral("Delete %1 selected points?").arg(count);
+    const auto answer = QMessageBox::question(
+        this,
+        QStringLiteral("Delete Selected Points"),
+        question,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    m_layer->deleteSelectedPoints();
 }

@@ -71,6 +71,8 @@ public:
     void togglePointSelection(int index);
     void setSelectedPointIndices(const QSet<int> &indices, int primaryIndex = -1);
     void clearSelection();
+    void invertSelection();
+    void deleteSelectedPoints();
 
 signals:
     void selectionChanged();
