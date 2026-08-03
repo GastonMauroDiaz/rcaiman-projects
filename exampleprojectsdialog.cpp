@@ -62,8 +62,6 @@ ExampleProjectsDialog::ExampleProjectsDialog(
 
     connect(m_list, &QListWidget::currentRowChanged,
             this, &ExampleProjectsDialog::updateDetails);
-    connect(m_list, &QListWidget::itemDoubleClicked,
-            this, [this](QListWidgetItem *) { accept(); });
     connect(buttons, &QDialogButtonBox::accepted,
             this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected,

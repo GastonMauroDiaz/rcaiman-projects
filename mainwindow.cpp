@@ -4922,8 +4922,10 @@ void MainWindow::createPointsCsv()
 
     if (pointCollections.isEmpty()) {
         QMessageBox::information(this, "Create points",
-                                 "No point collection is registered in this project.\n"
-                                 "Register a point collection first using Project > Register collection...");
+                                 "No point collection is registered in this project.\n\n"
+                                 "A point collection is a folder registered as a point collection.\n\n"
+                                 "To register a folder as a point collection, use Project > Register collection...\n\n"
+                                 "If you need an empty folder, create one in Project Explorer with the New Folder button.");
         return;
     }
 
