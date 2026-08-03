@@ -57,6 +57,7 @@ class QFrame;
 class QLabel;
 class QModelIndex;
 class QSortFilterProxyModel;
+class QSlider;
 class QSpinBox;
 class PointLayer;
 class PointAttributeTableWindow;
@@ -175,6 +176,7 @@ private:
     void updateViewerEmptyState();
     void refreshProjectExplorerRootIndex();
     void updateProjectExplorerStarredEmptyMessage();
+    void updateMaskBrushControls(ImageViewer *viewer);
     QModelIndex projectSourceIndex(const QModelIndex &index) const;
     QModelIndex projectProxyIndex(const QModelIndex &index) const;
     QString projectPathFromIndex(const QModelIndex &index) const;
@@ -193,6 +195,7 @@ private:
     QLabel *m_projectStarredEmptyLabel = nullptr;
     QComboBox *m_projectSortCombo = nullptr;
     QDoubleSpinBox *m_zoomPercentSpin = nullptr;
+    QSlider *m_maskBrushSlider = nullptr;
     QSpinBox *m_maskBrushSpin = nullptr;
     QWidget *m_viewerEmptyState = nullptr;
     QLabel *m_viewerEmptyTitle = nullptr;

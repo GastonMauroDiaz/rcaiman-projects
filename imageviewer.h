@@ -40,6 +40,7 @@ class Layer;
 class LayerManager;
 class ImageLayer;
 class PointLayer;
+class QPainter;
 
 enum class ZoomCursorDirection {
     In,
@@ -82,6 +83,7 @@ public:
     bool cancelMaskEdit(QString *errorMessage = nullptr);
     void setMaskBrushSize(int size);
     int maskBrushSize() const { return m_maskBrushSize; }
+    int maskBrushMaximum() const;
 
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
@@ -96,14 +98,19 @@ signals:
     void imageLayerFileDropped(const QString &path);
     void pointLayerFileDropped(const QString &path);
     void zoomPercentChanged(double percent);
+    void maskBrushSizeChanged(int size);
+    void maskConnectedRegionInverted(int pixelCount);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void drawForeground(QPainter *painter, const QRectF &rect) override;
     void wheelEvent(QWheelEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
     void mousePressEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
@@ -129,10 +136,12 @@ private:
     bool handleSpacePanKeyEvent(QEvent *event);
     bool handleTemporaryZoomKeyEvent(QEvent *event);
     bool handleResetZoomKeyEvent(QEvent *event);
+    bool handleMaskBrushSizeKeyEvent(QKeyEvent *event);
     void setPointItemsInteractionBlocked(bool blocked);
     void applyDragZoom(const QPoint &pos);
     bool paintMaskAtViewportPos(const QPoint &pos, bool erase);
     bool paintMaskStrokeToViewportPos(const QPoint &pos, bool erase);
+    bool paintMaskLineToViewportPos(const QPoint &pos, bool erase);
     void finishMaskStroke();
     void syncTransformToSiblings();
     void emitZoomPercentChanged();
@@ -154,7 +163,11 @@ private:
     bool m_maskPainting = false;
     bool m_maskPaintingErase = false;
     bool m_hasLastMaskPaintScenePos = false;
+    bool m_hasMaskLineAnchorScenePos = false;
+    bool m_maskBrushPreviewVisible = false;
     int m_maskBrushSize = 9;
+    int m_maskBrushRepeatDirection = 0;
+    int m_maskBrushRepeatCount = 0;
     PixelInfo m_lastPixelInfo;
     QPoint m_lastMousePos;
     QGraphicsScene *m_scene = nullptr;
@@ -164,6 +177,7 @@ private:
     QPointer<PointLayer> m_editingPointLayer;
     QPointer<ImageLayer> m_editingMaskLayer;
     QPointF m_lastMaskPaintScenePos;
+    QPointF m_maskLineAnchorScenePos;
     QPoint m_zoomDragLastPos;
     ZoomCursorDirection m_zoomCursorDirection = ZoomCursorDirection::In;
     QPoint m_pointBoxOrigin;

@@ -55,6 +55,10 @@ public:
     bool paintBinaryMaskAtScenePos(const QPointF &scenePos,
                                    int brushSize,
                                    bool erase);
+    bool invertConnectedBinaryMaskRegionAtScenePos(
+        const QPointF &scenePos,
+        int *changedPixelCount = nullptr,
+        QString *errorMessage = nullptr);
     bool saveBinaryMask(QString *errorMessage = nullptr);
     void setStyle(const ImageLayerStyle &style);
     void setOpacity(double opacity);

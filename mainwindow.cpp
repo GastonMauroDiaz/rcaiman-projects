@@ -95,6 +95,7 @@
 #include <QSettings>
 #include <QSaveFile>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
@@ -386,6 +387,39 @@ private:
 
 constexpr int ProjectFileMarkAreaWidth = 24;
 constexpr int ProjectFileMarkSize = 15;
+constexpr int MaskBrushSliderMaximum = 1000;
+constexpr double MaskBrushSliderGamma = 2.5;
+
+int maskBrushSizeFromSlider(int sliderValue, int maximumSize)
+{
+    maximumSize = qMax(1, maximumSize);
+    const double t = qBound(
+        0.0,
+        static_cast<double>(sliderValue) / MaskBrushSliderMaximum,
+        1.0);
+    return qBound(
+        1,
+        static_cast<int>(
+            std::round(1.0 + (maximumSize - 1.0)
+                * std::pow(t, MaskBrushSliderGamma))),
+        maximumSize);
+}
+
+int maskBrushSliderFromSize(int size, int maximumSize)
+{
+    maximumSize = qMax(1, maximumSize);
+    size = qBound(1, size, maximumSize);
+    if (maximumSize == 1)
+        return 0;
+
+    const double t = std::pow(
+        (static_cast<double>(size) - 1.0) / (maximumSize - 1.0),
+        1.0 / MaskBrushSliderGamma);
+    return qBound(
+        0,
+        static_cast<int>(std::round(t * MaskBrushSliderMaximum)),
+        MaskBrushSliderMaximum);
+}
 
 QRect projectFileMarkAreaRect(const QRect &rowRect)
 {
@@ -1080,11 +1114,31 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::onCancelEditTriggered);
 
+    m_maskBrushSlider = new QSlider(Qt::Horizontal, this);
+    m_maskBrushSlider->setRange(0, MaskBrushSliderMaximum);
+    m_maskBrushSlider->setValue(maskBrushSliderFromSize(9, 200));
+    m_maskBrushSlider->setToolTip(
+        QStringLiteral(
+            "Mask brush size in raster pixels.\n"
+            "Use [ and ] in the viewer to adjust.\n"
+            "Shift+click draws a straight brush stroke.\n"
+            "%1+double click inverts a connected binary region.")
+            .arg(ShortcutText::primaryModifier()));
+    m_maskBrushSlider->setEnabled(false);
+    m_maskBrushSlider->setFixedWidth(96);
+    ui->toolBar->addWidget(m_maskBrushSlider);
+
     m_maskBrushSpin = new QSpinBox(this);
     m_maskBrushSpin->setRange(1, 200);
     m_maskBrushSpin->setValue(9);
     m_maskBrushSpin->setSuffix(" px");
-    m_maskBrushSpin->setToolTip("Mask brush size in raster pixels.");
+    m_maskBrushSpin->setToolTip(
+        QStringLiteral(
+            "Mask brush size in raster pixels.\n"
+            "Use [ and ] in the viewer to adjust.\n"
+            "Shift+click draws a straight brush stroke.\n"
+            "%1+double click inverts a connected binary region.")
+            .arg(ShortcutText::primaryModifier()));
     m_maskBrushSpin->setEnabled(false);
     m_maskBrushSpin->setMinimumWidth(
         m_maskBrushSpin->fontMetrics().horizontalAdvance(
@@ -1096,6 +1150,18 @@ MainWindow::MainWindow(QWidget *parent)
             [this](int value) {
                 if (ImageViewer *viewer = currentImageViewer())
                     viewer->setMaskBrushSize(value);
+            });
+    connect(m_maskBrushSlider,
+            &QSlider::valueChanged,
+            this,
+            [this](int sliderValue) {
+                ImageViewer *viewer = currentImageViewer();
+                if (!viewer || !m_maskBrushSpin)
+                    return;
+                const int size = maskBrushSizeFromSlider(
+                    sliderValue,
+                    viewer->maskBrushMaximum());
+                viewer->setMaskBrushSize(size);
             });
 
     connect(ui->actionSplitViewer,
@@ -3346,6 +3412,19 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                 const QSignalBlocker blocker(m_zoomPercentSpin);
                 m_zoomPercentSpin->setValue(percent);
             });
+    connect(viewer, &ImageViewer::maskBrushSizeChanged,
+            this, [this, viewer](int) {
+                if (viewer == currentImageViewer())
+                    updateMaskBrushControls(viewer);
+            });
+    connect(viewer, &ImageViewer::maskConnectedRegionInverted,
+            this, [this](int pixelCount) {
+                statusBar()->showMessage(
+                    QStringLiteral("Inverted %1 mask pixel%2")
+                        .arg(pixelCount)
+                        .arg(pixelCount == 1 ? "" : "s"),
+                    4000);
+            });
     connect(viewer->layerManager(), &LayerManager::layersChanged,
             this, &MainWindow::refreshReloadableArtifactWatchers);
     connect(viewer, &ImageViewer::activatedByClick, this, [this, viewer]() {
@@ -3765,6 +3844,8 @@ void MainWindow::closeCurrentProject()
     ui->actionCancelMaskEdit->setEnabled(false);
     if (m_maskBrushSpin)
         m_maskBrushSpin->setEnabled(false);
+    if (m_maskBrushSlider)
+        m_maskBrushSlider->setEnabled(false);
 
     m_activeViewer.clear();
 
@@ -4393,6 +4474,30 @@ void MainWindow::updateProjectExplorerStarredEmptyMessage()
     m_projectStarredEmptyLabel->setVisible(show);
 }
 
+void MainWindow::updateMaskBrushControls(ImageViewer *viewer)
+{
+    const bool editing = viewer
+        && viewer->maskEditEnabled()
+        && viewer->editingMaskLayer()
+        && viewer->editingMaskLayer()->binaryMaskEditMode();
+    const int maximum = viewer ? viewer->maskBrushMaximum() : 200;
+    const int value = viewer ? viewer->maskBrushSize() : 9;
+
+    if (m_maskBrushSpin) {
+        const QSignalBlocker blocker(m_maskBrushSpin);
+        m_maskBrushSpin->setRange(1, maximum);
+        m_maskBrushSpin->setValue(qBound(1, value, maximum));
+        m_maskBrushSpin->setEnabled(editing);
+    }
+
+    if (m_maskBrushSlider) {
+        const QSignalBlocker blocker(m_maskBrushSlider);
+        m_maskBrushSlider->setValue(
+            maskBrushSliderFromSize(qBound(1, value, maximum), maximum));
+        m_maskBrushSlider->setEnabled(editing);
+    }
+}
+
 void MainWindow::updateProjectActions()
 {
     const bool hasProject = m_project.isValid();
@@ -4834,12 +4939,7 @@ void MainWindow::updateMaskEditControls(ImageViewer *viewer)
     }
     ui->actionCancelMaskEdit->setEnabled(editing);
 
-    if (m_maskBrushSpin) {
-        const QSignalBlocker blocker(m_maskBrushSpin);
-        if (hasViewer)
-            m_maskBrushSpin->setValue(viewer->maskBrushSize());
-        m_maskBrushSpin->setEnabled(editing);
-    }
+    updateMaskBrushControls(viewer);
 }
 
 ImageLayer *MainWindow::createStyledImageLayer(const QString &path)
@@ -5588,8 +5688,10 @@ void MainWindow::createMaskTiff()
 
     if (segmentationCollections.isEmpty()) {
         QMessageBox::information(this, "Create mask",
-                                 "No segmentation collection is registered in this project.\n"
-                                 "Register a segmentation collection first using Project > Register collection...");
+                                 "No segmentation collection is registered in this project.\n\n"
+                                 "A segmentation collection is a folder registered as a segmentation collection.\n\n"
+                                 "To register a folder as a segmentation collection, use Project > Register collection...\n\n"
+                                 "If you need an empty folder, create one in Project Explorer with the New Folder button.");
         return;
     }
 
@@ -5750,6 +5852,47 @@ void MainWindow::createMaskTiff()
         const auto reply = QMessageBox::question(this, "Add layer",
                                                  "Add the new mask file as a layer to the current viewer?");
         if (reply == QMessageBox::Yes) {
+            const CollectionStyleData existingStyle =
+                CollectionStyleFile::load(selectedCollection.dirPath);
+            if (existingStyle.kind != CollectionStyleData::Kind::Image) {
+                const auto styleReply = QMessageBox::question(
+                    this,
+                    "Mask style",
+                    "This mask collection does not have a saved style.\n\n"
+                    "Create a default mask style for this collection?",
+                    QMessageBox::Yes | QMessageBox::No,
+                    QMessageBox::Yes);
+                if (styleReply == QMessageBox::Yes) {
+                    CollectionStyleData maskStyle;
+                    maskStyle.kind = CollectionStyleData::Kind::Image;
+                    maskStyle.imageStyle.opacity = 0.5;
+                    maskStyle.imageStyle.blendMode = ImageBlendMode::Multiply;
+                    maskStyle.imageStyle.render.mode =
+                        RasterRenderMode::SingleBand;
+                    maskStyle.imageStyle.render.colorRamp =
+                        ColorRamp::RedBlue;
+                    maskStyle.imageStyle.render.stretchMode =
+                        StretchMode::None;
+                    maskStyle.imageStyle.render.tailTrim = false;
+                    maskStyle.imageStyle.render.manualRangeEnabled = false;
+
+                    QString styleError;
+                    if (!CollectionStyleFile::save(
+                            selectedCollection.dirPath,
+                            maskStyle,
+                            &styleError)) {
+                        QMessageBox::warning(
+                            this,
+                            "Mask style",
+                            styleError.isEmpty()
+                                ? "The default mask style could not be saved."
+                                : styleError);
+                    } else {
+                        m_projectFileSystemModel->refreshDirectory(
+                            selectedCollection.dirPath);
+                    }
+                }
+            }
             if (ImageLayer *layer = createStyledImageLayer(savePath))
                 viewer->layerManager()->addLayer(layer);
         }

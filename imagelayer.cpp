@@ -32,6 +32,7 @@
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
 #include <QTimer>
+#include <QVector>
 #include <QWidget>
 #include <QtGlobal>
 
@@ -267,7 +268,10 @@ bool ImageLayer::paintBinaryMaskAtScenePos(const QPointF &scenePos,
         return false;
     }
 
-    brushSize = qBound(1, brushSize, 200);
+    brushSize = qBound(
+        1,
+        brushSize,
+        qMax(1, qMax(m_rasterData.width(), m_rasterData.height())));
     const double radius = qMax(0.5, brushSize / 2.0);
     const double radiusSquared = radius * radius;
     const int pixelRadius = static_cast<int>(std::ceil(radius));
@@ -303,6 +307,111 @@ bool ImageLayer::paintBinaryMaskAtScenePos(const QPointF &scenePos,
         emit dataChanged();
     }
     return changed;
+}
+
+bool ImageLayer::invertConnectedBinaryMaskRegionAtScenePos(
+    const QPointF &scenePos,
+    int *changedPixelCount,
+    QString *errorMessage)
+{
+    if (changedPixelCount)
+        *changedPixelCount = 0;
+    if (!m_binaryMaskEditMode || !isEditableBinaryMask() || !m_pixmapItem) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No editable binary mask is active.");
+        return false;
+    }
+
+    const QPointF itemPos = m_pixmapItem->mapFromScene(scenePos);
+    const int seedCol = static_cast<int>(std::floor(itemPos.x()));
+    const int seedRow = static_cast<int>(std::floor(itemPos.y()));
+    const int width = m_rasterData.width();
+    const int height = m_rasterData.height();
+    if (seedRow < 0 || seedRow >= height
+        || seedCol < 0 || seedCol >= width) {
+        return false;
+    }
+
+    quint8 *pixels = reinterpret_cast<quint8 *>(m_rasterData.rawData().data());
+    if (!pixels) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("The mask pixels could not be edited.");
+        return false;
+    }
+
+    bool hasOne = false;
+    bool has255 = false;
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(width) * height;
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        const quint8 value = pixels[offset];
+        if (value == 1) {
+            hasOne = true;
+        } else if (value == 255) {
+            has255 = true;
+        } else if (value != 0) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The active mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+        if (hasOne && has255) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The active mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+    }
+
+    const int foregroundValue = has255 ? 255 : 1;
+    const int seedIndex = seedRow * width + seedCol;
+    const quint8 seedValue = pixels[seedIndex];
+    const quint8 replacementValue = seedValue == 0
+        ? static_cast<quint8>(foregroundValue)
+        : static_cast<quint8>(0);
+    if (seedValue == replacementValue)
+        return false;
+
+    QVector<int> stack;
+    stack.reserve(1024);
+    stack.append(seedIndex);
+    pixels[seedIndex] = replacementValue;
+    int changed = 1;
+
+    while (!stack.isEmpty()) {
+        const int index = stack.takeLast();
+        const int row = index / width;
+        const int col = index - row * width;
+
+        auto tryNeighbor = [&](int neighborIndex) {
+            if (pixels[neighborIndex] != seedValue)
+                return;
+            pixels[neighborIndex] = replacementValue;
+            stack.append(neighborIndex);
+            ++changed;
+        };
+
+        if (row > 0)
+            tryNeighbor(index - width);
+        if (row + 1 < height)
+            tryNeighbor(index + width);
+        if (col > 0)
+            tryNeighbor(index - 1);
+        if (col + 1 < width)
+            tryNeighbor(index + 1);
+    }
+
+    if (changedPixelCount)
+        *changedPixelCount = changed;
+    m_renderer.clearCache();
+    ++m_dataRevision;
+    refreshRenderedImageNow();
+    emit dataChanged();
+    return true;
 }
 
 bool ImageLayer::saveBinaryMask(QString *errorMessage)

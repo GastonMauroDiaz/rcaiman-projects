@@ -41,6 +41,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMutexLocker>
+#include <QPainter>
 #include <QRubberBand>
 #include <QScrollBar>
 #include <QSplitter>
@@ -303,7 +304,10 @@ bool ImageViewer::setMaskEditEnabled(bool enabled, QString *errorMessage)
         m_maskEditEnabled = true;
         m_maskPainting = false;
         m_hasLastMaskPaintScenePos = false;
+        m_hasMaskLineAnchorScenePos = false;
+        setMaskBrushSize(m_maskBrushSize);
         updateDragMode();
+        viewport()->update();
         return true;
     }
 
@@ -318,9 +322,12 @@ bool ImageViewer::setMaskEditEnabled(bool enabled, QString *errorMessage)
     m_maskPainting = false;
     m_maskPaintingErase = false;
     m_hasLastMaskPaintScenePos = false;
+    m_hasMaskLineAnchorScenePos = false;
+    m_maskBrushPreviewVisible = false;
     m_maskEditEnabled = false;
     m_editingMaskLayer.clear();
     updateDragMode();
+    viewport()->update();
     return true;
 }
 
@@ -340,18 +347,34 @@ bool ImageViewer::cancelMaskEdit(QString *errorMessage)
     m_maskPainting = false;
     m_maskPaintingErase = false;
     m_hasLastMaskPaintScenePos = false;
+    m_hasMaskLineAnchorScenePos = false;
+    m_maskBrushPreviewVisible = false;
     if (!m_editingMaskLayer->cancelBinaryMaskEdit(errorMessage))
         return false;
 
     m_maskEditEnabled = false;
     m_editingMaskLayer.clear();
     updateDragMode();
+    viewport()->update();
     return true;
 }
 
 void ImageViewer::setMaskBrushSize(int size)
 {
-    m_maskBrushSize = qBound(1, size, 200);
+    const int bounded = qBound(1, size, maskBrushMaximum());
+    if (m_maskBrushSize == bounded)
+        return;
+    m_maskBrushSize = bounded;
+    viewport()->update();
+    emit maskBrushSizeChanged(m_maskBrushSize);
+}
+
+int ImageViewer::maskBrushMaximum() const
+{
+    if (!m_editingMaskLayer || m_editingMaskLayer->rasterData().isNull())
+        return 200;
+    const RasterData &data = m_editingMaskLayer->rasterData();
+    return qMax(1, qMax(data.width(), data.height()));
 }
 
 void ImageViewer::keyPressEvent(QKeyEvent *event)
@@ -362,12 +385,16 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
         return;
     if (handleResetZoomKeyEvent(event))
         return;
+    if (handleMaskBrushSizeKeyEvent(event))
+        return;
 
     QGraphicsView::keyPressEvent(event);
 }
 
 void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 {
+    if (handleMaskBrushSizeKeyEvent(event))
+        return;
     if (handleSpacePanKeyEvent(event))
         return;
     if (handleTemporaryZoomKeyEvent(event))
@@ -381,6 +408,48 @@ void ImageViewer::resizeEvent(QResizeEvent *event)
     QGraphicsView::resizeEvent(event);
     if (m_autoFitImage)
         fitImageToView();
+}
+
+void ImageViewer::leaveEvent(QEvent *event)
+{
+    m_maskBrushPreviewVisible = false;
+    viewport()->update();
+    QGraphicsView::leaveEvent(event);
+}
+
+void ImageViewer::drawForeground(QPainter *painter, const QRectF &rect)
+{
+    QGraphicsView::drawForeground(painter, rect);
+
+    if (!m_maskBrushPreviewVisible
+        || !m_maskEditEnabled
+        || !m_editingMaskLayer
+        || panInteractionActive()
+        || zoomInteractionActive()) {
+        return;
+    }
+
+    const QPointF center = mapToScene(m_lastMousePos);
+    const double radius = qMax(0.5, m_maskBrushSize / 2.0);
+    const QRectF brushRect(
+        center.x() - radius,
+        center.y() - radius,
+        radius * 2.0,
+        radius * 2.0);
+
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    QPen shadowPen(QColor(0, 0, 0, 180), 3.0);
+    shadowPen.setCosmetic(true);
+    painter->setPen(shadowPen);
+    painter->setBrush(Qt::NoBrush);
+    painter->drawEllipse(brushRect);
+
+    QPen lightPen(QColor(255, 255, 255, 230), 1.5);
+    lightPen.setCosmetic(true);
+    painter->setPen(lightPen);
+    painter->drawEllipse(brushRect);
+    painter->restore();
 }
 
 void ImageViewer::wheelEvent(QWheelEvent *event)
@@ -488,6 +557,52 @@ bool ImageViewer::handleResetZoomKeyEvent(QEvent *event)
     return true;
 }
 
+bool ImageViewer::handleMaskBrushSizeKeyEvent(QKeyEvent *event)
+{
+    if (!m_maskEditEnabled
+        || (event->type() != QEvent::KeyPress
+            && event->type() != QEvent::KeyRelease)) {
+        return false;
+    }
+
+    int direction = 0;
+    if (event->text() == "["
+        || event->key() == Qt::Key_BracketLeft) {
+        direction = -1;
+    } else if (event->text() == "]"
+               || event->key() == Qt::Key_BracketRight) {
+        direction = 1;
+    }
+    if (direction == 0)
+        return false;
+
+    if (event->type() == QEvent::KeyRelease) {
+        if (m_maskBrushRepeatDirection == direction) {
+            m_maskBrushRepeatDirection = 0;
+            m_maskBrushRepeatCount = 0;
+        }
+        event->accept();
+        return true;
+    }
+
+    if (!event->isAutoRepeat()
+        || m_maskBrushRepeatDirection != direction) {
+        m_maskBrushRepeatDirection = direction;
+        m_maskBrushRepeatCount = 0;
+    } else {
+        ++m_maskBrushRepeatCount;
+    }
+
+    const int baseStep =
+        qMax(1, static_cast<int>(std::round(m_maskBrushSize * 0.1)));
+    const int acceleration =
+        qMin(12, 1 + m_maskBrushRepeatCount / 4);
+    const int step = baseStep * acceleration;
+    setMaskBrushSize(m_maskBrushSize + direction * step);
+    event->accept();
+    return true;
+}
+
 void ImageViewer::setPointItemsInteractionBlocked(bool blocked)
 {
     if (!m_scene)
@@ -524,6 +639,18 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         && !panInteractionActive()
         && !zoomInteractionActive()
         && event->button() == Qt::LeftButton) {
+        if (event->modifiers().testFlag(Qt::ControlModifier)) {
+            event->accept();
+            return;
+        }
+        if (event->modifiers().testFlag(Qt::ShiftModifier)) {
+            const bool erase =
+                event->modifiers().testFlag(Qt::AltModifier);
+            paintMaskLineToViewportPos(event->pos(), erase);
+            finishMaskStroke();
+            event->accept();
+            return;
+        }
         m_maskPainting = true;
         m_maskPaintingErase =
             event->modifiers().testFlag(Qt::AltModifier);
@@ -535,6 +662,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
 
     if (!panInteractionActive()
         && !zoomInteractionActive()
+        && !m_maskEditEnabled
         && event->button() == Qt::LeftButton
         && event->modifiers().testFlag(Qt::ControlModifier)) {
         QGraphicsItem *itemUnder = itemAt(event->pos());
@@ -559,6 +687,47 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
     }
 
     QGraphicsView::mousePressEvent(event);
+}
+
+void ImageViewer::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    emit activatedByClick();
+    m_lastMousePos = event->pos();
+
+    if (m_maskEditEnabled
+        && m_editingMaskLayer
+        && !panInteractionActive()
+        && !zoomInteractionActive()
+        && event->button() == Qt::LeftButton
+        && event->modifiers().testFlag(Qt::ControlModifier)) {
+        int changedPixels = 0;
+        QString errorMessage;
+        if (!m_editingMaskLayer->invertConnectedBinaryMaskRegionAtScenePos(
+                mapToScene(event->pos()), &changedPixels, &errorMessage)) {
+            if (!errorMessage.isEmpty()) {
+                QMessageBox::warning(
+                    this, "Edit mask", errorMessage);
+            }
+            event->accept();
+            return;
+        }
+
+        if (!m_editingMaskLayer->saveBinaryMask(&errorMessage)) {
+            QMessageBox::warning(
+                this, "Edit mask",
+                errorMessage.isEmpty()
+                    ? QStringLiteral("Could not save mask changes.")
+                    : errorMessage);
+            event->accept();
+            return;
+        }
+
+        emit maskConnectedRegionInverted(changedPixels);
+        event->accept();
+        return;
+    }
+
+    QGraphicsView::mouseDoubleClickEvent(event);
 }
 
 void ImageViewer::applyDragZoom(const QPoint &pos)
@@ -648,12 +817,36 @@ bool ImageViewer::paintMaskStrokeToViewportPos(const QPoint &pos, bool erase)
     return changed;
 }
 
+bool ImageViewer::paintMaskLineToViewportPos(const QPoint &pos, bool erase)
+{
+    if (!m_maskEditEnabled || !m_editingMaskLayer)
+        return false;
+
+    const QPointF scenePos = mapToScene(pos);
+    if (!m_hasMaskLineAnchorScenePos) {
+        m_maskLineAnchorScenePos = scenePos;
+        m_hasMaskLineAnchorScenePos = true;
+        return paintMaskAtViewportPos(pos, erase);
+    }
+
+    m_lastMaskPaintScenePos = m_maskLineAnchorScenePos;
+    m_hasLastMaskPaintScenePos = true;
+    const bool changed = paintMaskStrokeToViewportPos(pos, erase);
+    m_maskLineAnchorScenePos = scenePos;
+    m_hasMaskLineAnchorScenePos = true;
+    return changed;
+}
+
 void ImageViewer::finishMaskStroke()
 {
-    if (!m_maskPainting)
+    if (!m_maskPainting && !m_hasLastMaskPaintScenePos)
         return;
 
     m_maskPainting = false;
+    if (m_hasLastMaskPaintScenePos) {
+        m_maskLineAnchorScenePos = m_lastMaskPaintScenePos;
+        m_hasMaskLineAnchorScenePos = true;
+    }
     m_hasLastMaskPaintScenePos = false;
     if (!m_editingMaskLayer)
         return;
@@ -671,6 +864,14 @@ void ImageViewer::finishMaskStroke()
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
+    const bool brushPreviewWasVisible = m_maskBrushPreviewVisible;
+    m_maskBrushPreviewVisible =
+        m_maskEditEnabled
+        && m_editingMaskLayer
+        && viewport()->rect().contains(event->pos());
+    if (m_maskBrushPreviewVisible || brushPreviewWasVisible)
+        viewport()->update();
+
     if (m_pointBoxSelecting) {
         updatePointBoxSelection(event->pos());
         event->accept();
