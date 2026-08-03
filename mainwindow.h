@@ -108,6 +108,8 @@ private slots:
     void onSyncSplitZoomToggled(bool checked);
     void onActiveViewerChanged(ImageViewer *viewer);
     void createPointsCsv();
+    void createPointGrid();
+    void selectPointsByMask();
     void createMaskTiff();
     void buildMetadataRules();
     void validateImageMetadata();

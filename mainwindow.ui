@@ -55,6 +55,8 @@
      <string>Point</string>
     </property>
     <addaction name="actionCreatePoints"/>
+    <addaction name="actionCreatePointGrid"/>
+    <addaction name="actionSelectPointsByMask"/>
     <addaction name="actionEditPoints"/>
     <addaction name="actionCancelEdit"/>
    </widget>
@@ -364,6 +366,16 @@ Hold Z for temporary zoom from any interaction mode.</string>
   <action name="actionCreatePoints">
    <property name="text">
     <string>Create empty point layer...</string>
+   </property>
+  </action>
+  <action name="actionCreatePointGrid">
+   <property name="text">
+    <string>Create grid...</string>
+   </property>
+  </action>
+  <action name="actionSelectPointsByMask">
+   <property name="text">
+    <string>Select by mask...</string>
    </property>
   </action>
   <action name="actionCreateMask">

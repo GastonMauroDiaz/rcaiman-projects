@@ -88,6 +88,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPoint>
 #include <QPixmap>
 #include <QProcess>
 #include <QSizePolicy>
@@ -116,6 +117,146 @@ enum class ProjectExplorerSortMode {
     Name = 0,
     Type = 1
 };
+
+struct MaskCandidate {
+    Collection collection;
+    QString path;
+    QString label;
+};
+
+QString normalizedProjectReference(const QString &projectRoot,
+                                   const QString &reference)
+{
+    if (projectRoot.isEmpty() || reference.trimmed().isEmpty())
+        return {};
+    QString resolved = Project::resolveReference(projectRoot, reference);
+    if (resolved.isEmpty())
+        return {};
+    resolved = QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+#ifdef Q_OS_WIN
+    resolved = resolved.toCaseFolded();
+#endif
+    return resolved;
+}
+
+QVector<QString> tiffFilesWithBaseName(const QString &directoryPath,
+                                       const QString &baseName)
+{
+    QVector<QString> matches;
+    const QDir directory(directoryPath);
+    const QFileInfoList files =
+        directory.entryInfoList(QDir::Files | QDir::NoSymLinks);
+    for (const QFileInfo &file : files) {
+        const QString suffix = file.suffix().toLower();
+        if (suffix != "tif" && suffix != "tiff")
+            continue;
+        if (file.completeBaseName().compare(
+                baseName, Qt::CaseInsensitive) == 0) {
+            matches.append(file.absoluteFilePath());
+        }
+    }
+    std::sort(matches.begin(), matches.end(),
+              [](const QString &left, const QString &right) {
+                  return QString::compare(
+                      left, right, Qt::CaseInsensitive) < 0;
+              });
+    return matches;
+}
+
+QVector<MaskCandidate> compatibleMaskCandidates(
+    const QString &projectRoot,
+    const Collection &pointCollection,
+    const QVector<Collection> &collections,
+    const QString &baseName = {})
+{
+    QVector<MaskCandidate> candidates;
+    const QString pointParent =
+        normalizedProjectReference(projectRoot, pointCollection.parent);
+    if (pointParent.isEmpty())
+        return candidates;
+
+    for (const Collection &collection : collections) {
+        if (collection.collectionClass != "segmentation_collection")
+            continue;
+
+        const QString maskParent =
+            normalizedProjectReference(projectRoot, collection.parent);
+        if (maskParent.isEmpty() || maskParent != pointParent)
+            continue;
+
+        QVector<QString> files;
+        if (baseName.isEmpty()) {
+            const QFileInfoList entries = QDir(collection.dirPath).entryInfoList(
+                {"*.tif", "*.tiff", "*.TIF", "*.TIFF"},
+                QDir::Files | QDir::NoSymLinks,
+                QDir::Name);
+            for (const QFileInfo &file : entries)
+                files.append(file.absoluteFilePath());
+        } else {
+            files = tiffFilesWithBaseName(collection.dirPath, baseName);
+        }
+
+        for (const QString &path : files) {
+            candidates.append(MaskCandidate{
+                collection,
+                path,
+                QStringLiteral("%1/%2")
+                    .arg(collection.dirName, QFileInfo(path).fileName())
+            });
+        }
+    }
+    return candidates;
+}
+
+bool validateBinaryMask(const RasterData &mask, QString *errorMessage = nullptr)
+{
+    if (mask.isNull()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("The selected mask is empty.");
+        return false;
+    }
+    if (mask.bands() != 1
+        || mask.dataType() != RasterData::DataType::UInt8) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "The selected mask must be a single-band UInt8 TIFF.");
+        return false;
+    }
+
+    const quint8 *maskValues = mask.bandPointer<quint8>(0);
+    if (!maskValues) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "The selected mask could not be inspected.");
+        return false;
+    }
+
+    QSet<int> uniqueValues;
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(mask.width()) * mask.height();
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        const int value = maskValues[offset];
+        if (value != 0 && value != 1 && value != 255) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The selected mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+        uniqueValues.insert(value);
+        if (uniqueValues.size() > 2
+            || (uniqueValues.contains(1) && uniqueValues.contains(255))) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The selected mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+    }
+    return true;
+}
 
 class ProjectExplorerSortProxyModel : public QSortFilterProxyModel
 {
@@ -859,6 +1000,14 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::createPointsCsv);
+    connect(ui->actionCreatePointGrid,
+            &QAction::triggered,
+            this,
+            &MainWindow::createPointGrid);
+    connect(ui->actionSelectPointsByMask,
+            &QAction::triggered,
+            this,
+            &MainWindow::selectPointsByMask);
 
     connect(ui->actionCreateMask,
             &QAction::triggered,
@@ -4263,6 +4412,8 @@ void MainWindow::updateProjectActions()
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
+    ui->actionCreatePointGrid->setEnabled(hasProject);
+    ui->actionSelectPointsByMask->setEnabled(hasProject);
     ui->actionCreateMask->setEnabled(hasProject);
     ui->actionBuildMetadataRules->setEnabled(hasProject);
     ui->actionValidateImageMetadata->setEnabled(hasProject);
@@ -5025,6 +5176,399 @@ void MainWindow::createPointsCsv()
                 viewer->layerManager()->addLayer(layer);
         }
     }
+}
+
+void MainWindow::createPointGrid()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Create grid",
+                                 "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    QVector<Collection> pointCollections;
+    for (const Collection &collection : collections) {
+        if (collection.collectionClass == "point_collection"
+            && !normalizedProjectReference(
+                    m_project.rootPath(), collection.parent).isEmpty()) {
+            pointCollections.append(collection);
+        }
+    }
+
+    if (pointCollections.isEmpty()) {
+        QMessageBox::information(
+            this, "Create grid",
+            "No point collection with a valid parent is registered in this project.\n\n"
+            "A point collection is a folder registered as a point collection.\n\n"
+            "To register a folder as a point collection, use Project > Register collection...");
+        return;
+    }
+
+    Collection selectedPointCollection = collectionForPath(selectedProjectPath());
+    if (selectedPointCollection.collectionClass != "point_collection"
+        || normalizedProjectReference(
+            m_project.rootPath(), selectedPointCollection.parent).isEmpty()) {
+        selectedPointCollection = {};
+    }
+
+    if (selectedPointCollection.collectionClass != "point_collection"
+        && pointCollections.size() == 1) {
+        selectedPointCollection = pointCollections.first();
+    } else if (selectedPointCollection.collectionClass != "point_collection") {
+        QStringList collectionNames;
+        for (const Collection &collection : pointCollections)
+            collectionNames.append(collection.dirName);
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(
+            this, "Create grid", "Point collection:",
+            collectionNames, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        for (const Collection &collection : pointCollections) {
+            if (collection.dirName == choice) {
+                selectedPointCollection = collection;
+                break;
+            }
+        }
+    }
+
+    QVector<MaskCandidate> masks = compatibleMaskCandidates(
+        m_project.rootPath(), selectedPointCollection, collections);
+    if (masks.isEmpty()) {
+        QMessageBox::information(
+            this, "Create grid",
+            "No compatible mask was found.\n\n"
+            "A compatible mask must be a TIFF in a segmentation collection linked "
+            "to the same parent image collection as the point collection.");
+        return;
+    }
+
+    int selectedMaskIndex = 0;
+    if (masks.size() > 1) {
+        QStringList labels;
+        labels.reserve(masks.size());
+        for (const MaskCandidate &mask : std::as_const(masks))
+            labels.append(mask.label);
+
+        bool ok = false;
+        const QString selectedLabel = QInputDialog::getItem(
+            this, "Create grid", "Mask:",
+            labels, 0, false, &ok);
+        if (!ok || selectedLabel.isEmpty())
+            return;
+        selectedMaskIndex = labels.indexOf(selectedLabel);
+        if (selectedMaskIndex < 0)
+            return;
+    }
+
+    const MaskCandidate maskCandidate = masks.at(selectedMaskIndex);
+    bool strideOk = false;
+    const int stride = QInputDialog::getInt(
+        this, "Create grid", "Stride:",
+        1, 1, 10000, 1, &strideOk);
+    if (!strideOk || stride < 1)
+        return;
+
+    QString readError;
+    const RasterData mask = TiffReader::load(maskCandidate.path, &readError);
+    if (mask.isNull()) {
+        QMessageBox::warning(
+            this, "Create grid",
+            QStringLiteral("Could not read mask TIFF:\n%1")
+                .arg(readError));
+        return;
+    }
+
+    QString maskError;
+    if (!validateBinaryMask(mask, &maskError)) {
+        QMessageBox::warning(this, "Create grid", maskError);
+        return;
+    }
+
+    const quint8 *maskValues = mask.bandPointer<quint8>(0);
+    QVector<QPoint> points;
+    for (int row = 0; row < mask.height(); row += stride) {
+        for (int col = 0; col < mask.width(); col += stride) {
+            const int value =
+                maskValues[static_cast<qsizetype>(row) * mask.width() + col];
+            if (value == 1 || value == 255)
+                points.append(QPoint(col, row));
+        }
+    }
+
+    if (points.size() > 100000) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Create grid",
+            QStringLiteral("This will create %1 points. Continue?")
+                .arg(points.size()),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    const QString defaultName =
+        QFileInfo(maskCandidate.path).completeBaseName() + ".csv";
+    QString savePath = QFileDialog::getSaveFileName(
+        this,
+        "Create grid CSV",
+        QDir(selectedPointCollection.dirPath).filePath(defaultName),
+        "CSV files (*.csv)");
+    if (savePath.isEmpty())
+        return;
+    if (!savePath.endsWith(".csv", Qt::CaseInsensitive))
+        savePath += ".csv";
+
+    if (QFileInfo::exists(savePath)) {
+        const auto answer = QMessageBox::question(
+            this,
+            "Create grid",
+            QStringLiteral("Replace existing file \"%1\"?")
+                .arg(QFileInfo(savePath).fileName()),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    PointCollection collection =
+        PointCollection::createEmpty({"row", "col"});
+    for (const QPoint &point : std::as_const(points))
+        collection.addPoint(point.y() + 0.5, point.x() + 0.5);
+
+    QString saveError;
+    if (!collection.save(savePath, &saveError)) {
+        QMessageBox::warning(this, "Create grid", saveError);
+        return;
+    }
+
+    statusBar()->showMessage(
+        QStringLiteral("Created grid points file: %1 (%2 points)")
+            .arg(QFileInfo(savePath).fileName())
+            .arg(points.size()),
+        5000);
+    m_projectFileSystemModel->refreshDirectory(
+        QFileInfo(savePath).absolutePath());
+
+    ImageViewer *viewer = currentImageViewer();
+    if (viewer && viewer->layerManager()) {
+        const auto reply = QMessageBox::question(
+            this,
+            "Add layer",
+            "Add the new grid points file as a layer to the current viewer?");
+        if (reply == QMessageBox::Yes) {
+            if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
+                viewer->layerManager()->addLayer(layer);
+        }
+    }
+}
+
+void MainWindow::selectPointsByMask()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(
+            this, "Select by mask",
+            "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    ImageViewer *viewer = currentImageViewer();
+    if (!viewer) {
+        QMessageBox::information(
+            this, "Select by mask",
+            "Open a TIFF viewer first.\n\n"
+            "Then add or load a registered point CSV layer and select it in the Layers panel.");
+        return;
+    }
+
+    LayerManager *manager = viewer ? viewer->layerManager() : nullptr;
+    if (!manager) {
+        QMessageBox::information(
+            this, "Select by mask",
+            "The active viewer does not have a layer manager.");
+        return;
+    }
+
+    bool hasPointLayer = false;
+    for (int i = 0; i < manager->layerCount(); ++i) {
+        if (qobject_cast<PointLayer*>(manager->layerAt(i))) {
+            hasPointLayer = true;
+            break;
+        }
+    }
+
+    auto *pointLayer =
+        qobject_cast<PointLayer*>(manager->activeLayer());
+    if (!pointLayer) {
+        const QString message = hasPointLayer
+            ? QStringLiteral(
+                "Select a point layer in the Layers panel first.\n\n"
+                "Project Explorer selection is not used by this command.")
+            : QStringLiteral(
+                "No point layer is open in the active viewer.\n\n"
+                "Open a TIFF, then add or load a registered point CSV layer before using Select by mask.");
+        QMessageBox::information(
+            this, "Select by mask",
+            message);
+        return;
+    }
+
+    const Collection pointCollection =
+        collectionForPath(pointLayer->sourcePath());
+    if (pointCollection.collectionClass != "point_collection") {
+        QMessageBox::information(
+            this, "Select by mask",
+            "Select by mask requires a point layer from a registered point collection.");
+        return;
+    }
+
+    const QString pointParent =
+        normalizedProjectReference(m_project.rootPath(), pointCollection.parent);
+    if (pointParent.isEmpty()) {
+        QMessageBox::information(
+            this, "Select by mask",
+            "The point collection does not have a valid parent image collection.");
+        return;
+    }
+
+    const QString pointBaseName =
+        QFileInfo(pointLayer->sourcePath()).completeBaseName();
+    QVector<MaskCandidate> candidates;
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    for (const Collection &collection : collections) {
+        if (collection.collectionClass != "segmentation_collection")
+            continue;
+
+        const QString maskParent =
+            normalizedProjectReference(m_project.rootPath(), collection.parent);
+        if (maskParent.isEmpty() || maskParent != pointParent)
+            continue;
+
+        const QVector<QString> files =
+            tiffFilesWithBaseName(collection.dirPath, pointBaseName);
+        for (const QString &path : files) {
+            candidates.append(MaskCandidate{
+                collection,
+                path,
+                QStringLiteral("%1/%2")
+                    .arg(collection.dirName, QFileInfo(path).fileName())
+            });
+        }
+    }
+
+    if (candidates.isEmpty()) {
+        QMessageBox::information(
+            this, "Select by mask",
+            QStringLiteral(
+                "No compatible mask was found for %1.\n\n"
+                "A compatible mask must be a TIFF with the same basename in a "
+                "segmentation collection linked to the same parent image collection "
+                "as the point collection.")
+                .arg(QFileInfo(pointLayer->sourcePath()).fileName()));
+        return;
+    }
+
+    int selectedCandidate = 0;
+    if (candidates.size() > 1) {
+        QStringList labels;
+        labels.reserve(candidates.size());
+        for (const MaskCandidate &candidate : std::as_const(candidates))
+            labels.append(candidate.label);
+
+        bool ok = false;
+        const QString selectedLabel = QInputDialog::getItem(
+            this,
+            "Select by mask",
+            "Mask:",
+            labels,
+            0,
+            false,
+            &ok);
+        if (!ok)
+            return;
+        selectedCandidate = labels.indexOf(selectedLabel);
+        if (selectedCandidate < 0)
+            return;
+    }
+
+    const MaskCandidate candidate = candidates.at(selectedCandidate);
+    QString errorMessage;
+    const RasterData mask = TiffReader::load(candidate.path, &errorMessage);
+    if (mask.isNull()) {
+        QMessageBox::warning(
+            this, "Select by mask",
+            QStringLiteral("Could not read mask TIFF:\n%1")
+                .arg(errorMessage));
+        return;
+    }
+    if (mask.bands() != 1
+        || mask.dataType() != RasterData::DataType::UInt8) {
+        QMessageBox::warning(
+            this, "Select by mask",
+            "The selected mask must be a single-band UInt8 TIFF.");
+        return;
+    }
+
+    const quint8 *maskValues = mask.bandPointer<quint8>(0);
+    if (!maskValues) {
+        QMessageBox::warning(
+            this, "Select by mask",
+            "The selected mask could not be inspected.");
+        return;
+    }
+
+    QSet<int> uniqueValues;
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(mask.width()) * mask.height();
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        const int value = maskValues[offset];
+        if (value != 0 && value != 1 && value != 255) {
+            QMessageBox::warning(
+                this, "Select by mask",
+                "The selected mask is not binary.\n\n"
+                "Binary masks must contain only 0/1 or 0/255 values.");
+            return;
+        }
+        uniqueValues.insert(value);
+        if (uniqueValues.size() > 2
+            || (uniqueValues.contains(1) && uniqueValues.contains(255))) {
+            QMessageBox::warning(
+                this, "Select by mask",
+                "The selected mask is not binary.\n\n"
+                "Binary masks must contain only 0/1 or 0/255 values.");
+            return;
+        }
+    }
+
+    QSet<int> selectedIndices;
+    const QVector<PointRecord> &points = pointLayer->collection().points();
+    for (int index = 0; index < points.size(); ++index) {
+        const PointRecord &point = points.at(index);
+        const int row = static_cast<int>(std::llround(point.row));
+        const int col = static_cast<int>(std::llround(point.col));
+        if (row < 0 || row >= mask.height()
+            || col < 0 || col >= mask.width()) {
+            continue;
+        }
+        const int value =
+            maskValues[static_cast<qsizetype>(row) * mask.width() + col];
+        if (value == 1 || value == 255)
+            selectedIndices.insert(index);
+    }
+
+    pointLayer->setSelectedPointIndices(
+        selectedIndices,
+        selectedIndices.isEmpty() ? -1 : *selectedIndices.constBegin());
+    statusBar()->showMessage(
+        QStringLiteral("Selected %1 point%2 using mask %3")
+            .arg(selectedIndices.size())
+            .arg(selectedIndices.size() == 1 ? "" : "s")
+            .arg(QFileInfo(candidate.path).fileName()),
+        4000);
 }
 
 void MainWindow::createMaskTiff()
