@@ -55,6 +55,7 @@
 #include <QAction>
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialog>
@@ -134,7 +135,47 @@ public:
         invalidate();
     }
 
+    void setStarredOnly(bool enabled)
+    {
+        if (m_starredOnly == enabled)
+            return;
+        m_starredOnly = enabled;
+        invalidate();
+    }
+
+    void setProjectRootPath(const QString &path)
+    {
+        m_projectRootPath = normalizedPath(path);
+        invalidate();
+    }
+
 protected:
+    bool filterAcceptsRow(int sourceRow,
+                          const QModelIndex &sourceParent) const override
+    {
+        if (!m_starredOnly)
+            return true;
+
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model)
+            return QSortFilterProxyModel::filterAcceptsRow(
+                sourceRow, sourceParent);
+
+        const QModelIndex index = sourceModel()->index(
+            sourceRow, 0, sourceParent);
+        if (!index.isValid())
+            return false;
+
+        const QFileInfo info = model->fileInfo(index);
+        if (isProjectRootOrAncestor(info.absoluteFilePath())) {
+            return true;
+        }
+
+        return model->isMarkedOrInherited(info)
+            || model->hasMarkedDescendant(info);
+    }
+
     bool lessThan(const QModelIndex &left,
                   const QModelIndex &right) const override
     {
@@ -161,7 +202,45 @@ protected:
     }
 
 private:
+    static QString normalizedPath(const QString &path)
+    {
+        if (path.isEmpty())
+            return {};
+        QString normalized = QDir::cleanPath(
+            QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
+#ifdef Q_OS_WIN
+        normalized = normalized.toCaseFolded();
+#endif
+        return normalized;
+    }
+
+    bool isProjectRootOrAncestor(const QString &path) const
+    {
+        if (m_projectRootPath.isEmpty())
+            return false;
+
+        const QString candidate = normalizedPath(path);
+        if (candidate.isEmpty())
+            return false;
+        if (candidate == m_projectRootPath)
+            return true;
+
+        QString ancestor = m_projectRootPath;
+        while (!ancestor.isEmpty()) {
+            const QString parent = QFileInfo(ancestor).absoluteDir().absolutePath();
+            const QString normalizedParent = normalizedPath(parent);
+            if (normalizedParent == ancestor)
+                break;
+            ancestor = normalizedParent;
+            if (candidate == ancestor)
+                return true;
+        }
+        return false;
+    }
+
     ProjectExplorerSortMode m_sortMode = ProjectExplorerSortMode::Name;
+    bool m_starredOnly = false;
+    QString m_projectRootPath;
 };
 
 constexpr int ProjectFileMarkAreaWidth = 24;
@@ -208,16 +287,24 @@ QPainterPath starPath(const QRectF &rect)
 
 void drawProjectFileMark(QPainter *painter,
                          const QRect &rowRect,
-                         bool marked)
+                         bool marked,
+                         bool directlyMarked)
 {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     const QRectF iconRect =
         QRectF(projectFileMarkIconRect(rowRect)).adjusted(1.5, 1.5, -1.5, -1.5);
     const QPainterPath path = starPath(iconRect);
-    if (marked) {
+    if (directlyMarked) {
         painter->setPen(QPen(QColor(170, 110, 0), 1.1));
         painter->setBrush(QColor(255, 183, 36));
+    } else if (marked) {
+        QColor inheritedFill(255, 183, 36);
+        inheritedFill.setAlphaF(0.30);
+        QColor inheritedStroke(170, 110, 0);
+        inheritedStroke.setAlphaF(0.55);
+        painter->setPen(QPen(inheritedStroke, 1.1));
+        painter->setBrush(inheritedFill);
     } else {
         painter->setPen(QPen(QColor(174, 181, 190), 1.15));
         painter->setBrush(Qt::NoBrush);
@@ -268,7 +355,8 @@ public:
         drawProjectFileMark(
             painter,
             option.rect,
-            index.data(ProjectFileMarkedRole).toBool());
+            index.data(ProjectFileMarkedRole).toBool(),
+            index.data(ProjectFileDirectlyMarkedRole).toBool());
     }
 };
 
@@ -607,6 +695,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_newFolderButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_newFolderButton->setAutoRaise(true);
     m_newFolderButton->setEnabled(false);
+    m_starredOnlyCheck = new QCheckBox("Starred only", this);
+    m_starredOnlyCheck->setToolTip(
+        "Show starred files and folders. Starred folders include their contents.");
     m_projectSortCombo = new QComboBox(this);
     m_projectSortCombo->addItem("Order files by name", static_cast<int>(ProjectExplorerSortMode::Name));
     m_projectSortCombo->addItem("Order files by type", static_cast<int>(ProjectExplorerSortMode::Type));
@@ -619,13 +710,17 @@ MainWindow::MainWindow(QWidget *parent)
     const int savedSortMode =
         explorerSettings.value("projectExplorer/sortMode",
                                static_cast<int>(ProjectExplorerSortMode::Name)).toInt();
+    const bool savedStarredOnly =
+        explorerSettings.value("projectExplorer/starredOnly", false).toBool();
     const int savedSortIndex = m_projectSortCombo->findData(savedSortMode);
     if (savedSortIndex >= 0)
         m_projectSortCombo->setCurrentIndex(savedSortIndex);
+    m_starredOnlyCheck->setChecked(savedStarredOnly);
     auto *projectSortProxy =
         static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy);
     projectSortProxy->setSortMode(static_cast<ProjectExplorerSortMode>(
         m_projectSortCombo->currentData().toInt()));
+    projectSortProxy->setStarredOnly(savedStarredOnly);
     m_projectSortProxy->sort(0, Qt::AscendingOrder);
 
     auto *projectExplorerToolbar = new QWidget(this);
@@ -634,11 +729,35 @@ MainWindow::MainWindow(QWidget *parent)
     projectExplorerToolbarLayout->setContentsMargins(0, 0, 0, 0);
     projectExplorerToolbarLayout->setSpacing(4);
     projectExplorerToolbarLayout->addWidget(m_newFolderButton);
+    projectExplorerToolbarLayout->addWidget(m_starredOnlyCheck);
     projectExplorerToolbarLayout->addStretch(1);
     projectExplorerToolbarLayout->addWidget(m_projectSortCombo);
     ui->dockProjectExplorerLayout->insertWidget(0, projectExplorerToolbar);
+    m_projectStarredEmptyLabel = new QLabel(
+        "No starred files or folders.", this);
+    m_projectStarredEmptyLabel->setWordWrap(true);
+    m_projectStarredEmptyLabel->setAlignment(Qt::AlignCenter);
+    m_projectStarredEmptyLabel->setStyleSheet(
+        "QLabel { color: #6f7f90; padding: 8px 4px; }");
+    m_projectStarredEmptyLabel->setVisible(false);
+    ui->dockProjectExplorerLayout->insertWidget(1, m_projectStarredEmptyLabel);
     connect(m_newFolderButton, &QToolButton::clicked,
             this, &MainWindow::createProjectFolder);
+    connect(m_starredOnlyCheck, &QCheckBox::toggled,
+            this, [this](bool checked) {
+                auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
+                    m_projectSortProxy);
+                proxy->setStarredOnly(checked);
+                refreshProjectExplorerRootIndex();
+                updateProjectExplorerStarredEmptyMessage();
+                QSettings settings;
+                settings.setValue("projectExplorer/starredOnly", checked);
+                if (checked && m_projectFileMarks.isEmpty()) {
+                    statusBar()->showMessage(
+                        "No starred files or folders",
+                        3000);
+                }
+            });
     connect(m_projectSortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
                 auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
@@ -656,7 +775,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_projectFileSystemModel, &QAbstractItemModel::rowsRemoved,
             this, [this]() { updateProjectActions(); });
     connect(m_projectFileSystemModel, &QFileSystemModel::directoryLoaded,
-            this, [this]() { updateProjectActions(); });
+            this, [this]() {
+                refreshProjectExplorerRootIndex();
+                updateProjectExplorerStarredEmptyMessage();
+                updateProjectActions();
+            });
 
     // Load recent projects
     QSettings recentSettings;
@@ -3731,6 +3854,10 @@ void MainWindow::toggleProjectFileMark(const QString &path)
     if (m_projectFileSystemModel) {
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
         m_projectFileSystemModel->refreshDirectory(info.absoluteFilePath());
+        if (m_projectSortProxy)
+            m_projectSortProxy->invalidate();
+        refreshProjectExplorerRootIndex();
+        updateProjectExplorerStarredEmptyMessage();
     }
     statusBar()->showMessage(
         marked ? "Mark cleared" : "Marked",
@@ -4076,14 +4203,45 @@ void MainWindow::updateProjectExplorer()
     if (!m_project.isValid()) {
         m_projectFileMarks.clear();
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+        if (auto *proxy =
+                static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy)) {
+            proxy->setProjectRootPath(QString());
+        }
         ui->projectTree->setRootIndex(QModelIndex());
+        updateProjectExplorerStarredEmptyMessage();
         return;
     }
     m_projectFileSystemModel->setProjectRoot(m_project.rootPath());
-    const QModelIndex rootIndex = projectProxyIndex(
-        m_projectFileSystemModel->setRootPath(m_project.rootPath()));
-    ui->projectTree->setRootIndex(rootIndex);
+    auto *proxy =
+        static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy);
+    proxy->setProjectRootPath(m_project.rootPath());
+    m_projectFileSystemModel->setRootPath(m_project.rootPath());
+    refreshProjectExplorerRootIndex();
     ui->projectTree->setColumnWidth(0, 220);
+    updateProjectExplorerStarredEmptyMessage();
+}
+
+void MainWindow::refreshProjectExplorerRootIndex()
+{
+    if (!m_project.isValid() || !m_projectFileSystemModel || !m_projectSortProxy)
+        return;
+
+    const QModelIndex sourceRoot =
+        m_projectFileSystemModel->index(m_project.rootPath());
+    const QModelIndex proxyRoot = projectProxyIndex(sourceRoot);
+    ui->projectTree->setRootIndex(proxyRoot);
+}
+
+void MainWindow::updateProjectExplorerStarredEmptyMessage()
+{
+    if (!m_projectStarredEmptyLabel || !m_starredOnlyCheck)
+        return;
+
+    const bool show =
+        m_project.isValid()
+        && m_starredOnlyCheck->isChecked()
+        && m_projectFileMarks.isEmpty();
+    m_projectStarredEmptyLabel->setVisible(show);
 }
 
 void MainWindow::updateProjectActions()
@@ -4112,6 +4270,8 @@ void MainWindow::updateProjectActions()
     updateMaskEditControls(viewer);
     if (m_newFolderButton)
         m_newFolderButton->setEnabled(hasProject);
+    if (m_starredOnlyCheck)
+        m_starredOnlyCheck->setEnabled(hasProject);
 
     bool hasRawFiles = false;
     if (hasProject) {

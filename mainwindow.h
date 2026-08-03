@@ -38,6 +38,7 @@
 #include <QByteArray>
 
 class QCloseEvent;
+class QCheckBox;
 class QEvent;
 class QFileSystemWatcher;
 class ProjectFileSystemModel;
@@ -170,6 +171,8 @@ private:
     void setHistogramLayer(Layer *layer);
     void createViewerEmptyState();
     void updateViewerEmptyState();
+    void refreshProjectExplorerRootIndex();
+    void updateProjectExplorerStarredEmptyMessage();
     QModelIndex projectSourceIndex(const QModelIndex &index) const;
     QModelIndex projectProxyIndex(const QModelIndex &index) const;
     QString projectPathFromIndex(const QModelIndex &index) const;
@@ -184,6 +187,8 @@ private:
     HistogramDock *m_histogramDock = nullptr;
     PreviewDock *m_previewDock = nullptr;
     QToolButton *m_newFolderButton = nullptr;
+    QCheckBox *m_starredOnlyCheck = nullptr;
+    QLabel *m_projectStarredEmptyLabel = nullptr;
     QComboBox *m_projectSortCombo = nullptr;
     QDoubleSpinBox *m_zoomPercentSpin = nullptr;
     QSpinBox *m_maskBrushSpin = nullptr;

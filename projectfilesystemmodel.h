@@ -28,6 +28,7 @@
 class QFileInfo;
 
 constexpr int ProjectFileMarkedRole = Qt::UserRole + 100;
+constexpr int ProjectFileDirectlyMarkedRole = Qt::UserRole + 101;
 
 class ProjectFileSystemModel : public QFileSystemModel
 {
@@ -41,6 +42,8 @@ public:
 
     void setProjectRoot(const QString &path);
     void setFileMarks(const QSet<QString> &marks);
+    bool isMarkedOrInherited(const QFileInfo &info) const;
+    bool hasMarkedDescendant(const QFileInfo &info) const;
     void refreshDirectory(const QString &path);
 
 private:

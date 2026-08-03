@@ -61,6 +61,8 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
 
     const QFileInfo info = fileInfo(index);
     if (role == ProjectFileMarkedRole)
+        return isMarkedOrInherited(info);
+    if (role == ProjectFileDirectlyMarkedRole)
         return m_fileMarks.contains(projectRelativePath(info));
 
     if (!info.isDir())
@@ -117,12 +119,51 @@ void ProjectFileSystemModel::setFileMarks(const QSet<QString> &marks)
     m_fileMarks = marks;
 }
 
+bool ProjectFileSystemModel::isMarkedOrInherited(const QFileInfo &info) const
+{
+    QString relative = projectRelativePath(info);
+    if (relative.isEmpty())
+        return false;
+
+    relative = QDir::cleanPath(QDir::fromNativeSeparators(relative));
+    while (!relative.isEmpty() && relative != ".") {
+        if (m_fileMarks.contains(relative))
+            return true;
+        const int slash = relative.lastIndexOf('/');
+        if (slash < 0)
+            break;
+        relative = relative.left(slash);
+    }
+    return false;
+}
+
+bool ProjectFileSystemModel::hasMarkedDescendant(const QFileInfo &info) const
+{
+    if (!info.isDir())
+        return false;
+
+    QString relative = projectRelativePath(info);
+    if (relative.isEmpty())
+        return false;
+
+    relative = QDir::cleanPath(QDir::fromNativeSeparators(relative));
+    const QString prefix = relative == "."
+        ? QString()
+        : relative + QLatin1Char('/');
+    for (const QString &mark : m_fileMarks) {
+        if (prefix.isEmpty() || mark.startsWith(prefix))
+            return true;
+    }
+    return false;
+}
+
 void ProjectFileSystemModel::refreshDirectory(const QString &path)
 {
     const QModelIndex directoryIndex = index(path);
     if (directoryIndex.isValid())
         emit dataChanged(directoryIndex, directoryIndex,
                          {Qt::DisplayRole, ProjectFileMarkedRole,
+                          ProjectFileDirectlyMarkedRole,
                           Qt::ForegroundRole, Qt::ToolTipRole});
 }
 
