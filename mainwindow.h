@@ -178,6 +178,8 @@ private:
     void refreshProjectExplorerRootIndex();
     void updateProjectExplorerStarredEmptyMessage();
     void updateMaskBrushControls(ImageViewer *viewer);
+    void createMaskTiffInCollection(
+        const Collection &initialCollection = {});
     QModelIndex projectSourceIndex(const QModelIndex &index) const;
     QModelIndex projectProxyIndex(const QModelIndex &index) const;
     QString projectPathFromIndex(const QModelIndex &index) const;

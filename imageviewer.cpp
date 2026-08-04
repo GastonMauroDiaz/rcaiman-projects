@@ -117,17 +117,22 @@ ImageViewer::ImageViewer(QWidget *parent)
         m_imageLayer = nullptr;
         for (int i = 0; i < m_layerManager->layerCount(); ++i) {
             if (auto *img = qobject_cast<ImageLayer*>(m_layerManager->layerAt(i))) {
-                m_imageLayer = img;
-                break;
+                if (!m_imageLayer)
+                    m_imageLayer = img;
+                connect(img, &Layer::styleChanged,
+                        this, &ImageViewer::updateAutoBackground,
+                        Qt::UniqueConnection);
             }
         }
         setPointItemsInteractionBlocked(
             panInteractionActive() || zoomInteractionActive() || m_maskEditEnabled);
+        updateAutoBackground();
     });
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
+    updateAutoBackground();
 }
 
 void ImageViewer::setImage(const QString &fileName)
@@ -188,6 +193,27 @@ void ImageViewer::setZoomPercent(double percent)
     centerOn(center);
     emitZoomPercentChanged();
     syncTransformToSiblings();
+}
+
+void ImageViewer::updateAutoBackground()
+{
+    QColor background = Qt::white;
+    if (m_layerManager) {
+        for (int i = m_layerManager->layerCount() - 1; i >= 0; --i) {
+            auto *imageLayer =
+                qobject_cast<ImageLayer*>(m_layerManager->layerAt(i));
+            if (!imageLayer || !imageLayer->isVisible())
+                continue;
+
+            background = imageLayer->style().blendMode == ImageBlendMode::Maximum
+                ? QColor(Qt::black)
+                : QColor(Qt::white);
+            break;
+        }
+    }
+
+    if (backgroundBrush().color() != background)
+        setBackgroundBrush(background);
 }
 
 void ImageViewer::zoomToPointIndices(PointLayer *layer,

@@ -2151,6 +2151,7 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
     QAction *registerAction = nullptr;
     QAction *createPointsAction = nullptr;
+    QAction *createMaskAction = nullptr;
     QAction *styleAction = nullptr;
     QAction *copyStyleAction = nullptr;
     QAction *pasteStyleAction = nullptr;
@@ -2160,6 +2161,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         registerAction = menu.addAction("Register collection...");
         createPointsAction =
             menu.addAction("Create empty point layer...");
+        createMaskAction =
+            menu.addAction("Create empty mask...");
         styleAction = menu.addAction("Edit collection style...");
         copyStyleAction = menu.addAction("Copy collection style");
         pasteStyleAction = menu.addAction("Paste collection style");
@@ -2201,12 +2204,16 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             m_copiedCollectionStyle, m_copiedCollectionStyleKind);
     const bool supportsCreatePoints = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass == "point_collection";
+    const bool supportsCreateMask = info.isDir() && hasRegisteredCollection
+        && selectedCollection.collectionClass == "segmentation_collection";
     const bool supportsCollectionValidation =
         info.isDir() && hasRegisteredCollection
         && CollectionValidation::isEligible(
             m_project.rootPath(), selectedCollection);
     if (createPointsAction)
         createPointsAction->setEnabled(supportsCreatePoints);
+    if (createMaskAction)
+        createMaskAction->setEnabled(supportsCreateMask);
     if (styleAction)
         styleAction->setEnabled(supportsStyle);
     if (copyStyleAction)
@@ -2321,6 +2328,14 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (createPointsAction) {
         connect(createPointsAction, &QAction::triggered,
                 this, &MainWindow::createPointsCsv);
+    }
+    if (createMaskAction) {
+        connect(createMaskAction, &QAction::triggered,
+                this, [this, selectedCollection, supportsCreateMask]() {
+                    if (!supportsCreateMask)
+                        return;
+                    createMaskTiffInCollection(selectedCollection);
+                });
     }
     if (styleAction) {
         connect(styleAction, &QAction::triggered,
@@ -5853,6 +5868,12 @@ void MainWindow::selectPointsByMask()
 
 void MainWindow::createMaskTiff()
 {
+    createMaskTiffInCollection();
+}
+
+void MainWindow::createMaskTiffInCollection(
+    const Collection &initialCollection)
+{
     if (!m_project.isValid()) {
         QMessageBox::information(this, "Create mask",
                                  "No project is open. Please create or open a project first.");
@@ -5875,7 +5896,9 @@ void MainWindow::createMaskTiff()
         return;
     }
 
-    Collection selectedCollection = collectionForPath(selectedProjectPath());
+    Collection selectedCollection = initialCollection;
+    if (selectedCollection.collectionClass != "segmentation_collection")
+        selectedCollection = collectionForPath(selectedProjectPath());
     if (selectedCollection.collectionClass != "segmentation_collection")
         selectedCollection = {};
 

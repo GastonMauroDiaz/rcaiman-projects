@@ -150,6 +150,7 @@ private:
     void updatePointBoxSelection(const QPoint &pos);
     void finishPointBoxSelection(const QPoint &pos);
     void setZoomCursorDirection(ZoomCursorDirection direction);
+    void updateAutoBackground();
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
