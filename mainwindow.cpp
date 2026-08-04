@@ -71,6 +71,7 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFont>
+#include <QFormLayout>
 #include <QFrame>
 #include <QGraphicsScene>
 #include <QHBoxLayout>
@@ -140,6 +141,17 @@ QString normalizedProjectReference(const QString &projectRoot,
     return resolved;
 }
 
+QString normalizedAbsolutePathForComparison(const QString &path)
+{
+    if (path.trimmed().isEmpty())
+        return {};
+    QString normalized = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
 QVector<QString> tiffFilesWithBaseName(const QString &directoryPath,
                                        const QString &baseName)
 {
@@ -173,7 +185,9 @@ QVector<MaskCandidate> compatibleMaskCandidates(
     QVector<MaskCandidate> candidates;
     const QString pointParent =
         normalizedProjectReference(projectRoot, pointCollection.parent);
-    if (pointParent.isEmpty())
+    const QString pointRelated =
+        normalizedProjectReference(projectRoot, pointCollection.related);
+    if (pointParent.isEmpty() && pointRelated.isEmpty())
         return candidates;
 
     for (const Collection &collection : collections) {
@@ -182,7 +196,16 @@ QVector<MaskCandidate> compatibleMaskCandidates(
 
         const QString maskParent =
             normalizedProjectReference(projectRoot, collection.parent);
-        if (maskParent.isEmpty() || maskParent != pointParent)
+        const QString maskCollectionPath =
+            normalizedAbsolutePathForComparison(collection.dirPath);
+        const bool relatedMatch =
+            !pointRelated.isEmpty()
+            && pointRelated == maskCollectionPath;
+        const bool parentMatch =
+            !pointParent.isEmpty()
+            && !maskParent.isEmpty()
+            && maskParent == pointParent;
+        if (!relatedMatch && !parentMatch)
             continue;
 
         QVector<QString> files;
@@ -5379,94 +5402,169 @@ void MainWindow::createPointGrid()
                    QDir::cleanPath(right.dirPath), sensitivity) == 0;
     };
 
+    const auto sameFile = [](const QString &left,
+                             const QString &right) {
+        if (left.isEmpty() || right.isEmpty())
+            return false;
+#ifdef Q_OS_WIN
+        const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+        const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+        return QDir::cleanPath(QFileInfo(left).absoluteFilePath()).compare(
+                   QDir::cleanPath(QFileInfo(right).absoluteFilePath()),
+                   sensitivity) == 0;
+    };
+
     const Collection selectedCollection = collectionForPath(selectedProjectPath());
+    const QString selectedPath = selectedProjectPath();
+
+    QVector<MaskCandidate> maskOptions;
+    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+        bool alreadyListed = false;
+        for (const MaskCandidate &mask : std::as_const(maskOptions)) {
+            if (sameFile(mask.path, candidate.mask.path)) {
+                alreadyListed = true;
+                break;
+            }
+        }
+        if (!alreadyListed)
+            maskOptions.append(candidate.mask);
+    }
+
+    int preferredMaskIndex = -1;
     if (selectedCollection.collectionClass == "segmentation_collection") {
-        QVector<GridCandidate> selectedMaskCollectionCandidates;
-        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-            if (sameCollection(candidate.mask.collection, selectedCollection))
-                selectedMaskCollectionCandidates.append(candidate);
-        }
-        if (!selectedMaskCollectionCandidates.isEmpty())
-            gridCandidates = selectedMaskCollectionCandidates;
-    }
-
-    Collection selectedPointCollection;
-    if (selectedCollection.collectionClass == "point_collection"
-        && !normalizedProjectReference(
-                m_project.rootPath(), selectedCollection.parent).isEmpty()) {
-        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-            if (sameCollection(candidate.pointCollection, selectedCollection)) {
-                selectedPointCollection = selectedCollection;
+        const QFileInfo selectedInfo(selectedPath);
+        for (int i = 0; i < maskOptions.size(); ++i) {
+            const MaskCandidate &mask = maskOptions.at(i);
+            if (selectedInfo.isFile() && sameFile(mask.path, selectedPath)) {
+                preferredMaskIndex = i;
                 break;
+            }
+            if (preferredMaskIndex < 0
+                && sameCollection(mask.collection, selectedCollection)) {
+                preferredMaskIndex = i;
             }
         }
     }
-
-    QStringList pointCollectionNames;
-    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-        if (!pointCollectionNames.contains(candidate.pointCollection.dirName,
-                                           Qt::CaseInsensitive)) {
-            pointCollectionNames.append(candidate.pointCollection.dirName);
+    if (preferredMaskIndex < 0
+        && selectedCollection.collectionClass == "point_collection") {
+        for (int i = 0; i < maskOptions.size(); ++i) {
+            for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+                if (sameFile(candidate.mask.path, maskOptions.at(i).path)
+                    && sameCollection(candidate.pointCollection,
+                                      selectedCollection)) {
+                    preferredMaskIndex = i;
+                    break;
+                }
+            }
+            if (preferredMaskIndex >= 0)
+                break;
         }
     }
+    if (preferredMaskIndex < 0)
+        preferredMaskIndex = 0;
 
-    if (selectedPointCollection.collectionClass != "point_collection"
-        && pointCollectionNames.size() == 1) {
-        const QString pointCollectionName = pointCollectionNames.first();
-        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-            if (candidate.pointCollection.dirName.compare(
-                    pointCollectionName, Qt::CaseInsensitive) == 0) {
-                selectedPointCollection = candidate.pointCollection;
-                break;
+    QDialog dialog(this);
+    dialog.setWindowTitle("Create grid");
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *form = new QFormLayout;
+    auto *maskCombo = new QComboBox(&dialog);
+    auto *pointCombo = new QComboBox(&dialog);
+    auto *strideSpin = new QSpinBox(&dialog);
+    strideSpin->setRange(1, 10000);
+    strideSpin->setValue(1);
+
+    for (int i = 0; i < maskOptions.size(); ++i)
+        maskCombo->addItem(maskOptions.at(i).label, i);
+
+    auto populatePointCombo = [&]() {
+        pointCombo->clear();
+        const int maskIndex = maskCombo->currentData().toInt();
+        if (maskIndex < 0 || maskIndex >= maskOptions.size())
+            return;
+
+        const MaskCandidate &selectedMask = maskOptions.at(maskIndex);
+        int preferredPointIndex = -1;
+        for (int i = 0; i < gridCandidates.size(); ++i) {
+            const GridCandidate &candidate = gridCandidates.at(i);
+            if (!sameFile(candidate.mask.path, selectedMask.path))
+                continue;
+
+            bool alreadyListed = false;
+            for (int row = 0; row < pointCombo->count(); ++row) {
+                const int existingIndex = pointCombo->itemData(row).toInt();
+                if (existingIndex >= 0
+                    && existingIndex < gridCandidates.size()
+                    && sameCollection(
+                        gridCandidates.at(existingIndex).pointCollection,
+                        candidate.pointCollection)) {
+                    alreadyListed = true;
+                    break;
+                }
+            }
+            if (alreadyListed)
+                continue;
+
+            pointCombo->addItem(candidate.pointCollection.dirName, i);
+            if (preferredPointIndex < 0
+                && selectedCollection.collectionClass == "point_collection"
+                && sameCollection(candidate.pointCollection,
+                                  selectedCollection)) {
+                preferredPointIndex = pointCombo->count() - 1;
             }
         }
-    } else if (selectedPointCollection.collectionClass != "point_collection") {
-        bool ok = false;
-        const QString choice = QInputDialog::getItem(
-            this, "Create grid", "Point collection:",
-            pointCollectionNames, 0, false, &ok);
-        if (!ok || choice.isEmpty())
-            return;
-        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-            if (candidate.pointCollection.dirName.compare(
-                    choice, Qt::CaseInsensitive) == 0) {
-                selectedPointCollection = candidate.pointCollection;
-                break;
-            }
-        }
-    }
+        pointCombo->setCurrentIndex(qMax(0, preferredPointIndex));
+    };
 
-    QVector<MaskCandidate> masks;
-    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-        if (sameCollection(candidate.pointCollection, selectedPointCollection))
-            masks.append(candidate.mask);
-    }
+    connect(maskCombo,
+            static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+            &dialog,
+            [populatePointCombo](int) {
+                populatePointCombo();
+            });
 
-    int selectedMaskIndex = 0;
-    if (masks.size() > 1) {
-        QStringList labels;
-        labels.reserve(masks.size());
-        for (const MaskCandidate &mask : std::as_const(masks))
-            labels.append(mask.label);
+    maskCombo->setCurrentIndex(preferredMaskIndex);
+    populatePointCombo();
 
-        bool ok = false;
-        const QString selectedLabel = QInputDialog::getItem(
-            this, "Create grid", "Mask:",
-            labels, 0, false, &ok);
-        if (!ok || selectedLabel.isEmpty())
-            return;
-        selectedMaskIndex = labels.indexOf(selectedLabel);
-        if (selectedMaskIndex < 0)
-            return;
-    }
+    form->addRow("Mask:", maskCombo);
+    form->addRow("Point collection:", pointCombo);
+    form->addRow("Stride:", strideSpin);
+    layout->addLayout(form);
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    connect(buttons, &QDialogButtonBox::accepted,
+            &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected,
+            &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
 
-    const MaskCandidate maskCandidate = masks.at(selectedMaskIndex);
-    bool strideOk = false;
-    const int stride = QInputDialog::getInt(
-        this, "Create grid", "Stride:",
-        1, 1, 10000, 1, &strideOk);
-    if (!strideOk || stride < 1)
+    if (dialog.exec() != QDialog::Accepted)
         return;
+
+    const int candidateIndex = pointCombo->currentData().toInt();
+    if (candidateIndex < 0 || candidateIndex >= gridCandidates.size())
+        return;
+
+    const int selectedMaskIndex = maskCombo->currentData().toInt();
+    if (selectedMaskIndex < 0 || selectedMaskIndex >= maskOptions.size())
+        return;
+
+    const GridCandidate selectedCandidate = gridCandidates.at(candidateIndex);
+    const Collection selectedPointCollection =
+        selectedCandidate.pointCollection;
+    const MaskCandidate maskCandidate = selectedCandidate.mask;
+    const int stride = strideSpin->value();
+    if (stride < 1)
+        return;
+
+    if (!sameFile(maskCandidate.path, maskOptions.at(selectedMaskIndex).path)) {
+        QMessageBox::warning(
+            this, "Create grid",
+            "The selected mask and point collection are no longer compatible.");
+        return;
+    }
 
     QString readError;
     const RasterData mask = TiffReader::load(maskCandidate.path, &readError);
@@ -5622,40 +5720,25 @@ void MainWindow::selectPointsByMask()
         return;
     }
 
-    const QString pointParent =
-        normalizedProjectReference(m_project.rootPath(), pointCollection.parent);
-    if (pointParent.isEmpty()) {
+    if (normalizedProjectReference(
+            m_project.rootPath(), pointCollection.parent).isEmpty()
+        && normalizedProjectReference(
+            m_project.rootPath(), pointCollection.related).isEmpty()) {
         QMessageBox::information(
             this, "Select by mask",
-            "The point collection does not have a valid parent image collection.");
+            "The point collection does not have a valid parent image collection or related segmentation collection.");
         return;
     }
 
     const QString pointBaseName =
         QFileInfo(pointLayer->sourcePath()).completeBaseName();
-    QVector<MaskCandidate> candidates;
     const QVector<Collection> collections =
         Project::discoverCollections(m_project.rootPath());
-    for (const Collection &collection : collections) {
-        if (collection.collectionClass != "segmentation_collection")
-            continue;
-
-        const QString maskParent =
-            normalizedProjectReference(m_project.rootPath(), collection.parent);
-        if (maskParent.isEmpty() || maskParent != pointParent)
-            continue;
-
-        const QVector<QString> files =
-            tiffFilesWithBaseName(collection.dirPath, pointBaseName);
-        for (const QString &path : files) {
-            candidates.append(MaskCandidate{
-                collection,
-                path,
-                QStringLiteral("%1/%2")
-                    .arg(collection.dirName, QFileInfo(path).fileName())
-            });
-        }
-    }
+    QVector<MaskCandidate> candidates = compatibleMaskCandidates(
+        m_project.rootPath(),
+        pointCollection,
+        collections,
+        pointBaseName);
 
     if (candidates.isEmpty()) {
         QMessageBox::information(
@@ -5663,8 +5746,8 @@ void MainWindow::selectPointsByMask()
             QStringLiteral(
                 "No compatible mask was found for %1.\n\n"
                 "A compatible mask must be a TIFF with the same basename in a "
-                "segmentation collection linked to the same parent image collection "
-                "as the point collection.")
+                "related segmentation collection or in a segmentation collection "
+                "linked to the same parent image collection as the point collection.")
                 .arg(QFileInfo(pointLayer->sourcePath()).fileName()));
         return;
     }
