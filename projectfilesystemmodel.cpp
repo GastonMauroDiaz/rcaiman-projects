@@ -77,12 +77,20 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (directProjectChild)
         className = collectionClass(info.absoluteFilePath());
     const bool otherCollection = className == "other";
+    const bool countedCollection =
+        className == "preprocessed_image_collection"
+        || className == "processed_image_collection"
+        || className == "segmentation_collection"
+        || className == "point_collection";
 
     if (role == Qt::ForegroundRole && otherCollection)
         return QBrush(QColor(170, 90, 0));
 
     if (role == Qt::ForegroundRole && reserved)
         return QBrush(QColor(35, 105, 190));
+
+    if (role == Qt::ForegroundRole && countedCollection)
+        return QBrush(QColor(0, 85, 0));
 
     if (role == Qt::ToolTipRole
         && reserved

@@ -37,6 +37,7 @@
 #include <QtGlobal>
 
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -407,6 +408,66 @@ bool ImageLayer::invertConnectedBinaryMaskRegionAtScenePos(
 
     if (changedPixelCount)
         *changedPixelCount = changed;
+    m_renderer.clearCache();
+    ++m_dataRevision;
+    refreshRenderedImageNow();
+    emit dataChanged();
+    return true;
+}
+
+bool ImageLayer::invertBinaryMask(int *changedPixelCount,
+                                  QString *errorMessage)
+{
+    if (changedPixelCount)
+        *changedPixelCount = 0;
+    if (!m_binaryMaskEditMode || !isEditableBinaryMask()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No editable binary mask is active.");
+        return false;
+    }
+
+    quint8 *pixels = reinterpret_cast<quint8 *>(m_rasterData.rawData().data());
+    if (!pixels) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("The mask pixels could not be edited.");
+        return false;
+    }
+
+    bool hasOne = false;
+    bool has255 = false;
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(m_rasterData.width()) * m_rasterData.height();
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        const quint8 value = pixels[offset];
+        if (value == 1) {
+            hasOne = true;
+        } else if (value == 255) {
+            has255 = true;
+        } else if (value != 0) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The active mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+        if (hasOne && has255) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "The active mask is not binary.\n\n"
+                    "Binary masks must contain only 0/1 or 0/255 values.");
+            }
+            return false;
+        }
+    }
+
+    const quint8 foregroundValue = has255 ? 255 : 1;
+    for (qsizetype offset = 0; offset < pixelCount; ++offset)
+        pixels[offset] = pixels[offset] == 0 ? foregroundValue : 0;
+
+    if (changedPixelCount)
+        *changedPixelCount = static_cast<int>(
+            qMin<qsizetype>(pixelCount, std::numeric_limits<int>::max()));
     m_renderer.clearCache();
     ++m_dataRevision;
     refreshRenderedImageNow();

@@ -66,6 +66,7 @@
    </property>
    <addaction name="actionCreateMask"/>
    <addaction name="actionEditMask"/>
+   <addaction name="actionInvertMask"/>
    <addaction name="actionCancelMaskEdit"/>
   </widget>
    <widget class="QMenu" name="menuView">
@@ -403,13 +404,24 @@ Drag to paint, and hold Alt/Option to erase.</string>
     <bool>false</bool>
    </property>
    <property name="icon">
-    <iconset theme="QIcon::ThemeIcon::EditUndo"/>
+    <iconset theme="QIcon::ThemeIcon::EditClear"/>
    </property>
    <property name="text">
     <string>Cancel mask edit</string>
    </property>
    <property name="toolTip">
     <string>Revert the mask layer to its state before editing started.</string>
+   </property>
+  </action>
+  <action name="actionInvertMask">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Invert mask</string>
+   </property>
+   <property name="toolTip">
+    <string>Invert all pixels in the active binary mask.</string>
    </property>
   </action>
   <action name="actionEditPoints">
@@ -433,8 +445,7 @@ Click empty space to add, drag a point to move it, and use the platform delete m
     <bool>false</bool>
    </property>
    <property name="icon">
-    <iconset resource="resources.qrc">
-     <normaloff>:/icons/edit-points-target-cancel.png</normaloff>:/icons/edit-points-target-cancel.png</iconset>
+    <iconset theme="QIcon::ThemeIcon::EditClear"/>
    </property>
    <property name="text">
     <string>Cancel edit</string>

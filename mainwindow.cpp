@@ -1053,6 +1053,11 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             &MainWindow::onEditMaskToggled);
 
+    connect(ui->actionInvertMask,
+            &QAction::triggered,
+            this,
+            &MainWindow::onInvertMaskTriggered);
+
     connect(ui->actionCancelMaskEdit,
             &QAction::triggered,
             this,
@@ -3050,6 +3055,38 @@ void MainWindow::onEditMaskToggled(bool enabled)
     refreshReloadableArtifactWatchers();
 }
 
+void MainWindow::onInvertMaskTriggered()
+{
+    ImageViewer *viewer = currentImageViewer();
+    ImageLayer *layer = viewer ? viewer->editingMaskLayer() : nullptr;
+    if (!viewer || !viewer->maskEditEnabled() || !layer)
+        return;
+
+    int changedPixels = 0;
+    QString errorMessage;
+    if (!layer->invertBinaryMask(&changedPixels, &errorMessage)) {
+        QMessageBox::warning(
+            this, "Invert mask",
+            errorMessage.isEmpty()
+                ? QStringLiteral("Could not invert the active mask.")
+                : errorMessage);
+        return;
+    }
+
+    if (!layer->saveBinaryMask(&errorMessage)) {
+        QMessageBox::warning(
+            this, "Invert mask",
+            errorMessage.isEmpty()
+                ? QStringLiteral("Could not save mask changes.")
+                : errorMessage);
+        return;
+    }
+
+    ui->statusbar->showMessage(
+        QStringLiteral("Inverted mask (%1 pixels).").arg(changedPixels),
+        3000);
+}
+
 void MainWindow::onCancelMaskEditTriggered()
 {
     ImageViewer *viewer = currentImageViewer();
@@ -4938,6 +4975,7 @@ void MainWindow::updateMaskEditControls(ImageViewer *viewer)
         ui->actionEditMask->setEnabled(canEdit);
     }
     ui->actionCancelMaskEdit->setEnabled(editing);
+    ui->actionInvertMask->setEnabled(editing);
 
     updateMaskBrushControls(viewer);
 }
@@ -5306,43 +5344,102 @@ void MainWindow::createPointGrid()
         return;
     }
 
-    Collection selectedPointCollection = collectionForPath(selectedProjectPath());
-    if (selectedPointCollection.collectionClass != "point_collection"
-        || normalizedProjectReference(
-            m_project.rootPath(), selectedPointCollection.parent).isEmpty()) {
-        selectedPointCollection = {};
+    struct GridCandidate {
+        Collection pointCollection;
+        MaskCandidate mask;
+    };
+
+    QVector<GridCandidate> gridCandidates;
+    for (const Collection &pointCollection : std::as_const(pointCollections)) {
+        const QVector<MaskCandidate> masks = compatibleMaskCandidates(
+            m_project.rootPath(), pointCollection, collections);
+        for (const MaskCandidate &mask : masks)
+            gridCandidates.append(GridCandidate{pointCollection, mask});
     }
 
-    if (selectedPointCollection.collectionClass != "point_collection"
-        && pointCollections.size() == 1) {
-        selectedPointCollection = pointCollections.first();
-    } else if (selectedPointCollection.collectionClass != "point_collection") {
-        QStringList collectionNames;
-        for (const Collection &collection : pointCollections)
-            collectionNames.append(collection.dirName);
-        bool ok = false;
-        const QString choice = QInputDialog::getItem(
-            this, "Create grid", "Point collection:",
-            collectionNames, 0, false, &ok);
-        if (!ok || choice.isEmpty())
-            return;
-        for (const Collection &collection : pointCollections) {
-            if (collection.dirName == choice) {
-                selectedPointCollection = collection;
-                break;
-            }
-        }
-    }
-
-    QVector<MaskCandidate> masks = compatibleMaskCandidates(
-        m_project.rootPath(), selectedPointCollection, collections);
-    if (masks.isEmpty()) {
+    if (gridCandidates.isEmpty()) {
         QMessageBox::information(
             this, "Create grid",
             "No compatible mask was found.\n\n"
             "A compatible mask must be a TIFF in a segmentation collection linked "
             "to the same parent image collection as the point collection.");
         return;
+    }
+
+    const auto sameCollection = [](const Collection &left,
+                                   const Collection &right) {
+        if (left.dirPath.isEmpty() || right.dirPath.isEmpty())
+            return false;
+#ifdef Q_OS_WIN
+        const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+        const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+        return QDir::cleanPath(left.dirPath).compare(
+                   QDir::cleanPath(right.dirPath), sensitivity) == 0;
+    };
+
+    const Collection selectedCollection = collectionForPath(selectedProjectPath());
+    if (selectedCollection.collectionClass == "segmentation_collection") {
+        QVector<GridCandidate> selectedMaskCollectionCandidates;
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (sameCollection(candidate.mask.collection, selectedCollection))
+                selectedMaskCollectionCandidates.append(candidate);
+        }
+        if (!selectedMaskCollectionCandidates.isEmpty())
+            gridCandidates = selectedMaskCollectionCandidates;
+    }
+
+    Collection selectedPointCollection;
+    if (selectedCollection.collectionClass == "point_collection"
+        && !normalizedProjectReference(
+                m_project.rootPath(), selectedCollection.parent).isEmpty()) {
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (sameCollection(candidate.pointCollection, selectedCollection)) {
+                selectedPointCollection = selectedCollection;
+                break;
+            }
+        }
+    }
+
+    QStringList pointCollectionNames;
+    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+        if (!pointCollectionNames.contains(candidate.pointCollection.dirName,
+                                           Qt::CaseInsensitive)) {
+            pointCollectionNames.append(candidate.pointCollection.dirName);
+        }
+    }
+
+    if (selectedPointCollection.collectionClass != "point_collection"
+        && pointCollectionNames.size() == 1) {
+        const QString pointCollectionName = pointCollectionNames.first();
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (candidate.pointCollection.dirName.compare(
+                    pointCollectionName, Qt::CaseInsensitive) == 0) {
+                selectedPointCollection = candidate.pointCollection;
+                break;
+            }
+        }
+    } else if (selectedPointCollection.collectionClass != "point_collection") {
+        bool ok = false;
+        const QString choice = QInputDialog::getItem(
+            this, "Create grid", "Point collection:",
+            pointCollectionNames, 0, false, &ok);
+        if (!ok || choice.isEmpty())
+            return;
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (candidate.pointCollection.dirName.compare(
+                    choice, Qt::CaseInsensitive) == 0) {
+                selectedPointCollection = candidate.pointCollection;
+                break;
+            }
+        }
+    }
+
+    QVector<MaskCandidate> masks;
+    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+        if (sameCollection(candidate.pointCollection, selectedPointCollection))
+            masks.append(candidate.mask);
     }
 
     int selectedMaskIndex = 0;

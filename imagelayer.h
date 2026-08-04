@@ -59,6 +59,8 @@ public:
         const QPointF &scenePos,
         int *changedPixelCount = nullptr,
         QString *errorMessage = nullptr);
+    bool invertBinaryMask(int *changedPixelCount = nullptr,
+                          QString *errorMessage = nullptr);
     bool saveBinaryMask(QString *errorMessage = nullptr);
     void setStyle(const ImageLayerStyle &style);
     void setOpacity(double opacity);

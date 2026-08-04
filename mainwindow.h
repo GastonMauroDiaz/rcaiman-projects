@@ -100,6 +100,7 @@ private slots:
     void onEditPointsToggled(bool enabled);
     void onCancelEditTriggered();
     void onEditMaskToggled(bool enabled);
+    void onInvertMaskTriggered();
     void onCancelMaskEditTriggered();
     void onPointSelectionChanged();
     void onProjectTreeItemClicked(const QModelIndex &index);
