@@ -2740,6 +2740,8 @@ void MainWindow::onWorkspaceTabContextMenu(const QPoint &position)
         return;
 
     QMenu menu(this);
+    QAction *renameTabAction = menu.addAction("Rename tab...");
+    menu.addSeparator();
     QAction *closeTabAction = menu.addAction("Close tab");
     QAction *closeOtherTabsAction = menu.addAction("Close other tabs");
     QAction *closeAllTabsAction = menu.addAction("Close all tabs");
@@ -2751,7 +2753,28 @@ void MainWindow::onWorkspaceTabContextMenu(const QPoint &position)
     if (!selected)
         return;
 
-    if (selected == closeTabAction) {
+    if (selected == renameTabAction) {
+        bool ok = false;
+        const QString currentTitle =
+            ui->workspaceTabs->tabText(tabIndex);
+        const QString title = QInputDialog::getText(
+            this,
+            "Rename tab",
+            "Tab name:",
+            QLineEdit::Normal,
+            currentTitle,
+            &ok).trimmed();
+        if (!ok)
+            return;
+        if (title.isEmpty()) {
+            QMessageBox::information(
+                this, "Rename tab",
+                "Tab name cannot be empty.");
+            return;
+        }
+        ui->workspaceTabs->setTabText(tabIndex, title);
+        saveProjectSession();
+    } else if (selected == closeTabAction) {
         onWorkspaceTabCloseRequested(tabIndex);
     } else if (selected == closeOtherTabsAction) {
         closeOtherWorkspaceTabs(tabIndex);
@@ -3053,6 +3076,15 @@ void MainWindow::onCancelEditTriggered()
     if (!pointLayer || !pointLayer->editMode())
         return;
 
+    const auto answer = QMessageBox::question(
+        this,
+        "Cancel edit",
+        "Are you sure you want to revert the point layer to its state before editing started?",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
     pointLayer->cancelEdit();
     viewer->setPointEditEnabled(false);
     ui->actionEditPoints->setChecked(false);
@@ -3129,6 +3161,15 @@ void MainWindow::onCancelMaskEditTriggered()
 {
     ImageViewer *viewer = currentImageViewer();
     if (!viewer || !viewer->maskEditEnabled())
+        return;
+
+    const auto answer = QMessageBox::question(
+        this,
+        "Cancel mask edit",
+        "Are you sure you want to revert the mask to its state before editing started?",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
         return;
 
     QString errorMessage;

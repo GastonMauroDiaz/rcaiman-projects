@@ -95,6 +95,15 @@ bool belongsToPointItem(QGraphicsItem *item)
     return false;
 }
 
+bool containsPointItem(const QList<QGraphicsItem*> &items)
+{
+    for (QGraphicsItem *item : items) {
+        if (belongsToPointItem(item))
+            return true;
+    }
+    return false;
+}
+
 }
 
 ImageViewer::ImageViewer(QWidget *parent)
@@ -691,8 +700,8 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         && !m_maskEditEnabled
         && event->button() == Qt::LeftButton
         && event->modifiers().testFlag(Qt::ControlModifier)) {
-        QGraphicsItem *itemUnder = itemAt(event->pos());
-        if (!belongsToPointItem(itemUnder) && boxSelectionPointLayer()) {
+        if (!containsPointItem(items(event->pos()))
+            && boxSelectionPointLayer()) {
             beginPointBoxSelection(event->pos());
             event->accept();
             return;
@@ -701,8 +710,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
 
     if (m_pointEditEnabled && !panInteractionActive() && event->button() == Qt::LeftButton) {
         const QPointF scenePos = mapToScene(event->pos());
-        QGraphicsItem *itemUnder = itemAt(event->pos());
-        const bool isPointItem = belongsToPointItem(itemUnder);
+        const bool isPointItem = containsPointItem(items(event->pos()));
         if (!isPointItem) {
             if (m_editingPointLayer) {
                 m_editingPointLayer->addPoint(scenePos.y(), scenePos.x());
