@@ -175,6 +175,32 @@ int main(int argc, char *argv[])
         return 75;
     }
     hspOpt.close();
+    QFile hspMasks(QDir(hspSource).filePath("manipulate/test_masks.conf"));
+    if (!hspMasks.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspMasks.write("1\n4 0.0 2.0 2.2 0.2\n") < 0) {
+        return 86;
+    }
+    hspMasks.close();
+    QFile hspPolygons(QDir(hspSource).filePath("manipulate/test_polygons.conf"));
+    if (!hspPolygons.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspPolygons.write("1\n4 0.0 1.0 1.1 0.1\n") < 0) {
+        return 87;
+    }
+    hspPolygons.close();
+    QFile hspEmptyMasks(QDir(hspSource).filePath("manipulate/empty_masks.conf"));
+    if (!hspEmptyMasks.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspEmptyMasks.write("0\n") < 0) {
+        return 91;
+    }
+    hspEmptyMasks.close();
+    if (!QFile::copy(pgm16Path, QDir(hspSource).filePath("manipulate/empty.pgm")))
+        return 92;
+    QFile hspEmptyInfo(QDir(hspSource).filePath("info/empty.conf"));
+    if (!hspEmptyInfo.open(QIODevice::WriteOnly | QIODevice::Text)
+        || hspEmptyInfo.write("group_name=Group A\n") < 0) {
+        return 93;
+    }
+    hspEmptyInfo.close();
 
     HspImportOptions hspOptions;
     hspOptions.sourceProjectPath = hspSource;
@@ -187,9 +213,11 @@ int main(int argc, char *argv[])
         HspProjectImporter::importProject(hspOptions, &hspReport, &error);
     if (!importedHsp.isValid()
         || hspReport.rawFilesCopied != 1
-        || hspReport.pgmFilesConverted != 1
+        || hspReport.pgmFilesConverted != 2
         || hspReport.skyPointFilesWritten != 1
         || hspReport.sunMarkFilesWritten != 1
+        || hspReport.maskFilesWritten != 1
+        || hspReport.markedAreaFilesWritten != 1
         || hspReport.optSkyCoefTablesWritten != 1) {
         return 70;
     }
@@ -242,6 +270,37 @@ int main(int argc, char *argv[])
     if (!importedOptSkyReadme.open(QIODevice::ReadOnly | QIODevice::Text)
         || !importedOptSkyReadme.readAll().contains("read.delim()")) {
         return 78;
+    }
+    RasterData importedMask = TiffReader::load(
+        QDir(importedHsp.rootPath()).filePath("hsp_masks_Group_A/test.tif"),
+        &error);
+    if (importedMask.isNull()
+        || importedMask.dataType() != RasterData::DataType::UInt8
+        || importedMask.sample(0, 0, 0).toInt() != 1
+        || importedMask.sample(0, 1, 1).toInt() != 1) {
+        return 88;
+    }
+    RasterData importedMarkedArea = TiffReader::load(
+        QDir(importedHsp.rootPath()).filePath("hsp_marked_areas_Group_A/test.tif"),
+        &error);
+    if (importedMarkedArea.isNull()
+        || importedMarkedArea.dataType() != RasterData::DataType::UInt8
+        || importedMarkedArea.sample(0, 0, 0).toInt() != 1
+        || importedMarkedArea.sample(0, 1, 1).toInt() != 0) {
+        return 89;
+    }
+    const CollectionStyleData importedMaskStyle = CollectionStyleFile::load(
+        QDir(importedHsp.rootPath()).filePath("hsp_masks_Group_A"));
+    if (importedMaskStyle.kind != CollectionStyleData::Kind::Image
+        || importedMaskStyle.imageStyle.opacity != 0.5
+        || importedMaskStyle.imageStyle.blendMode != ImageBlendMode::Multiply
+        || importedMaskStyle.imageStyle.render.colorRamp != ColorRamp::RedBlue
+        || importedMaskStyle.imageStyle.render.tailTrim) {
+        return 90;
+    }
+    if (QFileInfo::exists(
+            QDir(importedHsp.rootPath()).filePath("hsp_masks_Group_A/empty.tif"))) {
+        return 94;
     }
 
     const QString emptyCommentHsp = QDir(directory.path()).filePath("empty_comment_hsp");

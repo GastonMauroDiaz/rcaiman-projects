@@ -41,6 +41,8 @@ struct HspImportReport
     int pgmFilesConverted = 0;
     int skyPointFilesWritten = 0;
     int sunMarkFilesWritten = 0;
+    int maskFilesWritten = 0;
+    int markedAreaFilesWritten = 0;
     int optSkyCoefTablesWritten = 0;
     QStringList groups;
     QStringList warnings;

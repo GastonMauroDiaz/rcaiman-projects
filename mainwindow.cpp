@@ -1753,11 +1753,15 @@ void MainWindow::importLegacyHspProject()
         "PGM images converted: %2\n"
         "Sky point CSV files: %3\n"
         "Sun mark CSV files: %4\n"
-        "Optimized sky coefficient TSV files: %5")
+        "HSP mask TIFF files: %5\n"
+        "HSP marked area TIFF files: %6\n"
+        "Optimized sky coefficient TSV files: %7")
         .arg(report.rawFilesCopied)
         .arg(report.pgmFilesConverted)
         .arg(report.skyPointFilesWritten)
         .arg(report.sunMarkFilesWritten)
+        .arg(report.maskFilesWritten)
+        .arg(report.markedAreaFilesWritten)
         .arg(report.optSkyCoefTablesWritten);
     if (!report.warnings.isEmpty()) {
         message += QStringLiteral(
