@@ -952,6 +952,45 @@ ProjectCleanupPlan Project::buildCleanupPlan() const
     addGroup(ProjectCleanupCategory::OtherCollections,
              "Other collections", otherCollectionFiles);
     addGroup(
+        ProjectCleanupCategory::RegistryArtifacts,
+        "Registry drafts, reviews and validations",
+        [&]() {
+            QStringList registryFiles;
+            const QDir root(m_rootPath);
+            for (const QString &directoryName : {
+                     QStringLiteral("registry_drafts"),
+                     QStringLiteral("registry_reviews"),
+                     QStringLiteral("registry_validations")}) {
+                registryFiles.append(
+                    allRelativeFiles(m_rootPath, root.filePath(directoryName)));
+            }
+            registryFiles.removeDuplicates();
+            registryFiles.sort(Qt::CaseInsensitive);
+            return registryFiles;
+        }());
+    addGroup(
+        ProjectCleanupCategory::RootFiles,
+        "Loose files in project root",
+        [&]() {
+            QStringList rootFiles;
+            const QDir root(m_rootPath);
+            const QFileInfoList entries = root.entryInfoList(
+                QDir::Files | QDir::NoSymLinks | QDir::Hidden | QDir::System,
+                QDir::Name);
+            for (const QFileInfo &entry : entries) {
+                if (entry.fileName().compare(
+                        "project.yaml", Qt::CaseInsensitive) == 0
+                    || entry.fileName().compare(
+                        "project-report.md", Qt::CaseInsensitive) == 0
+                    || entry.fileName().compare(
+                        "README.md", Qt::CaseInsensitive) == 0) {
+                    continue;
+                }
+                rootFiles.append(QDir::fromNativeSeparators(entry.fileName()));
+            }
+            return rootFiles;
+        }());
+    addGroup(
         ProjectCleanupCategory::TemporaryBackups,
         "Temporary backups",
         [&]() {
@@ -970,6 +1009,13 @@ ProjectCleanupPlan Project::buildCleanupPlan() const
                 temporaryFiles.append(
                     QDir::fromNativeSeparators(
                         QDir(m_rootPath).relativeFilePath(marksPath)));
+            }
+            const QString rstudioStatePath =
+                QDir(m_rootPath).filePath(".Rproj.user");
+            if (QFileInfo(rstudioStatePath).isDir()) {
+                temporaryFiles.append(
+                    QDir::fromNativeSeparators(
+                        QDir(m_rootPath).relativeFilePath(rstudioStatePath)));
             }
             return temporaryFiles;
         }());
@@ -1001,7 +1047,16 @@ bool Project::applyCleanupPlan(const ProjectCleanupPlan &plan,
                 return false;
             }
 
-            if (QFileInfo::exists(absolutePath) && !QFile::remove(absolutePath)) {
+            const QFileInfo cleanupTarget(absolutePath);
+            if (cleanupTarget.isDir()) {
+                if (!QDir(absolutePath).removeRecursively()) {
+                    if (errorMessage) {
+                        *errorMessage = QStringLiteral(
+                            "Could not remove folder: %1").arg(relativePath);
+                    }
+                    return false;
+                }
+            } else if (cleanupTarget.exists() && !QFile::remove(absolutePath)) {
                 if (errorMessage) {
                     *errorMessage = QStringLiteral(
                         "Could not remove file: %1").arg(relativePath);

@@ -43,6 +43,8 @@ enum class ProjectCleanupCategory {
     Segmentations,
     PointFiles,
     OtherCollections,
+    RegistryArtifacts,
+    RootFiles,
     TemporaryBackups
 };
 

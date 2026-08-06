@@ -890,5 +890,40 @@ int main(int argc, char *argv[])
     if (invalidDescriptionProject.isValid()) {
         return 64;
     }
+    const QString cleanupProjectRoot =
+        QDir(directory.path()).filePath("cleanup_project");
+    const Project cleanupProject = Project::create(
+        cleanupProjectRoot, "cleanup_project", "Cleanup test", &error);
+    if (!cleanupProject.isValid())
+        return 95;
+    QDir cleanupRoot(cleanupProjectRoot);
+    if (!cleanupRoot.mkpath(".Rproj.user/session"))
+        return 96;
+    QFile rstudioState(cleanupRoot.filePath(".Rproj.user/session/state"));
+    if (!rstudioState.open(QIODevice::WriteOnly)
+        || rstudioState.write("local state") < 0) {
+        return 97;
+    }
+    rstudioState.close();
+    QFile looseRootFile(cleanupRoot.filePath("analysis.Rproj"));
+    if (!looseRootFile.open(QIODevice::WriteOnly)
+        || looseRootFile.write("Version: 1.0") < 0) {
+        return 98;
+    }
+    looseRootFile.close();
+    QFile readmeFile(cleanupRoot.filePath("README.md"));
+    if (!readmeFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)
+        || readmeFile.write("# Keep me\n") < 0) {
+        return 99;
+    }
+    readmeFile.close();
+    const ProjectCleanupPlan cleanupPlan = cleanupProject.buildCleanupPlan();
+    if (!cleanupProject.applyCleanupPlan(cleanupPlan, &error))
+        return 100;
+    if (QFileInfo::exists(cleanupRoot.filePath(".Rproj.user"))
+        || QFileInfo::exists(cleanupRoot.filePath("analysis.Rproj"))
+        || !QFileInfo::exists(cleanupRoot.filePath("README.md"))) {
+        return 101;
+    }
     return 0;
 }

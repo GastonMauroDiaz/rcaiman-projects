@@ -354,7 +354,7 @@ void CollectionDialog::updateContractText()
                "preprocessed_image_collection or processed_image_collection "
                "because it refers to the segmentation of an image plane.";
     } else {
-        text = "General project collection for notes, documents, or auxiliary "
+        text = "General project collection for notes, documents, results, or auxiliary "
                "files. No parent required.";
     }
 

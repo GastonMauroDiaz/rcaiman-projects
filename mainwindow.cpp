@@ -5653,7 +5653,8 @@ void MainWindow::createPointGrid()
         }
     }
 
-    if (points.size() > 100000) {
+    const bool largeGrid = points.size() > 100000;
+    if (largeGrid) {
         const auto answer = QMessageBox::question(
             this,
             "Create grid",
@@ -5713,7 +5714,9 @@ void MainWindow::createPointGrid()
         const auto reply = QMessageBox::question(
             this,
             "Add layer",
-            "Add the new grid points file as a layer to the current viewer?");
+            "Add the new grid points file as a layer to the current viewer?",
+            QMessageBox::Yes | QMessageBox::No,
+            largeGrid ? QMessageBox::No : QMessageBox::Yes);
         if (reply == QMessageBox::Yes) {
             if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
                 viewer->layerManager()->addLayer(layer);
