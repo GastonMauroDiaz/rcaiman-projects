@@ -92,6 +92,7 @@
 #include <QPoint>
 #include <QPixmap>
 #include <QProcess>
+#include <QProgressBar>
 #include <QSizePolicy>
 #include <QSettings>
 #include <QSaveFile>
@@ -2032,6 +2033,10 @@ void MainWindow::extractRawData()
     if (!m_project.isValid())
         return;
 
+    ui->actionExtractRawData->setEnabled(false);
+    statusBar()->showMessage("Scanning RAW files...", 0);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
     const QString rawDir = QDir(m_project.rootPath()).filePath("raw_files");
     const QString sensorDir = QDir(m_project.rootPath()).filePath("sensor_data");
     QDir().mkpath(sensorDir);
@@ -2047,32 +2052,79 @@ void MainWindow::extractRawData()
             rawFiles.append(path);
     }
 
+    struct RawExtractionJob {
+        QString rawPath;
+        QString tiffPath;
+    };
+    QVector<RawExtractionJob> extractionJobs;
+    extractionJobs.reserve(rawFiles.size());
+    for (const QString &rawPath : std::as_const(rawFiles)) {
+        const QFileInfo fi(rawPath);
+        const QString tiffPath =
+            QDir(sensorDir).filePath(fi.completeBaseName() + ".tif");
+        if (!QFile::exists(tiffPath))
+            extractionJobs.append({rawPath, tiffPath});
+    }
+
+    auto *progress = new QProgressBar(statusBar());
+    progress->setMinimum(0);
+    progress->setMaximum(qMax(1, extractionJobs.size() + 1));
+    progress->setValue(0);
+    progress->setTextVisible(true);
+    progress->setMinimumWidth(180);
+    progress->setFormat("Preparing...");
+    statusBar()->addPermanentWidget(progress);
+    auto finishProgress = [this, progress]() {
+        statusBar()->removeWidget(progress);
+        progress->deleteLater();
+        updateProjectActions();
+    };
+
     int successCount = 0;
     int failCount = 0;
+    int processedCount = 0;
 
-    for (const QString &rawPath : rawFiles) {
-        const QFileInfo fi(rawPath);
-        const QString baseName = fi.completeBaseName();
-        const QString tiffPath = QDir(sensorDir).filePath(baseName + ".tif");
-        if (QFile::exists(tiffPath))
-            continue;
+    for (const RawExtractionJob &job : std::as_const(extractionJobs)) {
+        const QFileInfo fi(job.rawPath);
+        ++processedCount;
 
+        progress->setValue(processedCount - 1);
+        progress->setFormat(
+            QStringLiteral("RAW %1/%2")
+                .arg(processedCount)
+                .arg(extractionJobs.size()));
         statusBar()->showMessage(
-            QStringLiteral("Extracting: %1").arg(fi.fileName()), 0);
+            QStringLiteral("Extracting raw data and metadata: %1/%2 %3")
+                .arg(processedCount)
+                .arg(extractionJobs.size())
+                .arg(fi.fileName()),
+            0);
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
         QString errorMsg;
-        if (RawReader::extractSensorData(rawPath, tiffPath, &errorMsg))
+        if (RawReader::extractSensorData(job.rawPath, job.tiffPath, &errorMsg))
             ++successCount;
         else
             ++failCount;
+
+        progress->setValue(processedCount);
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
 
-    statusBar()->showMessage("Writing acquisition metadata sidecars...", 0);
+    progress->setValue(extractionJobs.size());
+    progress->setFormat("Metadata");
+    statusBar()->showMessage(
+        "Writing acquisition metadata sidecars...", 0);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
     AcquisitionMetadataSummary metadataSummary;
     QString metadataError;
     const bool metadataWritten = AcquisitionMetadata::regenerate(
         m_project.rootPath(), &metadataSummary, &metadataError);
+    progress->setValue(progress->maximum());
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
+    finishProgress();
     statusBar()->showMessage(
         QStringLiteral(
             "Extraction complete: %1 TIFF(s) created, %2 failed; "
@@ -2104,7 +2156,6 @@ void MainWindow::extractRawData()
             this, "Extract raw data and metadata", details.join("\n"));
     }
 
-    updateProjectActions();
     refreshReloadableArtifactWatchers();
 }
 
