@@ -411,7 +411,7 @@ RasterData rasterizePolygons(int width,
             for (int col = colStart; col <= colEnd; ++col) {
                 const QPointF center(col + 0.5, row + 0.5);
                 if (pointInPolygon(center, polygon.vertices))
-                    pixels[static_cast<qsizetype>(row) * width + col] = 1;
+                    pixels[static_cast<qsizetype>(row) * width + col] = 255;
             }
         }
     }

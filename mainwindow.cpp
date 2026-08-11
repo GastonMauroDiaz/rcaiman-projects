@@ -255,7 +255,6 @@ bool validateBinaryMask(const RasterData &mask, QString *errorMessage = nullptr)
         return false;
     }
 
-    QSet<int> uniqueValues;
     const qsizetype pixelCount =
         static_cast<qsizetype>(mask.width()) * mask.height();
     for (qsizetype offset = 0; offset < pixelCount; ++offset) {
@@ -264,17 +263,8 @@ bool validateBinaryMask(const RasterData &mask, QString *errorMessage = nullptr)
             if (errorMessage) {
                 *errorMessage = QStringLiteral(
                     "The selected mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
-            }
-            return false;
-        }
-        uniqueValues.insert(value);
-        if (uniqueValues.size() > 2
-            || (uniqueValues.contains(1) && uniqueValues.contains(255))) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral(
-                    "The selected mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
+                    "Binary masks must contain only 0/255 values, "
+                    "or legacy 0/1 values.");
             }
             return false;
         }
@@ -5650,7 +5640,7 @@ void MainWindow::createPointGrid()
         for (int col = 0; col < mask.width(); col += stride) {
             const int value =
                 maskValues[static_cast<qsizetype>(row) * mask.width() + col];
-            if (value == 1 || value == 255)
+            if (value != 0)
                 points.append(QPoint(col, row));
         }
     }
@@ -5866,7 +5856,6 @@ void MainWindow::selectPointsByMask()
         return;
     }
 
-    QSet<int> uniqueValues;
     const qsizetype pixelCount =
         static_cast<qsizetype>(mask.width()) * mask.height();
     for (qsizetype offset = 0; offset < pixelCount; ++offset) {
@@ -5875,16 +5864,8 @@ void MainWindow::selectPointsByMask()
             QMessageBox::warning(
                 this, "Select by mask",
                 "The selected mask is not binary.\n\n"
-                "Binary masks must contain only 0/1 or 0/255 values.");
-            return;
-        }
-        uniqueValues.insert(value);
-        if (uniqueValues.size() > 2
-            || (uniqueValues.contains(1) && uniqueValues.contains(255))) {
-            QMessageBox::warning(
-                this, "Select by mask",
-                "The selected mask is not binary.\n\n"
-                "Binary masks must contain only 0/1 or 0/255 values.");
+                "Binary masks must contain only 0/255 values, "
+                "or legacy 0/1 values.");
             return;
         }
     }
@@ -5901,7 +5882,7 @@ void MainWindow::selectPointsByMask()
         }
         const int value =
             maskValues[static_cast<qsizetype>(row) * mask.width() + col];
-        if (value == 1 || value == 255)
+        if (value != 0)
             selectedIndices.insert(index);
     }
 

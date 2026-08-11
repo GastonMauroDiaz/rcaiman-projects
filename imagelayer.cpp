@@ -42,6 +42,53 @@
 
 namespace {
 
+constexpr quint8 BinaryMaskForegroundValue = 255;
+
+bool normalizeBinaryMaskToImageJValues(RasterData &data,
+                                       QString *errorMessage,
+                                       bool *changed = nullptr)
+{
+    if (changed)
+        *changed = false;
+
+    if (data.bands() != 1
+        || data.dataType() != RasterData::DataType::UInt8) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "Only single-band UInt8 TIFF masks can be edited.");
+        return false;
+    }
+
+    quint8 *pixels = reinterpret_cast<quint8 *>(data.rawData().data());
+    if (!pixels) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("The mask pixels could not be edited.");
+        return false;
+    }
+
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(data.width()) * data.height();
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        quint8 &value = pixels[offset];
+        if (value == 0 || value == BinaryMaskForegroundValue)
+            continue;
+        if (value == 1) {
+            value = BinaryMaskForegroundValue;
+            if (changed)
+                *changed = true;
+            continue;
+        }
+        if (errorMessage) {
+            *errorMessage = QStringLiteral(
+                "The active mask is not binary.\n\n"
+                "Binary masks must contain only 0/255 values, "
+                "or legacy 0/1 values.");
+        }
+        return false;
+    }
+    return true;
+}
+
 class BlendedPixmapItem : public QGraphicsPixmapItem
 {
 public:
@@ -208,6 +255,23 @@ bool ImageLayer::setBinaryMaskEditMode(bool enabled,
         }
         if (!ensureBinaryMaskBackup(errorMessage))
             return false;
+        bool normalized = false;
+        if (!normalizeBinaryMaskToImageJValues(m_rasterData,
+                                               errorMessage,
+                                               &normalized)) {
+            removeBinaryMaskBackup();
+            return false;
+        }
+        if (normalized) {
+            if (!TiffWriter::write(sourcePath(), m_rasterData, errorMessage)) {
+                removeBinaryMaskBackup();
+                return false;
+            }
+            m_renderer.clearCache();
+            ++m_dataRevision;
+            refreshRenderedImageNow();
+            emit dataChanged();
+        }
         m_binaryMaskEditMode = true;
         return true;
     }
@@ -276,7 +340,7 @@ bool ImageLayer::paintBinaryMaskAtScenePos(const QPointF &scenePos,
     const double radius = qMax(0.5, brushSize / 2.0);
     const double radiusSquared = radius * radius;
     const int pixelRadius = static_cast<int>(std::ceil(radius));
-    const quint8 value = erase ? 0 : 1;
+    const quint8 value = erase ? 0 : BinaryMaskForegroundValue;
     bool changed = false;
 
     quint8 *pixels = reinterpret_cast<quint8 *>(m_rasterData.rawData().data());
@@ -340,39 +404,16 @@ bool ImageLayer::invertConnectedBinaryMaskRegionAtScenePos(
         return false;
     }
 
-    bool hasOne = false;
-    bool has255 = false;
-    const qsizetype pixelCount =
-        static_cast<qsizetype>(width) * height;
-    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
-        const quint8 value = pixels[offset];
-        if (value == 1) {
-            hasOne = true;
-        } else if (value == 255) {
-            has255 = true;
-        } else if (value != 0) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral(
-                    "The active mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
-            }
-            return false;
-        }
-        if (hasOne && has255) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral(
-                    "The active mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
-            }
-            return false;
-        }
+    bool normalized = false;
+    if (!normalizeBinaryMaskToImageJValues(m_rasterData,
+                                           errorMessage,
+                                           &normalized)) {
+        return false;
     }
-
-    const int foregroundValue = has255 ? 255 : 1;
     const int seedIndex = seedRow * width + seedCol;
     const quint8 seedValue = pixels[seedIndex];
     const quint8 replacementValue = seedValue == 0
-        ? static_cast<quint8>(foregroundValue)
+        ? BinaryMaskForegroundValue
         : static_cast<quint8>(0);
     if (seedValue == replacementValue)
         return false;
@@ -433,37 +474,17 @@ bool ImageLayer::invertBinaryMask(int *changedPixelCount,
         return false;
     }
 
-    bool hasOne = false;
-    bool has255 = false;
-    const qsizetype pixelCount =
-        static_cast<qsizetype>(m_rasterData.width()) * m_rasterData.height();
-    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
-        const quint8 value = pixels[offset];
-        if (value == 1) {
-            hasOne = true;
-        } else if (value == 255) {
-            has255 = true;
-        } else if (value != 0) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral(
-                    "The active mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
-            }
-            return false;
-        }
-        if (hasOne && has255) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral(
-                    "The active mask is not binary.\n\n"
-                    "Binary masks must contain only 0/1 or 0/255 values.");
-            }
-            return false;
-        }
+    bool normalized = false;
+    if (!normalizeBinaryMaskToImageJValues(m_rasterData,
+                                           errorMessage,
+                                           &normalized)) {
+        return false;
     }
 
-    const quint8 foregroundValue = has255 ? 255 : 1;
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(m_rasterData.width()) * m_rasterData.height();
     for (qsizetype offset = 0; offset < pixelCount; ++offset)
-        pixels[offset] = pixels[offset] == 0 ? foregroundValue : 0;
+        pixels[offset] = pixels[offset] == 0 ? BinaryMaskForegroundValue : 0;
 
     if (changedPixelCount)
         *changedPixelCount = static_cast<int>(
@@ -481,6 +502,18 @@ bool ImageLayer::saveBinaryMask(QString *errorMessage)
         if (errorMessage)
             *errorMessage = QStringLiteral("No editable binary mask is active.");
         return false;
+    }
+    bool normalized = false;
+    if (!normalizeBinaryMaskToImageJValues(m_rasterData,
+                                           errorMessage,
+                                           &normalized)) {
+        return false;
+    }
+    if (normalized) {
+        m_renderer.clearCache();
+        ++m_dataRevision;
+        refreshRenderedImageNow();
+        emit dataChanged();
     }
     return TiffWriter::write(sourcePath(), m_rasterData, errorMessage);
 }

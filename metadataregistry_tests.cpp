@@ -276,8 +276,8 @@ int main(int argc, char *argv[])
         &error);
     if (importedMask.isNull()
         || importedMask.dataType() != RasterData::DataType::UInt8
-        || importedMask.sample(0, 0, 0).toInt() != 1
-        || importedMask.sample(0, 1, 1).toInt() != 1) {
+        || importedMask.sample(0, 0, 0).toInt() != 255
+        || importedMask.sample(0, 1, 1).toInt() != 255) {
         return 88;
     }
     RasterData importedMarkedArea = TiffReader::load(
@@ -285,7 +285,7 @@ int main(int argc, char *argv[])
         &error);
     if (importedMarkedArea.isNull()
         || importedMarkedArea.dataType() != RasterData::DataType::UInt8
-        || importedMarkedArea.sample(0, 0, 0).toInt() != 1
+        || importedMarkedArea.sample(0, 0, 0).toInt() != 255
         || importedMarkedArea.sample(0, 1, 1).toInt() != 0) {
         return 89;
     }
