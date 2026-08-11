@@ -24,13 +24,18 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollBar>
 #include <QSet>
 #include <QTableWidget>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 MetadataRulesDialog::MetadataRulesDialog(
     const QList<MetadataRuleAnalysis> &analysis,
@@ -48,9 +53,17 @@ MetadataRulesDialog::MetadataRulesDialog(
     intro->setWordWrap(true);
     layout->addWidget(intro);
 
-    m_draftId = new QLineEdit(this);
-    m_draftId->setPlaceholderText("draft_id");
-    layout->addWidget(m_draftId);
+    auto *toolsLayout = new QHBoxLayout;
+    m_filterEdit = new QLineEdit(this);
+    m_filterEdit->setPlaceholderText("Filter tags...");
+    toolsLayout->addWidget(m_filterEdit, 1);
+    m_filterCountLabel = new QLabel(this);
+    toolsLayout->addWidget(m_filterCountLabel);
+    auto *moveTopButton = new QPushButton("Move to Top", this);
+    auto *moveBottomButton = new QPushButton("Move to Bottom", this);
+    toolsLayout->addWidget(moveTopButton);
+    toolsLayout->addWidget(moveBottomButton);
+    layout->addLayout(toolsLayout);
 
     m_table = new QTableWidget(analysis.size(), 9, this);
     m_table->setHorizontalHeaderLabels({
@@ -58,6 +71,7 @@ MetadataRulesDialog::MetadataRulesDialog(
         "Constant", "Rule ID", "Label", "Expected"
     });
     m_table->setAlternatingRowColors(true);
+    m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     for (int row = 0; row < analysis.size(); ++row) {
         const MetadataRuleAnalysis &entry = analysis[row];
@@ -88,6 +102,13 @@ MetadataRulesDialog::MetadataRulesDialog(
     m_table->horizontalHeader()->setSectionResizeMode(
         3, QHeaderView::Stretch);
     layout->addWidget(m_table);
+    connect(m_filterEdit, &QLineEdit::textChanged,
+            this, &MetadataRulesDialog::applyFilter);
+    connect(moveTopButton, &QPushButton::clicked,
+            this, &MetadataRulesDialog::moveSelectedRowsToTop);
+    connect(moveBottomButton, &QPushButton::clicked,
+            this, &MetadataRulesDialog::moveSelectedRowsToBottom);
+    updateFilterCount();
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
@@ -96,11 +117,6 @@ MetadataRulesDialog::MetadataRulesDialog(
     connect(buttons, &QDialogButtonBox::rejected,
             this, &MetadataRulesDialog::reject);
     layout->addWidget(buttons);
-}
-
-QString MetadataRulesDialog::draftId() const
-{
-    return MetadataRegistry::snakeCase(m_draftId->text().trimmed());
 }
 
 QList<MetadataRule> MetadataRulesDialog::selectedRules() const
@@ -124,10 +140,6 @@ QList<MetadataRule> MetadataRulesDialog::selectedRules() const
 
 void MetadataRulesDialog::accept()
 {
-    if (m_draftId->text().trimmed().isEmpty()) {
-        QMessageBox::warning(this, "Draft ID", "Enter a draft identifier.");
-        return;
-    }
     const QList<MetadataRule> rules = selectedRules();
     if (rules.isEmpty()) {
         QMessageBox::warning(
@@ -160,9 +172,9 @@ void MetadataRulesDialog::accept()
         }
 
         const int sourceRow = [&]() {
-            for (int row = 0; row < m_table->rowCount(); ++row) {
-                if (m_table->item(row, 1)->text() == rule.group
-                    && m_table->item(row, 2)->text() == rule.tag)
+            for (int row = 0; row < m_analysis.size(); ++row) {
+                if (m_analysis[row].group == rule.group
+                    && m_analysis[row].tag == rule.tag)
                     return row;
             }
             return -1;
@@ -179,4 +191,136 @@ void MetadataRulesDialog::accept()
         keys.insert(rule.key());
     }
     QDialog::accept();
+}
+
+MetadataRulesDialog::RowData MetadataRulesDialog::rowData(int row) const
+{
+    RowData data;
+    const auto *use = qobject_cast<QCheckBox *>(m_table->cellWidget(row, 0));
+    data.use = use && use->isChecked();
+    for (int column = 1; column < m_table->columnCount(); ++column) {
+        const auto *item = m_table->item(row, column);
+        data.cells.append(item ? item->text() : QString());
+    }
+    return data;
+}
+
+void MetadataRulesDialog::setRowData(int row, const RowData &data)
+{
+    auto *use = new QCheckBox(m_table);
+    use->setChecked(data.use);
+    m_table->setCellWidget(row, 0, use);
+    for (int column = 1; column < m_table->columnCount(); ++column) {
+        const int cellIndex = column - 1;
+        m_table->setItem(
+            row, column,
+            new QTableWidgetItem(
+                cellIndex < data.cells.size() ? data.cells[cellIndex]
+                                              : QString()));
+    }
+}
+
+QList<int> MetadataRulesDialog::selectedTableRows() const
+{
+    QSet<int> seen;
+    QList<int> rows;
+    const auto selected = m_table->selectionModel()->selectedRows();
+    for (const QModelIndex &index : selected) {
+        if (index.column() != 0 || seen.contains(index.row()))
+            continue;
+        seen.insert(index.row());
+        rows.append(index.row());
+    }
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
+void MetadataRulesDialog::moveSelectedRows(bool toTop)
+{
+    const QList<int> rows = selectedTableRows();
+    if (rows.isEmpty())
+        return;
+
+    const int verticalScroll = m_table->verticalScrollBar()->value();
+    const int horizontalScroll = m_table->horizontalScrollBar()->value();
+
+    QList<RowData> movedRows;
+    for (int row : rows)
+        movedRows.append(rowData(row));
+
+    QList<RowData> remainingRows;
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        if (!rows.contains(row))
+            remainingRows.append(rowData(row));
+    }
+
+    QList<RowData> reorderedRows;
+    if (toTop) {
+        reorderedRows = movedRows;
+        reorderedRows.append(remainingRows);
+    } else {
+        reorderedRows = remainingRows;
+        reorderedRows.append(movedRows);
+    }
+
+    m_table->clearContents();
+    m_table->setRowCount(reorderedRows.size());
+    for (int row = 0; row < reorderedRows.size(); ++row)
+        setRowData(row, reorderedRows[row]);
+
+    m_table->clearSelection();
+    const int firstMovedRow = toTop ? 0 : remainingRows.size();
+    for (int offset = 0; offset < movedRows.size(); ++offset)
+        m_table->selectRow(firstMovedRow + offset);
+    applyFilter();
+    m_table->verticalScrollBar()->setValue(verticalScroll);
+    m_table->horizontalScrollBar()->setValue(horizontalScroll);
+}
+
+void MetadataRulesDialog::moveSelectedRowsToTop()
+{
+    moveSelectedRows(true);
+}
+
+void MetadataRulesDialog::moveSelectedRowsToBottom()
+{
+    moveSelectedRows(false);
+}
+
+void MetadataRulesDialog::applyFilter()
+{
+    const QString needle = m_filterEdit->text().trimmed();
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        m_table->setRowHidden(
+            row,
+            !needle.isEmpty() && !rowMatchesFilter(row, needle));
+    }
+    updateFilterCount();
+}
+
+void MetadataRulesDialog::updateFilterCount()
+{
+    int visible = 0;
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        if (!m_table->isRowHidden(row))
+            ++visible;
+    }
+    if (!m_filterCountLabel)
+        return;
+    if (visible == m_table->rowCount())
+        m_filterCountLabel->setText(QString("%1 tags").arg(visible));
+    else
+        m_filterCountLabel->setText(
+            QString("%1/%2 tags").arg(visible).arg(m_table->rowCount()));
+}
+
+bool MetadataRulesDialog::rowMatchesFilter(
+    int row, const QString &needle) const
+{
+    for (int column = 1; column < m_table->columnCount(); ++column) {
+        const auto *item = m_table->item(row, column);
+        if (item && item->text().contains(needle, Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
 }

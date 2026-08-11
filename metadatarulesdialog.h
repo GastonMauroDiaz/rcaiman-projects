@@ -25,7 +25,9 @@
 #include "metadataregistry.h"
 
 #include <QDialog>
+#include <QStringList>
 
+class QLabel;
 class QLineEdit;
 class QTableWidget;
 
@@ -38,15 +40,30 @@ public:
         const QList<MetadataRuleAnalysis> &analysis,
         QWidget *parent = nullptr);
 
-    QString draftId() const;
     QList<MetadataRule> selectedRules() const;
 
 protected:
     void accept() override;
 
 private:
+    struct RowData {
+        bool use = false;
+        QStringList cells;
+    };
+
+    RowData rowData(int row) const;
+    void setRowData(int row, const RowData &data);
+    QList<int> selectedTableRows() const;
+    void moveSelectedRows(bool toTop);
+    void moveSelectedRowsToTop();
+    void moveSelectedRowsToBottom();
+    void applyFilter();
+    void updateFilterCount();
+    bool rowMatchesFilter(int row, const QString &needle) const;
+
     QList<MetadataRuleAnalysis> m_analysis;
-    QLineEdit *m_draftId = nullptr;
+    QLineEdit *m_filterEdit = nullptr;
+    QLabel *m_filterCountLabel = nullptr;
     QTableWidget *m_table = nullptr;
 };
 

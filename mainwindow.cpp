@@ -4863,20 +4863,68 @@ void MainWindow::buildMetadataRules()
     if (dialog.exec() != QDialog::Accepted)
         return;
 
-    const QString draftPath =
-        QDir(m_project.rootPath()).filePath(
-            "registry_drafts/" + dialog.draftId() + ".yaml");
+    const QString draftDir =
+        QDir(m_project.rootPath()).filePath("registry_drafts");
+    if (!QDir().mkpath(draftDir)) {
+        QMessageBox::critical(
+            this, "Save Metadata Rules",
+            "Could not create the registry_drafts folder.");
+        return;
+    }
+
+    QString defaultDraftName =
+        MetadataRegistry::snakeCase(QFileInfo(m_project.rootPath()).fileName());
+    if (defaultDraftName.isEmpty())
+        defaultDraftName = "metadata_rules_draft";
+
+    QFileDialog saveDialog(this, "Save Metadata Rules Draft");
+    saveDialog.setAcceptMode(QFileDialog::AcceptSave);
+    saveDialog.setFileMode(QFileDialog::AnyFile);
+    saveDialog.setDirectory(draftDir);
+    saveDialog.setNameFilter("YAML files (*.yaml *.yml)");
+    saveDialog.setDefaultSuffix("yaml");
+    saveDialog.setOption(QFileDialog::DontConfirmOverwrite, true);
+    saveDialog.selectFile(defaultDraftName + ".yaml");
+    if (saveDialog.exec() != QDialog::Accepted)
+        return;
+
+    QString draftPath = saveDialog.selectedFiles().value(0);
+    QFileInfo draftInfo(draftPath);
+    if (draftInfo.suffix().isEmpty()) {
+        draftPath += ".yaml";
+        draftInfo.setFile(draftPath);
+    }
+    const QString suffix = draftInfo.suffix().toLower();
+    if (suffix != "yaml" && suffix != "yml") {
+        QMessageBox::warning(
+            this, "Save Metadata Rules",
+            "Metadata rules drafts must be saved as .yaml or .yml files.");
+        return;
+    }
+    if (!pathBelongsToProject(m_project.rootPath(), draftPath)) {
+        QMessageBox::warning(
+            this, "Portable Metadata Draft",
+            "Save the metadata rules draft inside the current project.");
+        return;
+    }
+
     const QString snippetPath =
         QFileInfo(draftPath).absolutePath() + "/"
         + QFileInfo(draftPath).completeBaseName() + "_snippet.R";
-    if ((QFileInfo::exists(draftPath) || QFileInfo::exists(snippetPath))
-        && QMessageBox::question(
-            this, "Replace Draft",
-            "A draft or R snippet with this ID already exists. "
-            "Replace both artifacts?",
-               QMessageBox::Yes | QMessageBox::No,
-               QMessageBox::No) != QMessageBox::Yes) {
-        return;
+    if (QFileInfo::exists(draftPath) || QFileInfo::exists(snippetPath)) {
+        QStringList artifacts;
+        if (QFileInfo::exists(draftPath))
+            artifacts.append(QFileInfo(draftPath).fileName());
+        if (QFileInfo::exists(snippetPath))
+            artifacts.append(QFileInfo(snippetPath).fileName());
+        if (QMessageBox::question(
+                this, "Replace Metadata Rules Draft",
+                QString("This will overwrite:\n- %1\n\nContinue?")
+                    .arg(artifacts.join("\n- ")),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
     }
     if (!MetadataRegistry::writeDraft(
             draftPath, m_project.rootPath(), files,
