@@ -27,6 +27,7 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QPushButton>
+#include <QSignalBlocker>
 
 PointLayerPropertiesWidget::PointLayerPropertiesWidget(QWidget *parent)
     : QWidget(parent)
@@ -95,8 +96,10 @@ void PointLayerPropertiesWidget::setLayer(PointLayer *layer)
     if (m_layer)
         disconnect(m_layer, nullptr, this, nullptr);
 
+    m_updating = true;
     m_layer = layer;
     updateLabelFields();
+    m_updating = false;
 
     if (m_layer) {
         connect(m_layer, &PointLayer::styleChanged,
@@ -129,6 +132,7 @@ void PointLayerPropertiesWidget::updateFromLayer()
 
 void PointLayerPropertiesWidget::updateLabelFields()
 {
+    const QSignalBlocker blocker(m_labelCombo);
     m_labelCombo->clear();
     m_labelCombo->addItem("None", QString());
     m_labelCombo->addItem("ID", QStringLiteral("__id__"));

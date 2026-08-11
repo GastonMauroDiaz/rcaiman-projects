@@ -143,6 +143,7 @@ private:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void updateProjectExplorer();
+    void updateProjectHeader();
     void updateProjectActions();
     ImageViewer *currentImageViewer() const;
     QString selectedProjectPath() const;
@@ -196,6 +197,9 @@ private:
     QToolButton *m_newFolderButton = nullptr;
     QCheckBox *m_starredOnlyCheck = nullptr;
     QLabel *m_projectStarredEmptyLabel = nullptr;
+    QWidget *m_projectHeaderWidget = nullptr;
+    QLabel *m_projectDescriptionLabel = nullptr;
+    QLabel *m_projectPathLabel = nullptr;
     QComboBox *m_projectSortCombo = nullptr;
     QDoubleSpinBox *m_zoomPercentSpin = nullptr;
     QSlider *m_maskBrushSlider = nullptr;

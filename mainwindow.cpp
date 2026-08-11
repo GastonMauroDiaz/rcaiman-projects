@@ -120,6 +120,40 @@ enum class ProjectExplorerSortMode {
     Type = 1
 };
 
+class ElidedLabel : public QLabel
+{
+public:
+    explicit ElidedLabel(Qt::TextElideMode mode, QWidget *parent = nullptr)
+        : QLabel(parent)
+        , m_mode(mode)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    }
+
+    void setFullText(const QString &text)
+    {
+        m_fullText = text;
+        setToolTip(text);
+        updateElidedText();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        updateElidedText();
+    }
+
+private:
+    void updateElidedText()
+    {
+        setText(fontMetrics().elidedText(m_fullText, m_mode, width()));
+    }
+
+    QString m_fullText;
+    Qt::TextElideMode m_mode;
+};
+
 struct MaskCandidate {
     Collection collection;
     QString path;
@@ -922,7 +956,28 @@ MainWindow::MainWindow(QWidget *parent)
     projectExplorerToolbarLayout->addWidget(m_starredOnlyCheck);
     projectExplorerToolbarLayout->addStretch(1);
     projectExplorerToolbarLayout->addWidget(m_projectSortCombo);
-    ui->dockProjectExplorerLayout->insertWidget(0, projectExplorerToolbar);
+
+    m_projectHeaderWidget = new QWidget(this);
+    auto *projectHeaderLayout = new QVBoxLayout(m_projectHeaderWidget);
+    projectHeaderLayout->setContentsMargins(4, 2, 4, 6);
+    projectHeaderLayout->setSpacing(1);
+    m_projectDescriptionLabel =
+        new ElidedLabel(Qt::ElideRight, m_projectHeaderWidget);
+    QFont descriptionFont = m_projectDescriptionLabel->font();
+    descriptionFont.setBold(true);
+    m_projectDescriptionLabel->setFont(descriptionFont);
+    m_projectDescriptionLabel->setStyleSheet(
+        "QLabel { color: #334155; }");
+    m_projectPathLabel =
+        new ElidedLabel(Qt::ElideMiddle, m_projectHeaderWidget);
+    m_projectPathLabel->setStyleSheet(
+        "QLabel { color: #64748b; font-size: 11px; }");
+    projectHeaderLayout->addWidget(m_projectDescriptionLabel);
+    projectHeaderLayout->addWidget(m_projectPathLabel);
+    m_projectHeaderWidget->setVisible(false);
+
+    ui->dockProjectExplorerLayout->insertWidget(0, m_projectHeaderWidget);
+    ui->dockProjectExplorerLayout->insertWidget(1, projectExplorerToolbar);
     m_projectStarredEmptyLabel = new QLabel(
         "No starred files or folders.", this);
     m_projectStarredEmptyLabel->setWordWrap(true);
@@ -930,7 +985,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectStarredEmptyLabel->setStyleSheet(
         "QLabel { color: #6f7f90; padding: 8px 4px; }");
     m_projectStarredEmptyLabel->setVisible(false);
-    ui->dockProjectExplorerLayout->insertWidget(1, m_projectStarredEmptyLabel);
+    ui->dockProjectExplorerLayout->insertWidget(2, m_projectStarredEmptyLabel);
     connect(m_newFolderButton, &QToolButton::clicked,
             this, &MainWindow::createProjectFolder);
     connect(m_starredOnlyCheck, &QCheckBox::toggled,
@@ -3978,6 +4033,7 @@ void MainWindow::closeCurrentProject()
     m_projectFileSystemModel->setProjectRoot(QString());
     ui->projectTree->setRootIndex(projectProxyIndex(
         m_projectFileSystemModel->setRootPath(QString())));
+    updateProjectHeader();
     setWindowTitle("rcaiman-projects");
     updateProjectActions();
     updateViewerEmptyState();
@@ -4542,6 +4598,8 @@ void MainWindow::restoreProjectSession()
 
 void MainWindow::updateProjectExplorer()
 {
+    updateProjectHeader();
+
     if (!m_project.isValid()) {
         m_projectFileMarks.clear();
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
@@ -4561,6 +4619,39 @@ void MainWindow::updateProjectExplorer()
     refreshProjectExplorerRootIndex();
     ui->projectTree->setColumnWidth(0, 220);
     updateProjectExplorerStarredEmptyMessage();
+}
+
+void MainWindow::updateProjectHeader()
+{
+    if (!m_projectHeaderWidget
+        || !m_projectDescriptionLabel
+        || !m_projectPathLabel) {
+        return;
+    }
+
+    const bool hasProject = m_project.isValid();
+    m_projectHeaderWidget->setVisible(hasProject);
+    if (!hasProject)
+        return;
+
+    QString description = m_project.description().trimmed();
+    if (description.isEmpty())
+        description = m_project.name();
+    const QString path =
+        QDir::toNativeSeparators(QDir::cleanPath(m_project.rootPath()));
+
+    if (auto *label =
+            dynamic_cast<ElidedLabel*>(m_projectDescriptionLabel)) {
+        label->setFullText(description);
+    } else {
+        m_projectDescriptionLabel->setText(description);
+    }
+
+    if (auto *label = dynamic_cast<ElidedLabel*>(m_projectPathLabel)) {
+        label->setFullText(path);
+    } else {
+        m_projectPathLabel->setText(path);
+    }
 }
 
 void MainWindow::refreshProjectExplorerRootIndex()
@@ -5660,11 +5751,15 @@ void MainWindow::createPointGrid()
 
     const QString defaultName =
         QFileInfo(maskCandidate.path).completeBaseName() + ".csv";
-    QString savePath = QFileDialog::getSaveFileName(
-        this,
-        "Create grid CSV",
-        QDir(selectedPointCollection.dirPath).filePath(defaultName),
-        "CSV files (*.csv)");
+    QFileDialog saveDialog(this, "Create grid CSV");
+    saveDialog.setAcceptMode(QFileDialog::AcceptSave);
+    saveDialog.setNameFilter("CSV files (*.csv)");
+    saveDialog.setDefaultSuffix("csv");
+    saveDialog.setOption(QFileDialog::DontConfirmOverwrite, true);
+    saveDialog.selectFile(QDir(selectedPointCollection.dirPath).filePath(defaultName));
+    if (saveDialog.exec() != QDialog::Accepted)
+        return;
+    QString savePath = saveDialog.selectedFiles().value(0);
     if (savePath.isEmpty())
         return;
     if (!savePath.endsWith(".csv", Qt::CaseInsensitive))

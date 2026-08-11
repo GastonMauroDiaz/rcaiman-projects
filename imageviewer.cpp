@@ -490,6 +490,11 @@ void ImageViewer::drawForeground(QPainter *painter, const QRectF &rect)
 void ImageViewer::wheelEvent(QWheelEvent *event)
 {
     constexpr double zoomFactor = 1.15;
+    if (event->modifiers().testFlag(Qt::AltModifier)) {
+        event->ignore();
+        return;
+    }
+
     m_autoFitImage = false;
 
     if (event->angleDelta().y() > 0)
