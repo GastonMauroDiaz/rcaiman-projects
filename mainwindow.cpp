@@ -780,8 +780,10 @@ QVector<ExampleProjectInfo> discoverExampleProjects()
             info.path = project.rootPath();
             info.name = project.name();
             info.description = project.description();
-            info.readme = readTextFile(
-                QDir(project.rootPath()).filePath("README.md"));
+            const QDir projectDir(project.rootPath());
+            info.guide = readTextFile(projectDir.filePath("guidelines.md"));
+            if (info.guide.trimmed().isEmpty())
+                info.guide = readTextFile(projectDir.filePath("README.md"));
             examples.append(info);
         }
     }

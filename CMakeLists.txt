@@ -149,6 +149,8 @@ add_custom_command(TARGET rcaiman_projects POST_BUILD
         "${EXIFTOOL_RUNTIME_DIR}"
 )
 add_custom_command(TARGET rcaiman_projects POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -rf
+        "$<TARGET_FILE_DIR:rcaiman_projects>/examples"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/examples"
         "$<TARGET_FILE_DIR:rcaiman_projects>/examples"

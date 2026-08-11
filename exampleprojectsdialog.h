@@ -33,7 +33,7 @@ struct ExampleProjectInfo
     QString path;
     QString name;
     QString description;
-    QString readme;
+    QString guide;
 };
 
 class ExampleProjectsDialog : public QDialog

@@ -93,7 +93,7 @@ void ExampleProjectsDialog::updateDetails(int row)
         QStringLiteral("## %1\n\n").arg(example.name);
     if (!example.description.isEmpty())
         markdown += example.description + "\n\n";
-    if (!example.readme.trimmed().isEmpty())
-        markdown += "---\n\n" + example.readme;
+    if (!example.guide.trimmed().isEmpty())
+        markdown += "---\n\n" + example.guide;
     m_details->setMarkdown(markdown);
 }
