@@ -50,6 +50,8 @@ private:
     bool isDirectProjectChild(const QFileInfo &info) const;
     QString projectRelativePath(const QFileInfo &info) const;
     QString collectionClass(const QString &directoryPath) const;
+    bool reservedDirectoryShowsEmptyLabel(const QString &name) const;
+    int directFileCount(const QFileInfo &info) const;
     int relevantFileCount(const QFileInfo &info,
                           const QString &collectionClass) const;
 

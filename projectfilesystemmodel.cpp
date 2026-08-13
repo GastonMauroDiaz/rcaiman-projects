@@ -110,6 +110,10 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
         reserved
         && (info.fileName().compare("raw_files", Qt::CaseInsensitive) == 0
             || info.fileName().compare("sensor_data", Qt::CaseInsensitive) == 0);
+    if (reserved && reservedDirectoryShowsEmptyLabel(info.fileName())
+        && directFileCount(info) == 0) {
+        return QStringLiteral("%1 (empty)").arg(info.fileName());
+    }
     if (className.isEmpty() && !countedReserved)
         return QFileSystemModel::data(index, role);
 
@@ -216,6 +220,22 @@ QString ProjectFileSystemModel::collectionClass(
             return valueAfterColon(line);
     }
     return {};
+}
+
+bool ProjectFileSystemModel::reservedDirectoryShowsEmptyLabel(
+    const QString &name) const
+{
+    return name.compare("registry_drafts", Qt::CaseInsensitive) == 0
+        || name.compare("registry_reviews", Qt::CaseInsensitive) == 0
+        || name.compare("registry_validations", Qt::CaseInsensitive) == 0
+        || name.compare("scripts", Qt::CaseInsensitive) == 0;
+}
+
+int ProjectFileSystemModel::directFileCount(const QFileInfo &info) const
+{
+    return QDir(info.absoluteFilePath())
+        .entryList(QDir::Files | QDir::NoSymLinks)
+        .size();
 }
 
 int ProjectFileSystemModel::relevantFileCount(

@@ -240,6 +240,32 @@ bool ImageLayer::isEditableBinaryMask() const
         && m_rasterData.height() > 0;
 }
 
+bool ImageLayer::binaryMaskNeedsImageJNormalization() const
+{
+    if (!isEditableBinaryMask())
+        return false;
+
+    const quint8 *pixels =
+        reinterpret_cast<const quint8 *>(m_rasterData.rawData().constData());
+    if (!pixels)
+        return false;
+
+    const qsizetype pixelCount =
+        static_cast<qsizetype>(m_rasterData.width()) * m_rasterData.height();
+    bool hasLegacyForeground = false;
+    for (qsizetype offset = 0; offset < pixelCount; ++offset) {
+        const quint8 value = pixels[offset];
+        if (value == 1) {
+            hasLegacyForeground = true;
+            continue;
+        }
+        if (value == 0 || value == BinaryMaskForegroundValue)
+            continue;
+        return false;
+    }
+    return hasLegacyForeground;
+}
+
 bool ImageLayer::setBinaryMaskEditMode(bool enabled,
                                        QString *errorMessage)
 {

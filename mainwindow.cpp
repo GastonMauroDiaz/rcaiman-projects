@@ -93,6 +93,7 @@
 #include <QPixmap>
 #include <QProcess>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QSizePolicy>
 #include <QSettings>
 #include <QSaveFile>
@@ -3202,6 +3203,35 @@ void MainWindow::onEditMaskToggled(bool enabled)
         return;
 
     if (enabled) {
+        auto *maskLayer = qobject_cast<ImageLayer *>(
+            viewer->layerManager() ? viewer->layerManager()->activeLayer()
+                                   : nullptr);
+        if (maskLayer && maskLayer->binaryMaskNeedsImageJNormalization()) {
+            QMessageBox warning(this);
+            warning.setIcon(QMessageBox::Warning);
+            warning.setWindowTitle("Edit mask");
+            warning.setText(
+                "This mask is binary, but it is not encoded as 0/255.");
+            warning.setInformativeText(
+                "rcaiman-projects can edit it, but entering mask edit mode "
+                "will rewrite the mask using the 0/255 convention used by "
+                "ImageJ and rcaiman.\n\n"
+                "This will happen even if you enter and leave edit mode "
+                "without painting.");
+            QPushButton *continueButton =
+                warning.addButton("Continue", QMessageBox::AcceptRole);
+            QPushButton *cancelButton =
+                warning.addButton(QMessageBox::Cancel);
+            warning.setDefaultButton(cancelButton);
+            warning.exec();
+            if (warning.clickedButton() != continueButton) {
+                const QSignalBlocker blocker(ui->actionEditMask);
+                ui->actionEditMask->setChecked(false);
+                updateMaskEditControls(viewer);
+                return;
+            }
+        }
+
         if (ui->actionEditPoints->isChecked())
             ui->actionEditPoints->setChecked(false);
         if (ui->actionPan->isChecked())
@@ -3992,8 +4022,61 @@ void MainWindow::loadProject(const Project &project)
         return;
     }
 
+    struct ProjectLoadFeedback {
+        MainWindow *window = nullptr;
+        QProgressBar *progress = nullptr;
+        bool finished = false;
+
+        ProjectLoadFeedback(MainWindow *mainWindow, const QString &projectName)
+            : window(mainWindow)
+            , progress(new QProgressBar(mainWindow->statusBar()))
+        {
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            progress->setMinimum(0);
+            progress->setMaximum(0);
+            progress->setTextVisible(false);
+            progress->setMinimumWidth(160);
+            window->statusBar()->addPermanentWidget(progress);
+            setStage(QStringLiteral("Opening project: %1...")
+                         .arg(projectName));
+        }
+
+        ~ProjectLoadFeedback()
+        {
+            if (progress) {
+                window->statusBar()->removeWidget(progress);
+                progress->deleteLater();
+            }
+            QApplication::restoreOverrideCursor();
+            if (!finished)
+                window->statusBar()->showMessage(
+                    QStringLiteral("Could not open project"), 5000);
+        }
+
+        void setStage(const QString &message)
+        {
+            window->statusBar()->showMessage(message, 0);
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        }
+
+        void complete(const QString &projectName)
+        {
+            finished = true;
+            window->statusBar()->showMessage(
+                QStringLiteral("Project ready: %1").arg(projectName), 5000);
+        }
+    };
+
+    const QString projectName =
+        project.name().isEmpty()
+            ? QFileInfo(project.rootPath()).fileName()
+            : project.name();
+    ProjectLoadFeedback feedback(this, projectName);
+
+    feedback.setStage(QStringLiteral("Closing current project..."));
     closeCurrentProject();
 
+    feedback.setStage(QStringLiteral("Loading project structure..."));
     m_project = project;
     loadProjectFileMarks();
     updateProjectExplorer();
@@ -4004,8 +4087,12 @@ void MainWindow::loadProject(const Project &project)
     if (m_previewDock)
         m_previewDock->show();
     addToRecentProjects(m_project.rootPath());
+
+    feedback.setStage(QStringLiteral("Restoring session..."));
     restoreProjectSession();
     updateViewerEmptyState();
+
+    feedback.complete(projectName);
 }
 
 void MainWindow::closeCurrentProject()

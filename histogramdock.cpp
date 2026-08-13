@@ -159,12 +159,9 @@ HistogramWidget::HistogramWidget(QWidget *parent)
     setMinimumHeight(160);
     setMouseTracking(true);
     setToolTip(QStringLiteral(
-        "Histogram is an approximation based on regular grid sampling "
-        "over the image plane, similar in spirit to camera matrix "
-        "metering, for responsive rendering.\n\n"
-        "RGB histograms are overlaid on a shared raw-value axis. "
-        "This is not an average. Manual range uses the same raw minimum "
-        "and maximum for R, G, and B."));
+        "The histogram is an approximation based on regular grid sampling "
+        "over the image plane."
+        ));
 }
 
 void HistogramWidget::setLayer(ImageLayer *layer)

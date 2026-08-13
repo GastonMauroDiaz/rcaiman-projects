@@ -48,8 +48,7 @@ MetadataRulesDialog::MetadataRulesDialog(
     auto *layout = new QVBoxLayout(this);
 
     auto *intro = new QLabel(
-        "Select the metadata items that identify this calibration. "
-        "Nothing is selected automatically.", this);
+        "Select the metadata items that identify this calibration.", this);
     intro->setWordWrap(true);
     layout->addWidget(intro);
 

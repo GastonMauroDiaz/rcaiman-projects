@@ -49,6 +49,7 @@ public:
     bool supportsReloadFromDisk() const override;
     bool reloadFromDisk(QString *errorMessage = nullptr) override;
     bool isEditableBinaryMask() const;
+    bool binaryMaskNeedsImageJNormalization() const;
     bool binaryMaskEditMode() const { return m_binaryMaskEditMode; }
     bool setBinaryMaskEditMode(bool enabled, QString *errorMessage = nullptr);
     bool cancelBinaryMaskEdit(QString *errorMessage = nullptr);
