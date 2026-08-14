@@ -72,6 +72,7 @@ QString interactionShortcutsMarkdown()
         "- **Pan:** hold `Space` from any interaction mode.\n"
         "- **Zoom:** hold `Z` from any interaction mode, then drag with the left mouse button.\n"
         "- **100% zoom:** press `0` in the viewer.\n"
+        "- **Fit to view:** press `9` in the viewer.\n"
         "- **Mouse wheel:** zoom under the cursor.\n\n"
         "## Point Selection\n\n"
         "- **Toggle point:** `%1+click` a point.\n"

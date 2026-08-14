@@ -120,9 +120,37 @@ bool pathIsInsideRoot(const QString &path, const QString &rootPath)
             normalizedRoot + QLatin1Char('/'), sensitivity);
 }
 
+QString cleanRelativePath(const QString &path)
+{
+    return QDir::cleanPath(QDir::fromNativeSeparators(path));
+}
+
+bool relativePathIsExcluded(const QString &relativePath,
+                            const QSet<QString> &excludedRelativePaths)
+{
+    if (excludedRelativePaths.isEmpty())
+        return false;
+
+    const QString cleanRelative = cleanRelativePath(relativePath);
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+    for (const QString &excludedPath : excludedRelativePaths) {
+        if (cleanRelative.compare(excludedPath, sensitivity) == 0
+            || cleanRelative.startsWith(
+                excludedPath + QLatin1Char('/'), sensitivity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool copyDirectoryRecursively(const QString &sourcePath,
                               const QString &destinationPath,
-                              QString *errorMessage)
+                              QString *errorMessage,
+                              const QSet<QString> &excludedRelativePaths = {})
 {
     QDir source(sourcePath);
     if (!source.exists()) {
@@ -144,7 +172,11 @@ bool copyDirectoryRecursively(const QString &sourcePath,
     while (iterator.hasNext()) {
         const QString sourceEntryPath = iterator.next();
         const QFileInfo sourceEntry(sourceEntryPath);
-        const QString relativePath = source.relativeFilePath(sourceEntryPath);
+        const QString relativePath =
+            cleanRelativePath(source.relativeFilePath(sourceEntryPath));
+        if (relativePathIsExcluded(relativePath, excludedRelativePaths))
+            continue;
+
         const QString destinationEntryPath =
             QDir(destinationPath).filePath(relativePath);
 
@@ -249,6 +281,26 @@ int ProjectCleanupPlan::totalSelectedFiles() const
     for (const ProjectCleanupGroup &group : groups) {
         if (group.selected)
             total += group.relativeFiles.size();
+    }
+    return total;
+}
+
+int ProjectContentCleanPlan::totalSelectedFiles() const
+{
+    int total = 0;
+    for (const ProjectContentCleanItem &item : items) {
+        if (item.selected)
+            total += item.relativeFiles.size();
+    }
+    return total;
+}
+
+int ProjectContentCleanPlan::totalSelectedFolders() const
+{
+    int total = 0;
+    for (const ProjectContentCleanItem &item : items) {
+        if (item.selected && !item.relativeFiles.isEmpty())
+            ++total;
     }
     return total;
 }
@@ -573,6 +625,78 @@ Project Project::saveAs(const QString &newRootPath,
                  newProjectName.trimmed(),
                  QDate::currentDate().toString(Qt::ISODate),
                  m_description);
+    QFile::remove(copy.reportFilePath());
+    if (!copy.save(errorMessage)) {
+        QDir(destination).removeRecursively();
+        return {};
+    }
+
+    return copy;
+}
+
+Project Project::saveAsCleanCopy(const QString &newRootPath,
+                                 const QString &newProjectName,
+                                 const ProjectCleanupPlan &cleanupPlan,
+                                 const QString &description,
+                                 QString *errorMessage) const
+{
+    const QString cleanName = newProjectName.trimmed();
+    const QString cleanDescription = description.trimmed();
+    if (!isValid() || cleanName.isEmpty()) {
+        if (errorMessage)
+            *errorMessage = "A valid source project and new name are required.";
+        return {};
+    }
+    if (!descriptionIsSupported(cleanDescription, errorMessage))
+        return {};
+
+    const QString destination =
+        QDir::cleanPath(QFileInfo(newRootPath).absoluteFilePath());
+    if (QFileInfo::exists(destination)) {
+        if (errorMessage)
+            *errorMessage = "The destination project folder already exists.";
+        return {};
+    }
+
+    if (pathIsInsideRoot(destination, m_rootPath)) {
+        if (errorMessage)
+            *errorMessage = "The new project cannot be created inside the current project.";
+        return {};
+    }
+
+    const QString normalizedRoot = normalizedAbsolutePath(m_rootPath);
+    QSet<QString> excludedRelativePaths;
+    for (const ProjectCleanupGroup &group : cleanupPlan.groups) {
+        if (!group.selected)
+            continue;
+
+        for (const QString &relativePath : group.relativeFiles) {
+            const QString cleanRelative = cleanRelativePath(relativePath);
+            const QString absolutePath = normalizedAbsolutePath(
+                QDir(m_rootPath).filePath(cleanRelative));
+            if (cleanRelative.isEmpty()
+                || cleanRelative == "."
+                || !pathIsInsideRoot(absolutePath, normalizedRoot)
+                || absolutePath == normalizedRoot) {
+                if (errorMessage)
+                    *errorMessage = "Cleanup plan contains an invalid path.";
+                return {};
+            }
+            excludedRelativePaths.insert(cleanRelative);
+        }
+    }
+    excludedRelativePaths.insert(QStringLiteral("project-report.md"));
+
+    if (!copyDirectoryRecursively(
+            m_rootPath, destination, errorMessage, excludedRelativePaths)) {
+        QDir(destination).removeRecursively();
+        return {};
+    }
+
+    Project copy(destination,
+                 cleanName,
+                 QDate::currentDate().toString(Qt::ISODate),
+                 cleanDescription);
     QFile::remove(copy.reportFilePath());
     if (!copy.save(errorMessage)) {
         QDir(destination).removeRecursively();
@@ -1057,6 +1181,125 @@ bool Project::applyCleanupPlan(const ProjectCleanupPlan &plan,
                     return false;
                 }
             } else if (cleanupTarget.exists() && !QFile::remove(absolutePath)) {
+                if (errorMessage) {
+                    *errorMessage = QStringLiteral(
+                        "Could not remove file: %1").arg(relativePath);
+                }
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+ProjectContentCleanPlan Project::buildContentCleanPlan() const
+{
+    ProjectContentCleanPlan plan;
+    if (!isValid())
+        return plan;
+
+    auto addItem = [&plan, this](const QString &label,
+                                 const QString &kind,
+                                 const QString &folderPath,
+                                 const QStringList &relativeFiles) {
+        ProjectContentCleanItem item;
+        item.label = label;
+        item.kind = kind;
+        item.rootRelativePath = QDir::fromNativeSeparators(
+            QDir(m_rootPath).relativeFilePath(folderPath));
+        item.relativeFiles = relativeFiles;
+        item.selected = false;
+        plan.items.append(item);
+    };
+
+    const QStringList rawFilters = {
+        "*.CR2", "*.CR3", "*.NEF", "*.ARW", "*.DNG", "*.RAF",
+        "*.ORF", "*.RW2", "*.PEF", "*.SRW", "*.RAW", "*.DCR", "*.KDC",
+        "*.cr2", "*.cr3", "*.nef", "*.arw", "*.dng", "*.raf",
+        "*.orf", "*.rw2", "*.pef", "*.srw", "*.raw", "*.dcr", "*.kdc"
+    };
+    const QStringList imageFilters = {
+        "*.tif", "*.tiff", "*.TIF", "*.TIFF",
+        "*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG",
+        "*.bmp", "*.BMP"
+    };
+
+    const QDir root(m_rootPath);
+    const QString rawPath = root.filePath("raw_files");
+    addItem(
+        "raw_files",
+        "RAW files",
+        rawPath,
+        matchingRelativeFiles(m_rootPath, rawPath, rawFilters));
+
+    const QString sensorPath = root.filePath("sensor_data");
+    addItem(
+        "sensor_data",
+        "Sensor data",
+        sensorPath,
+        allRelativeFiles(m_rootPath, sensorPath));
+
+    QVector<Collection> collections = discoverCollections(m_rootPath);
+    std::sort(
+        collections.begin(), collections.end(),
+        [](const Collection &left, const Collection &right) {
+            return left.dirName.compare(
+                right.dirName, Qt::CaseInsensitive) < 0;
+        });
+    for (const Collection &collection : std::as_const(collections)) {
+        QStringList files;
+        if (collection.collectionClass == "point_collection") {
+            files = matchingRelativeFiles(
+                m_rootPath, collection.dirPath, {"*.csv", "*.CSV"}, false);
+        } else if (collection.collectionClass == "preprocessed_image_collection"
+                   || collection.collectionClass == "processed_image_collection"
+                   || collection.collectionClass == "segmentation_collection") {
+            files = matchingRelativeFiles(
+                m_rootPath, collection.dirPath, imageFilters, false);
+        } else {
+            continue;
+        }
+        addItem(collection.dirName,
+                collection.collectionClass,
+                collection.dirPath,
+                files);
+    }
+
+    return plan;
+}
+
+bool Project::applyContentCleanPlan(const ProjectContentCleanPlan &plan,
+                                    QString *errorMessage) const
+{
+    if (!isValid()) {
+        if (errorMessage)
+            *errorMessage = "There is no valid project to clean.";
+        return false;
+    }
+
+    const QString normalizedRoot = normalizedAbsolutePath(m_rootPath);
+    for (const ProjectContentCleanItem &item : plan.items) {
+        if (!item.selected)
+            continue;
+
+        for (const QString &relativePath : item.relativeFiles) {
+            const QString absolutePath = normalizedAbsolutePath(
+                QDir(m_rootPath).filePath(relativePath));
+            if (!pathIsInsideRoot(absolutePath, normalizedRoot)
+                || absolutePath == normalizedRoot) {
+                if (errorMessage)
+                    *errorMessage = "Clean plan contains an invalid path.";
+                return false;
+            }
+
+            const QFileInfo cleanTarget(absolutePath);
+            if (cleanTarget.isDir()) {
+                if (errorMessage)
+                    *errorMessage = "Clean removes files, not folders.";
+                return false;
+            }
+            if (cleanTarget.exists() && !QFile::remove(absolutePath)) {
                 if (errorMessage) {
                     *errorMessage = QStringLiteral(
                         "Could not remove file: %1").arg(relativePath);

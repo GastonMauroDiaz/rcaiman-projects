@@ -61,6 +61,21 @@ struct ProjectCleanupPlan {
     int totalSelectedFiles() const;
 };
 
+struct ProjectContentCleanItem {
+    QString label;
+    QString kind;
+    QString rootRelativePath;
+    QStringList relativeFiles;
+    bool selected = false;
+};
+
+struct ProjectContentCleanPlan {
+    QVector<ProjectContentCleanItem> items;
+
+    int totalSelectedFiles() const;
+    int totalSelectedFolders() const;
+};
+
 class Project
 {
 public:
@@ -101,6 +116,11 @@ public:
     Project saveAs(const QString &newRootPath,
                    const QString &newProjectName,
                    QString *errorMessage = nullptr) const;
+    Project saveAsCleanCopy(const QString &newRootPath,
+                            const QString &newProjectName,
+                            const ProjectCleanupPlan &cleanupPlan,
+                            const QString &description,
+                            QString *errorMessage = nullptr) const;
     static Project copyExistingProject(const QString &sourceRootPath,
                                        const QString &destinationRootPath,
                                        const QString &newProjectName,
@@ -108,6 +128,9 @@ public:
     ProjectCleanupPlan buildCleanupPlan() const;
     bool applyCleanupPlan(const ProjectCleanupPlan &plan,
                           QString *errorMessage = nullptr) const;
+    ProjectContentCleanPlan buildContentCleanPlan() const;
+    bool applyContentCleanPlan(const ProjectContentCleanPlan &plan,
+                               QString *errorMessage = nullptr) const;
 
     QString rootPath() const;
     QString name() const;

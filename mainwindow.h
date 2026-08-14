@@ -85,6 +85,7 @@ private slots:
     void closeProject();
     void saveProjectAs();
     void saveProjectAsCleanCopy();
+    void cleanProject();
     void createProjectReport();
     void importLegacyHspProject();
     void openImage();
@@ -135,6 +136,7 @@ private:
     QString projectFileMarksPath() const;
     void loadProjectFileMarks();
     void saveProjectFileMarks() const;
+    void clearProjectFileMarks();
     bool projectFileMarkHitTest(const QPoint &position,
                                 QModelIndex *rowIndex = nullptr) const;
     void toggleProjectFileMark(const QString &path);
@@ -195,6 +197,7 @@ private:
     HistogramDock *m_histogramDock = nullptr;
     PreviewDock *m_previewDock = nullptr;
     QToolButton *m_newFolderButton = nullptr;
+    QToolButton *m_unstarAllButton = nullptr;
     QCheckBox *m_starredOnlyCheck = nullptr;
     QLabel *m_projectStarredEmptyLabel = nullptr;
     QWidget *m_projectHeaderWidget = nullptr;

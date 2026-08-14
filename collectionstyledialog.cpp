@@ -110,6 +110,7 @@ QWidget *CollectionStyleDialog::createImageEditor()
     m_opacity = new QDoubleSpinBox(widget);
     m_opacity->setRange(0.0, 1.0);
     m_opacity->setDecimals(2);
+    m_opacity->setSingleStep(0.1);
     form->addRow("Opacity:", m_opacity);
 
     m_blend = new QComboBox(widget);

@@ -418,7 +418,7 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
         return;
     if (handleTemporaryZoomKeyEvent(event))
         return;
-    if (handleResetZoomKeyEvent(event))
+    if (handleZoomShortcutKeyEvent(event))
         return;
     if (handleMaskBrushSizeKeyEvent(event))
         return;
@@ -580,21 +580,31 @@ bool ImageViewer::handleTemporaryZoomKeyEvent(QEvent *event)
     return true;
 }
 
-bool ImageViewer::handleResetZoomKeyEvent(QEvent *event)
+bool ImageViewer::handleZoomShortcutKeyEvent(QEvent *event)
 {
     if (event->type() != QEvent::KeyPress)
         return false;
 
     auto *keyEvent = static_cast<QKeyEvent*>(event);
-    if (keyEvent->key() != Qt::Key_0
-        || keyEvent->isAutoRepeat()
-        || keyEvent->modifiers() != Qt::NoModifier) {
+    const Qt::KeyboardModifiers realModifiers =
+        keyEvent->modifiers() & ~Qt::KeypadModifier;
+    if (keyEvent->isAutoRepeat() || realModifiers != Qt::NoModifier)
         return false;
+
+    if (keyEvent->key() == Qt::Key_0) {
+        setZoomPercent(100.0);
+        keyEvent->accept();
+        return true;
     }
 
-    setZoomPercent(100.0);
-    keyEvent->accept();
-    return true;
+    if (keyEvent->key() == Qt::Key_9) {
+        fitLoadedImage();
+        syncTransformToSiblings();
+        keyEvent->accept();
+        return true;
+    }
+
+    return false;
 }
 
 bool ImageViewer::handleMaskBrushSizeKeyEvent(QKeyEvent *event)
@@ -1080,7 +1090,7 @@ bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
             return true;
         if (handleTemporaryZoomKeyEvent(event))
             return true;
-        if (handleResetZoomKeyEvent(event))
+        if (handleZoomShortcutKeyEvent(event))
             return true;
         if (event->type() == QEvent::DragEnter) {
             auto *de = static_cast<QDragEnterEvent*>(event);

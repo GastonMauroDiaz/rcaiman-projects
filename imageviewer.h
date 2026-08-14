@@ -135,7 +135,7 @@ private:
     bool zoomInteractionActive() const;
     bool handleSpacePanKeyEvent(QEvent *event);
     bool handleTemporaryZoomKeyEvent(QEvent *event);
-    bool handleResetZoomKeyEvent(QEvent *event);
+    bool handleZoomShortcutKeyEvent(QEvent *event);
     bool handleMaskBrushSizeKeyEvent(QKeyEvent *event);
     void setPointItemsInteractionBlocked(bool blocked);
     void applyDragZoom(const QPoint &pos);

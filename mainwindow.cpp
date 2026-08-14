@@ -31,6 +31,7 @@
 #include "pointattributetablewindow.h"
 #include "histogramdock.h"
 #include "previewdock.h"
+#include "projectcleandialog.h"
 #include "projectcleanupdialog.h"
 #include "projectfilesystemmodel.h"
 #include "rawreader.h"
@@ -537,6 +538,21 @@ void drawProjectFileMark(QPainter *painter,
     painter->restore();
 }
 
+QIcon emptyProjectFileMarkIcon()
+{
+    QPixmap pixmap(18, 18);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QPainterPath path =
+        starPath(QRectF(2.5, 2.5, 13.0, 13.0));
+    painter.setPen(QPen(QColor(174, 181, 190), 1.3));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(path);
+    return QIcon(pixmap);
+}
+
 void drawProjectExplorerRowGuide(QPainter *painter,
                                  const QRect &rowRect,
                                  bool selected)
@@ -921,6 +937,13 @@ MainWindow::MainWindow(QWidget *parent)
     m_newFolderButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_newFolderButton->setAutoRaise(true);
     m_newFolderButton->setEnabled(false);
+    m_unstarAllButton = new QToolButton(this);
+    m_unstarAllButton->setText("Unstar all");
+    m_unstarAllButton->setIcon(emptyProjectFileMarkIcon());
+    m_unstarAllButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_unstarAllButton->setAutoRaise(true);
+    m_unstarAllButton->setToolTip("Remove all stars from this project.");
+    m_unstarAllButton->setEnabled(false);
     m_starredOnlyCheck = new QCheckBox("Starred only", this);
     m_starredOnlyCheck->setToolTip(
         "Show starred files and folders. Starred folders include their contents.");
@@ -955,6 +978,7 @@ MainWindow::MainWindow(QWidget *parent)
     projectExplorerToolbarLayout->setContentsMargins(0, 0, 0, 0);
     projectExplorerToolbarLayout->setSpacing(4);
     projectExplorerToolbarLayout->addWidget(m_newFolderButton);
+    projectExplorerToolbarLayout->addWidget(m_unstarAllButton);
     projectExplorerToolbarLayout->addWidget(m_starredOnlyCheck);
     projectExplorerToolbarLayout->addStretch(1);
     projectExplorerToolbarLayout->addWidget(m_projectSortCombo);
@@ -990,6 +1014,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->dockProjectExplorerLayout->insertWidget(2, m_projectStarredEmptyLabel);
     connect(m_newFolderButton, &QToolButton::clicked,
             this, &MainWindow::createProjectFolder);
+    connect(m_unstarAllButton, &QToolButton::clicked,
+            this, &MainWindow::clearProjectFileMarks);
     connect(m_starredOnlyCheck, &QCheckBox::toggled,
             this, [this](bool checked) {
                 auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
@@ -1056,6 +1082,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::saveProjectAsCleanCopy);
+
+    connect(ui->actionCleanProject,
+            &QAction::triggered,
+            this,
+            &MainWindow::cleanProject);
 
     connect(ui->actionProjectReport,
             &QAction::triggered,
@@ -1903,34 +1934,16 @@ void MainWindow::saveProjectAsCleanCopy()
 
     const QString destination = QDir(parentPath).filePath(projectName);
     QString errorMessage;
-    Project copy =
-        m_project.saveAs(destination, projectName, &errorMessage);
+    const ProjectCleanupPlan selectedPlan = cleanupDialog.selectedPlan();
+    Project copy = m_project.saveAsCleanCopy(
+        destination,
+        projectName,
+        selectedPlan,
+        cleanupDialog.selectedDescription(),
+        &errorMessage);
     if (!copy.isValid()) {
         QMessageBox::warning(
             this, "Save Project As Clean Copy", errorMessage);
-        return;
-    }
-
-    const ProjectCleanupPlan selectedPlan = cleanupDialog.selectedPlan();
-    if (!copy.applyCleanupPlan(selectedPlan, &errorMessage)) {
-        QDir(copy.rootPath()).removeRecursively();
-        QMessageBox::warning(
-            this, "Save Project As Clean Copy",
-            QStringLiteral(
-                "The clean copy could not be completed and was removed.\n%1")
-                .arg(errorMessage));
-        return;
-    }
-
-    QFile::remove(copy.reportFilePath());
-    if (!copy.setDescription(
-            cleanupDialog.selectedDescription(), &errorMessage)) {
-        QDir(copy.rootPath()).removeRecursively();
-        QMessageBox::warning(
-            this, "Save Project As Clean Copy",
-            QStringLiteral(
-                "The clean copy metadata could not be completed and "
-                "the copy was removed.\n%1").arg(errorMessage));
         return;
     }
 
@@ -1938,6 +1951,56 @@ void MainWindow::saveProjectAsCleanCopy()
     statusBar()->showMessage(
         QStringLiteral("Clean project copy created: %1")
             .arg(destination),
+        5000);
+}
+
+void MainWindow::cleanProject()
+{
+    if (!m_project.isValid())
+        return;
+
+    ProjectCleanDialog dialog(m_project.buildContentCleanPlan(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const ProjectContentCleanPlan selectedPlan = dialog.selectedPlan();
+    const int selectedFiles = selectedPlan.totalSelectedFiles();
+    const int selectedFolders = selectedPlan.totalSelectedFolders();
+    if (selectedFiles <= 0)
+        return;
+
+    const auto answer = QMessageBox::question(
+        this,
+        "Clean Project",
+        QStringLiteral(
+            "Remove selected contents from the current project?\n\n"
+            "This will delete %1 file(s) from %2 folder(s).\n"
+            "Collection descriptions and styles will be preserved.\n\n"
+            "This cannot be undone.")
+            .arg(selectedFiles)
+            .arg(selectedFolders),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    QString errorMessage;
+    if (!m_project.applyContentCleanPlan(selectedPlan, &errorMessage)) {
+        QMessageBox::warning(
+            this,
+            "Clean Project",
+            errorMessage.isEmpty()
+                ? QStringLiteral("The project could not be cleaned.")
+                : errorMessage);
+        return;
+    }
+
+    updateProjectExplorer();
+    updateProjectActions();
+    statusBar()->showMessage(
+        QStringLiteral("Cleaned %1 file(s) from %2 folder(s)")
+            .arg(selectedFiles)
+            .arg(selectedFolders),
         5000);
 }
 
@@ -4342,6 +4405,32 @@ void MainWindow::saveProjectFileMarks() const
     file.commit();
 }
 
+void MainWindow::clearProjectFileMarks()
+{
+    if (!m_project.isValid() || m_projectFileMarks.isEmpty())
+        return;
+
+    const auto answer = QMessageBox::question(
+        this,
+        "Unstar all",
+        "Remove all stars from this project?",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    m_projectFileMarks.clear();
+    saveProjectFileMarks();
+    if (m_projectFileSystemModel)
+        m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+    if (m_projectSortProxy)
+        m_projectSortProxy->invalidate();
+    refreshProjectExplorerRootIndex();
+    updateProjectExplorerStarredEmptyMessage();
+    updateProjectActions();
+    statusBar()->showMessage("Removed all stars", 3000);
+}
+
 bool MainWindow::projectFileMarkHitTest(
     const QPoint &position,
     QModelIndex *rowIndex) const
@@ -4395,6 +4484,7 @@ void MainWindow::toggleProjectFileMark(const QString &path)
         refreshProjectExplorerRootIndex();
         updateProjectExplorerStarredEmptyMessage();
     }
+    updateProjectActions();
     statusBar()->showMessage(
         marked ? "Mark cleared" : "Marked",
         2000);
@@ -4857,6 +4947,7 @@ void MainWindow::updateProjectActions()
     ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
+    ui->actionCleanProject->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
     ui->actionCreatePointGrid->setEnabled(hasProject);
     ui->actionSelectPointsByMask->setEnabled(hasProject);
@@ -4867,6 +4958,8 @@ void MainWindow::updateProjectActions()
     updateMaskEditControls(viewer);
     if (m_newFolderButton)
         m_newFolderButton->setEnabled(hasProject);
+    if (m_unstarAllButton)
+        m_unstarAllButton->setEnabled(hasProject && !m_projectFileMarks.isEmpty());
     if (m_starredOnlyCheck)
         m_starredOnlyCheck->setEnabled(hasProject);
 
@@ -5942,7 +6035,8 @@ void MainWindow::createPointGrid()
     saveDialog.setNameFilter("CSV files (*.csv)");
     saveDialog.setDefaultSuffix("csv");
     saveDialog.setOption(QFileDialog::DontConfirmOverwrite, true);
-    saveDialog.selectFile(QDir(selectedPointCollection.dirPath).filePath(defaultName));
+    saveDialog.setDirectory(selectedPointCollection.dirPath);
+    saveDialog.selectFile(defaultName);
     if (saveDialog.exec() != QDialog::Accepted)
         return;
     QString savePath = saveDialog.selectedFiles().value(0);
@@ -5950,6 +6044,25 @@ void MainWindow::createPointGrid()
         return;
     if (!savePath.endsWith(".csv", Qt::CaseInsensitive))
         savePath += ".csv";
+
+    const QString saveDirectory =
+        QDir::cleanPath(QFileInfo(savePath).absoluteDir().absolutePath());
+    const QString pointCollectionDirectory =
+        QDir::cleanPath(QFileInfo(selectedPointCollection.dirPath).absoluteFilePath());
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity pathSensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity pathSensitivity = Qt::CaseSensitive;
+#endif
+    if (saveDirectory.compare(pointCollectionDirectory, pathSensitivity) != 0) {
+        QMessageBox::warning(
+            this,
+            "Create grid",
+            QStringLiteral(
+                "Grid CSV files must be saved inside the selected point collection:\n%1")
+                .arg(QDir::toNativeSeparators(pointCollectionDirectory)));
+        return;
+    }
 
     if (QFileInfo::exists(savePath)) {
         const auto answer = QMessageBox::question(

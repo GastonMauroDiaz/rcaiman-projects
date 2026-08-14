@@ -70,6 +70,7 @@ qt_add_executable(rcaiman_projects
     previewdock.h previewdock.cpp
     project.h project.cpp
     projectfilesystemmodel.h projectfilesystemmodel.cpp
+    projectcleandialog.h projectcleandialog.cpp
     projectcleanupdialog.h projectcleanupdialog.cpp
     newprojectdialog.h newprojectdialog.cpp
     rasterdata.h rasterdata.cpp
