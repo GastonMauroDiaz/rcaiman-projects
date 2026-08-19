@@ -34,6 +34,46 @@ QString valueAfterColon(const QString &line)
     const int separator = line.indexOf(':');
     return separator >= 0 ? line.mid(separator + 1).trimmed() : QString();
 }
+
+QString unescapeYamlQuotedString(const QString &value)
+{
+    QString result;
+    result.reserve(value.size());
+    bool escaping = false;
+
+    for (const QChar character : value) {
+        if (escaping) {
+            if (character == QLatin1Char('n'))
+                result.append(QLatin1Char('\n'));
+            else if (character == QLatin1Char('r'))
+                result.append(QLatin1Char('\r'));
+            else if (character == QLatin1Char('t'))
+                result.append(QLatin1Char('\t'));
+            else
+                result.append(character);
+            escaping = false;
+        } else if (character == QLatin1Char('\\')) {
+            escaping = true;
+        } else {
+            result.append(character);
+        }
+    }
+
+    if (escaping)
+        result.append(QLatin1Char('\\'));
+
+    return result;
+}
+
+QString yamlValueAfterColon(const QString &line)
+{
+    QString value = valueAfterColon(line);
+    if (value.size() >= 2 && value.startsWith('"') && value.endsWith('"')) {
+        value = value.mid(1, value.size() - 2);
+        value = unescapeYamlQuotedString(value);
+    }
+    return value;
+}
 }
 
 ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
@@ -103,8 +143,11 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (role != Qt::DisplayRole)
         return QFileSystemModel::data(index, role);
 
-    if (otherCollection)
-        return QFileSystemModel::data(index, role);
+    if (otherCollection) {
+        return appendAlias(
+            QFileSystemModel::data(index, role).toString(),
+            info.absoluteFilePath());
+    }
 
     const bool countedReserved =
         reserved
@@ -112,13 +155,17 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
             || info.fileName().compare("sensor_data", Qt::CaseInsensitive) == 0);
     if (reserved && reservedDirectoryShowsEmptyLabel(info.fileName())
         && directFileCount(info) == 0) {
-        return QStringLiteral("%1 (empty)").arg(info.fileName());
+        return appendAlias(
+            QStringLiteral("%1 (empty)").arg(info.fileName()),
+            info.absoluteFilePath());
     }
     if (className.isEmpty() && !countedReserved)
         return QFileSystemModel::data(index, role);
 
     const int count = relevantFileCount(info, className);
-    return QStringLiteral("%1 (%2)").arg(info.fileName()).arg(count);
+    return appendAlias(
+        QStringLiteral("%1 (%2)").arg(info.fileName()).arg(count),
+        info.absoluteFilePath());
 }
 
 void ProjectFileSystemModel::setProjectRoot(const QString &path)
@@ -220,6 +267,32 @@ QString ProjectFileSystemModel::collectionClass(
             return valueAfterColon(line);
     }
     return {};
+}
+
+QString ProjectFileSystemModel::collectionAlias(
+    const QString &directoryPath) const
+{
+    QFile file(QDir(directoryPath).filePath("collection.yaml"));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine().trimmed();
+        if (line.startsWith("alias:"))
+            return yamlValueAfterColon(line).trimmed();
+    }
+    return {};
+}
+
+QString ProjectFileSystemModel::appendAlias(
+    const QString &displayText,
+    const QString &directoryPath) const
+{
+    const QString alias = collectionAlias(directoryPath);
+    if (alias.isEmpty())
+        return displayText;
+    return QStringLiteral("%1 | %2").arg(displayText, alias);
 }
 
 bool ProjectFileSystemModel::reservedDirectoryShowsEmptyLabel(

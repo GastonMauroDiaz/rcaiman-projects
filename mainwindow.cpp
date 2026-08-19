@@ -28,6 +28,7 @@
 #include "imagelayer.h"
 #include "pointlayer.h"
 #include "pointcollection.h"
+#include "pointcsvcreationdialog.h"
 #include "pointattributetablewindow.h"
 #include "histogramdock.h"
 #include "previewdock.h"
@@ -36,6 +37,7 @@
 #include "projectfilesystemmodel.h"
 #include "rawreader.h"
 #include "collectiondialog.h"
+#include "collectioneditdialog.h"
 #include "collectionautoload.h"
 #include "collectionstyledialog.h"
 #include "newprojectdialog.h"
@@ -49,6 +51,8 @@
 #include "tiffwriter.h"
 #include "rasterrenderer.h"
 #include "exampleprojectsdialog.h"
+#include "legacyjpegimportdialog.h"
+#include "legacyjpegimporter.h"
 #include "hspimportdialog.h"
 #include "hspprojectimporter.h"
 #include "shortcuttext.h"
@@ -1112,6 +1116,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::extractRawData);
+
+    connect(ui->actionImportLegacyJpegs,
+            &QAction::triggered,
+            this,
+            &MainWindow::importLegacyJpegs);
 
     connect(ui->actionRegisterCollection,
             &QAction::triggered,
@@ -2223,6 +2232,127 @@ void MainWindow::extractRawData()
     refreshReloadableArtifactWatchers();
 }
 
+void MainWindow::importLegacyJpegs()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(this, "Import legacy JPEGs",
+                                 "No project is open. Please create or open a project first.");
+        return;
+    }
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    QVector<Collection> sourceCollections;
+    QVector<Collection> destinationCollections;
+    for (const Collection &collection : collections) {
+        if (collection.collectionClass == "other"
+            && !LegacyJpegImporter::jpegFiles(collection.dirPath).isEmpty()) {
+            sourceCollections.append(collection);
+        } else if (collection.collectionClass
+                   == "preprocessed_image_collection") {
+            destinationCollections.append(collection);
+        }
+    }
+
+    if (sourceCollections.isEmpty()) {
+        QMessageBox::information(
+            this,
+            "Import legacy JPEGs",
+            "No `other` collection with JPEG files was found.\n\n"
+            "Place legacy JPEG files in a folder registered as an `other` collection first.");
+        return;
+    }
+    if (destinationCollections.isEmpty()) {
+        QMessageBox::information(
+            this,
+            "Import legacy JPEGs",
+            "No preprocessed image collection is registered in this project.\n\n"
+            "Register a destination folder as a `preprocessed_image_collection` first.");
+        return;
+    }
+
+    LegacyJpegImportDialog dialog(
+        sourceCollections, destinationCollections, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const Collection source = dialog.sourceCollection();
+    const Collection destination = dialog.destinationCollection();
+    if (source.dirPath.isEmpty() || destination.dirPath.isEmpty())
+        return;
+
+    LegacyJpegImportOptions options;
+    options.projectRoot = m_project.rootPath();
+    options.sourceCollectionDir = source.dirPath;
+    options.sourceCollectionName = source.dirName;
+    options.destinationCollectionDir = destination.dirPath;
+    options.destinationCollectionName = destination.dirName;
+
+    const QStringList conflicts =
+        LegacyJpegImporter::conflictingOutputs(options);
+    if (!conflicts.isEmpty()) {
+        const auto reply = QMessageBox::question(
+            this,
+            "Import legacy JPEGs",
+            QStringLiteral(
+                "%1 output file(s) already exist in the destination collection.\n\n"
+                "Replace existing TIFF/TSV files?")
+                .arg(conflicts.size()),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+        options.replaceExisting = true;
+    }
+
+    statusBar()->showMessage("Importing legacy JPEGs as TIFF...", 0);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+    LegacyJpegImportReport report;
+    QString errorMessage;
+    const bool imported =
+        LegacyJpegImporter::importProject(options, &report, &errorMessage);
+
+    m_projectFileSystemModel->refreshDirectory(destination.dirPath);
+    updateProjectActions();
+    statusBar()->showMessage(
+        QStringLiteral("Legacy JPEG import: %1 TIFF(s), %2 failed")
+            .arg(report.convertedFiles)
+            .arg(report.failedFiles),
+        8000);
+
+    QStringList details;
+    if (!imported && !errorMessage.isEmpty())
+        details.append(errorMessage);
+    details.append(
+        QStringLiteral("JPEG files found: %1").arg(report.sourceFiles));
+    details.append(
+        QStringLiteral("TIFF files written: %1").arg(report.convertedFiles));
+    details.append(
+        QStringLiteral("Failed conversions: %1").arg(report.failedFiles));
+    details.append(
+        QStringLiteral("Metadata sidecars written: %1")
+            .arg(report.sidecarsWritten));
+    details.append(
+        QStringLiteral("Metadata errors: %1").arg(report.metadataErrors));
+    if (!report.warnings.isEmpty()) {
+        details.append(QString());
+        details.append("Warnings:");
+        details.append(report.warnings);
+    }
+    details.append(QString());
+    details.append("Inspect legacy_jpeg_import.md in the destination collection.");
+
+    if (!imported || report.failedFiles > 0 || report.metadataErrors > 0
+        || !report.warnings.isEmpty()) {
+        QMessageBox::warning(
+            this, "Import legacy JPEGs", details.join("\n"));
+    } else {
+        QMessageBox::information(
+            this, "Import legacy JPEGs", details.join("\n"));
+    }
+}
+
 void MainWindow::registerCollection()
 {
     if (!m_project.isValid()) {
@@ -2263,6 +2393,7 @@ void MainWindow::registerCollection()
                                      dialog.related(),
                                      dialog.registry(),
                                      dialog.script(),
+                                     dialog.alias(),
                                      &errorMsg))
     {
         m_projectFileSystemModel->refreshDirectory(dirPath);
@@ -2316,6 +2447,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     QAction *deleteAction = menu.addAction("Delete");
 
     QAction *registerAction = nullptr;
+    QAction *editCollectionAction = nullptr;
+    QAction *unregisterCollectionAction = nullptr;
     QAction *createPointsAction = nullptr;
     QAction *createMaskAction = nullptr;
     QAction *styleAction = nullptr;
@@ -2325,6 +2458,9 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (info.isDir()) {
         menu.addSeparator();
         registerAction = menu.addAction("Register collection...");
+        editCollectionAction = menu.addAction("Edit collection...");
+        unregisterCollectionAction =
+            menu.addAction("Unregister collection...");
         createPointsAction =
             menu.addAction("Create empty point layer...");
         createMaskAction =
@@ -2339,9 +2475,6 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     const bool isReserved =
         Project::reservedDirectories().contains(
             info.fileName(), Qt::CaseInsensitive);
-    if (registerAction)
-        registerAction->setEnabled(!isReserved);
-
     Collection selectedCollection;
     bool hasRegisteredCollection = false;
     const QVector<Collection> collections =
@@ -2354,6 +2487,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             break;
         }
     }
+    if (registerAction)
+        registerAction->setEnabled(!isReserved && !hasRegisteredCollection);
     const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
     const QString selectedStyleKind =
@@ -2378,6 +2513,10 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             m_project.rootPath(), selectedCollection);
     if (createPointsAction)
         createPointsAction->setEnabled(supportsCreatePoints);
+    if (editCollectionAction)
+        editCollectionAction->setEnabled(hasRegisteredCollection);
+    if (unregisterCollectionAction)
+        unregisterCollectionAction->setEnabled(hasRegisteredCollection);
     if (createMaskAction)
         createMaskAction->setEnabled(supportsCreateMask);
     if (styleAction)
@@ -2490,6 +2629,87 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (registerAction) {
         connect(registerAction, &QAction::triggered,
                 this, &MainWindow::registerCollection);
+    }
+    if (editCollectionAction) {
+        connect(editCollectionAction, &QAction::triggered,
+                this, [this, selectedCollection, hasRegisteredCollection]() {
+                    if (!hasRegisteredCollection)
+                        return;
+
+                    const QVector<Collection> collections =
+                        Project::discoverCollections(m_project.rootPath());
+                    CollectionEditDialog dialog(
+                        m_project.rootPath(),
+                        selectedCollection,
+                        collections,
+                        this);
+                    if (dialog.exec() != QDialog::Accepted)
+                        return;
+
+                    QString errorMessage;
+                    if (!Project::updateCollectionMetadata(
+                            m_project.rootPath(),
+                            selectedCollection.dirPath,
+                            dialog.alias(),
+                            dialog.parentReference(),
+                            dialog.relatedReference(),
+                            dialog.registry(),
+                            dialog.script(),
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this, "Edit collection", errorMessage);
+                        return;
+                    }
+
+                    m_projectFileSystemModel->refreshDirectory(
+                        selectedCollection.dirPath);
+                    statusBar()->showMessage(
+                        QStringLiteral("Updated collection: %1")
+                            .arg(selectedCollection.dirName),
+                        3000);
+                });
+    }
+    if (unregisterCollectionAction) {
+        connect(unregisterCollectionAction, &QAction::triggered,
+                this, [this, selectedCollection, hasRegisteredCollection]() {
+                    if (!hasRegisteredCollection)
+                        return;
+
+                    const auto reply = QMessageBox::warning(
+                        this,
+                        "Unregister collection",
+                        QStringLiteral(
+                            "Unregister collection \"%1\"?\n\n"
+                            "This removes collection.yaml and style.yaml only. "
+                            "Working files in the folder remain.\n\n"
+                            "Links from other collections and scripts are not "
+                            "updated automatically.")
+                            .arg(selectedCollection.dirName),
+                        QMessageBox::Yes | QMessageBox::No,
+                        QMessageBox::No);
+                    if (reply != QMessageBox::Yes)
+                        return;
+
+                    QString errorMessage;
+                    if (!Project::unregisterCollection(
+                            m_project.rootPath(),
+                            selectedCollection.dirPath,
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this, "Unregister collection", errorMessage);
+                        return;
+                    }
+
+                    if (m_previewDock)
+                        m_previewDock->clear();
+                    m_projectFileSystemModel->refreshDirectory(
+                        selectedCollection.dirPath);
+                    updateProjectActions();
+                    statusBar()->showMessage(
+                        QStringLiteral("Unregistered collection: %1")
+                            .arg(selectedCollection.dirName),
+                        4000);
+                });
     }
     if (createPointsAction) {
         connect(createPointsAction, &QAction::triggered,
@@ -4946,6 +5166,7 @@ void MainWindow::updateProjectActions()
     ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
     ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
     ui->actionImportRaw->setEnabled(hasProject);
+    ui->actionImportLegacyJpegs->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
     ui->actionCleanProject->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
@@ -5714,48 +5935,59 @@ void MainWindow::createPointsCsv()
         }
     }
 
-    QString savePath;
-    if (!availableBaseNames.isEmpty()) {
-        QStringList choices = availableBaseNames;
-        choices.append("Custom name...");
-        bool ok = false;
-        const QString choice = QInputDialog::getItem(
-            this, "Create points CSV", "Image or filename:",
-            choices, 0, false, &ok);
-        if (!ok || choice.isEmpty())
-            return;
-        if (choice != "Custom name...") {
-            savePath = QDir(selectedDir).filePath(choice + ".csv");
-        }
-    }
-    if (savePath.isEmpty()) {
-        const QString defaultName =
-            QDir(selectedDir).dirName() + ".csv";
-        savePath = QFileDialog::getSaveFileName(
-            this, "Create points CSV",
-            QDir(selectedDir).filePath(defaultName),
-            "CSV files (*.csv)");
-    }
-    if (savePath.isEmpty())
+    const QString collectionBaseName =
+        usedBaseNames.contains(selectedCollection.dirName.toCaseFolded())
+        ? QString()
+        : selectedCollection.dirName;
+    PointCsvCreationDialog dialog(
+        collectionBaseName, availableBaseNames, this);
+    if (dialog.exec() != QDialog::Accepted)
         return;
+
+    const QStringList selectedBaseNames = dialog.selectedBaseNames();
+    if (selectedBaseNames.isEmpty())
+        return;
+
+    QStringList savePaths;
+    savePaths.reserve(selectedBaseNames.size());
+    for (const QString &baseName : selectedBaseNames) {
+        const QString savePath = QDir(selectedDir).filePath(baseName + ".csv");
+        if (QFileInfo::exists(savePath)) {
+            QMessageBox::warning(
+                this,
+                "Create points",
+                QStringLiteral("Points file already exists:\n%1")
+                    .arg(QDir::toNativeSeparators(savePath)));
+            return;
+        }
+        savePaths.append(savePath);
+    }
 
     const PointCollection collection = PointCollection::createEmpty({"row", "col"});
     QString errorMsg;
-    if (!collection.save(savePath, &errorMsg)) {
-        QMessageBox::warning(this, "Create points", errorMsg);
-        return;
+    for (const QString &savePath : std::as_const(savePaths)) {
+        if (!collection.save(savePath, &errorMsg)) {
+            QMessageBox::warning(this, "Create points", errorMsg);
+            return;
+        }
     }
 
-    statusBar()->showMessage(QStringLiteral("Created points file: %1").arg(QFileInfo(savePath).fileName()), 5000);
-    m_projectFileSystemModel->refreshDirectory(QFileInfo(savePath).absolutePath());
+    statusBar()->showMessage(
+        savePaths.size() == 1
+            ? QStringLiteral("Created points file: %1")
+                  .arg(QFileInfo(savePaths.first()).fileName())
+            : QStringLiteral("Created %1 point CSV files")
+                  .arg(savePaths.size()),
+        5000);
+    m_projectFileSystemModel->refreshDirectory(selectedDir);
 
     // If an image viewer is active, offer to add the new layer
     ImageViewer *viewer = currentImageViewer();
-    if (viewer && viewer->layerManager()) {
+    if (savePaths.size() == 1 && viewer && viewer->layerManager()) {
         const auto reply = QMessageBox::question(this, "Add layer",
                                                  "Add the new points file as a layer to the current viewer?");
         if (reply == QMessageBox::Yes) {
-            if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
+            if (PointLayer *layer = createStyledPointLayer(savePaths.first(), viewer))
                 viewer->layerManager()->addLayer(layer);
         }
     }
@@ -6391,54 +6623,66 @@ void MainWindow::createMaskTiffInCollection(
         }
     }
 
-    QString savePath;
-    QString parentImagePath;
-    if (!availableBaseNames.isEmpty()) {
-        QStringList choices = availableBaseNames;
-        choices.append("Custom name...");
-        bool ok = false;
-        const QString choice = QInputDialog::getItem(
-            this, "Create mask TIFF", "Image or filename:",
-            choices, 0, false, &ok);
-        if (!ok || choice.isEmpty())
+    PointCsvCreationDialog::Options maskDialogOptions;
+    maskDialogOptions.windowTitle = QStringLiteral("Create mask TIFF");
+    maskDialogOptions.description =
+        QStringLiteral("Select image basenames from the parent collection. "
+                       "Empty binary mask TIFF files will be created in the selected segmentation collection.");
+    maskDialogOptions.customWindowTitle = QStringLiteral("Custom mask TIFF");
+    maskDialogOptions.customPrompt = QStringLiteral("TIFF basename:");
+    maskDialogOptions.summarySingular =
+        QStringLiteral("1 mask TIFF file will be created.");
+    maskDialogOptions.summaryPlural =
+        QStringLiteral("%1 mask TIFF files will be created.");
+    maskDialogOptions.customSuffixes = {
+        QStringLiteral("tif"),
+        QStringLiteral("tiff")
+    };
+    maskDialogOptions.allowCustomName = false;
+
+    const QString foldedCollectionBaseName =
+        selectedCollection.dirName.toCaseFolded();
+    const QString collectionBaseName =
+        !usedBaseNames.contains(foldedCollectionBaseName)
+            && !parentTiffsByBaseName.value(
+                    foldedCollectionBaseName).isEmpty()
+        ? selectedCollection.dirName
+        : QString();
+
+    PointCsvCreationDialog dialog(
+        maskDialogOptions, collectionBaseName, availableBaseNames, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QStringList selectedBaseNames = dialog.selectedBaseNames();
+    if (selectedBaseNames.isEmpty())
+        return;
+
+    QStringList savePaths;
+    QStringList parentImagePaths;
+    savePaths.reserve(selectedBaseNames.size());
+    parentImagePaths.reserve(selectedBaseNames.size());
+
+    for (const QString &baseName : selectedBaseNames) {
+        const QString savePath = QDir(selectedDir).filePath(baseName + ".tif");
+        if (QFileInfo::exists(savePath)) {
+            QMessageBox::warning(
+                this,
+                "Create mask",
+                QStringLiteral("Mask file already exists:\n%1")
+                    .arg(QDir::toNativeSeparators(savePath)));
             return;
-        if (choice != "Custom name...") {
-            savePath = QDir(selectedDir).filePath(choice + ".tif");
-            parentImagePath = parentTiffsByBaseName.value(choice.toCaseFolded());
         }
-    }
 
-    if (savePath.isEmpty()) {
-        const QString defaultName =
-            QDir(selectedDir).dirName() + ".tif";
-        savePath = QFileDialog::getSaveFileName(
-            this, "Create mask TIFF",
-            QDir(selectedDir).filePath(defaultName),
-            "TIFF files (*.tif *.tiff)");
-    }
-    if (savePath.isEmpty())
-        return;
-
-    QFileInfo saveInfo(savePath);
-    const QString suffix = saveInfo.suffix().toLower();
-    if (suffix.isEmpty()) {
-        savePath += ".tif";
-        saveInfo = QFileInfo(savePath);
-    } else if (!isTiffSuffix(suffix)) {
-        QMessageBox::warning(this, "Create mask",
-                             "Mask files must use the .tif or .tiff extension.");
-        return;
-    }
-
-    if (parentImagePath.isEmpty()) {
-        const QString foldedBaseName = saveInfo.completeBaseName().toCaseFolded();
-        parentImagePath = parentTiffsByBaseName.value(foldedBaseName);
+        const QString foldedBaseName = baseName.toCaseFolded();
+        const QString parentImagePath =
+            parentTiffsByBaseName.value(foldedBaseName);
         if (parentImagePath.isEmpty()) {
             const bool ambiguous = std::any_of(
                 ambiguousParentBaseNames.cbegin(),
                 ambiguousParentBaseNames.cend(),
-                [&saveInfo](const QString &baseName) {
-                    return baseName.compare(saveInfo.completeBaseName(),
+                [&baseName](const QString &ambiguousBaseName) {
+                    return ambiguousBaseName.compare(baseName,
                                             Qt::CaseInsensitive) == 0;
                 });
             QMessageBox::warning(
@@ -6446,37 +6690,49 @@ void MainWindow::createMaskTiffInCollection(
                 ambiguous
                     ? QStringLiteral("The parent collection contains multiple TIFF files named \"%1\". "
                                      "Use a unique basename before creating a mask.")
-                          .arg(saveInfo.completeBaseName())
+                          .arg(baseName)
                     : QStringLiteral("No parent TIFF named \"%1\" was found. "
                                      "The mask name must match a TIFF in the parent collection.")
-                          .arg(saveInfo.completeBaseName()));
+                          .arg(baseName));
+            return;
+        }
+
+        savePaths.append(savePath);
+        parentImagePaths.append(parentImagePath);
+    }
+
+    QString errorMsg;
+    for (qsizetype i = 0; i < savePaths.size(); ++i) {
+        const RasterData parentRaster =
+            TiffReader::load(parentImagePaths.at(i), &errorMsg);
+        if (parentRaster.isNull()) {
+            QMessageBox::warning(this, "Create mask",
+                                 errorMsg.isEmpty()
+                                     ? "Could not read the parent TIFF."
+                                     : errorMsg);
+            return;
+        }
+
+        RasterData maskRaster;
+        maskRaster.allocate(parentRaster.width(), parentRaster.height(),
+                            1, RasterData::DataType::UInt8);
+        if (!TiffWriter::write(savePaths.at(i), maskRaster, &errorMsg)) {
+            QMessageBox::warning(this, "Create mask", errorMsg);
             return;
         }
     }
 
-    QString errorMsg;
-    const RasterData parentRaster = TiffReader::load(parentImagePath, &errorMsg);
-    if (parentRaster.isNull()) {
-        QMessageBox::warning(this, "Create mask",
-                             errorMsg.isEmpty()
-                                 ? "Could not read the parent TIFF."
-                                 : errorMsg);
-        return;
-    }
-
-    RasterData maskRaster;
-    maskRaster.allocate(parentRaster.width(), parentRaster.height(),
-                        1, RasterData::DataType::UInt8);
-    if (!TiffWriter::write(savePath, maskRaster, &errorMsg)) {
-        QMessageBox::warning(this, "Create mask", errorMsg);
-        return;
-    }
-
-    statusBar()->showMessage(QStringLiteral("Created mask file: %1").arg(QFileInfo(savePath).fileName()), 5000);
-    m_projectFileSystemModel->refreshDirectory(QFileInfo(savePath).absolutePath());
+    statusBar()->showMessage(
+        savePaths.size() == 1
+            ? QStringLiteral("Created mask file: %1")
+                  .arg(QFileInfo(savePaths.first()).fileName())
+            : QStringLiteral("Created %1 mask TIFF files")
+                  .arg(savePaths.size()),
+        5000);
+    m_projectFileSystemModel->refreshDirectory(selectedDir);
 
     ImageViewer *viewer = currentImageViewer();
-    if (viewer && viewer->layerManager()) {
+    if (savePaths.size() == 1 && viewer && viewer->layerManager()) {
         const auto reply = QMessageBox::question(this, "Add layer",
                                                  "Add the new mask file as a layer to the current viewer?");
         if (reply == QMessageBox::Yes) {
@@ -6521,7 +6777,7 @@ void MainWindow::createMaskTiffInCollection(
                     }
                 }
             }
-            if (ImageLayer *layer = createStyledImageLayer(savePath))
+            if (ImageLayer *layer = createStyledImageLayer(savePaths.first()))
                 viewer->layerManager()->addLayer(layer);
         }
     }

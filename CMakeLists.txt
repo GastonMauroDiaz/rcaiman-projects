@@ -61,6 +61,7 @@ qt_add_executable(rcaiman_projects
     layersdock.h layersdock.cpp
     imagelayerpropertieswidget.h imagelayerpropertieswidget.cpp
     pointcollection.h pointcollection.cpp
+    pointcsvcreationdialog.h pointcsvcreationdialog.cpp
     pointitem.h pointitem.cpp
     pointlayer.h pointlayer.cpp
     pointlayerpropertieswidget.h pointlayerpropertieswidget.cpp
@@ -80,6 +81,7 @@ qt_add_executable(rcaiman_projects
     pgmreader.h pgmreader.cpp
     rawreader.h rawreader.cpp
     collectiondialog.h collectiondialog.cpp
+    collectioneditdialog.h collectioneditdialog.cpp
     collectionautoload.h collectionautoload.cpp
     collectionstylefile.h collectionstylefile.cpp
     collectionstyledialog.h collectionstyledialog.cpp
@@ -89,6 +91,8 @@ qt_add_executable(rcaiman_projects
     collectionvalidation.h collectionvalidation.cpp
     collectionvalidationdialog.h collectionvalidationdialog.cpp
     acquisitionmetadata.h acquisitionmetadata.cpp
+    legacyjpegimportdialog.h legacyjpegimportdialog.cpp
+    legacyjpegimporter.h legacyjpegimporter.cpp
     hspimportdialog.h hspimportdialog.cpp
     hspprojectimporter.h hspprojectimporter.cpp
     exampleprojectsdialog.h exampleprojectsdialog.cpp

@@ -112,6 +112,13 @@ QString CollectionDialog::script() const
     return {};
 }
 
+QString CollectionDialog::alias() const
+{
+    if (m_aliasEdit)
+        return m_aliasEdit->text().trimmed();
+    return {};
+}
+
 void CollectionDialog::setupUI()
 {
     auto *mainLayout = new QVBoxLayout(this);
@@ -140,6 +147,14 @@ void CollectionDialog::setupUI()
         "other"
     });
     formLayout->addRow("Collection class:", m_typeCombo);
+
+    m_aliasEdit = new QLineEdit(this);
+    m_aliasEdit->setMaxLength(40);
+    m_aliasEdit->setPlaceholderText("Optional display alias");
+    m_aliasEdit->setToolTip(
+        "Optional display alias. It does not change the folder name, "
+        "sorting, scripts, or collection links.");
+    formLayout->addRow("Alias:", m_aliasEdit);
 
     m_parentWidget = new QWidget(this);
     m_parentCombo = new QComboBox(m_parentWidget);
@@ -208,6 +223,8 @@ void CollectionDialog::setupUI()
 
     connect(regBtn, &QPushButton::clicked, this, &CollectionDialog::browseRegistry);
     connect(scrBtn, &QPushButton::clicked, this, &CollectionDialog::browseScript);
+    connect(m_aliasEdit, &QLineEdit::textChanged,
+            this, &CollectionDialog::updateOkButton);
 
     connect(m_buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -391,6 +408,8 @@ void CollectionDialog::updateOkButton()
         && selectedDirectory.startsWith(
             projectRoot + QLatin1Char('/'), pathCaseSensitivity);
     bool enableOk = false;
+    const bool aliasOk = Project::collectionAliasIsSupported(
+        m_aliasEdit ? m_aliasEdit->text() : QString());
 
     if (collectionClass == "preprocessed_image_collection") {
         enableOk = hasDirectory;
@@ -402,6 +421,7 @@ void CollectionDialog::updateOkButton()
         enableOk = hasDirectory
             && !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
     }
+    enableOk = enableOk && aliasOk;
 
     if (auto *okBtn = m_buttonBox->button(QDialogButtonBox::Ok))
         okBtn->setEnabled(enableOk);

@@ -88,6 +88,7 @@ private slots:
     void cleanProject();
     void createProjectReport();
     void importLegacyHspProject();
+    void importLegacyJpegs();
     void openImage();
     void importRaw();
     void extractRawData();

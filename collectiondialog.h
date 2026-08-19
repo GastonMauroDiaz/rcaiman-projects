@@ -48,6 +48,7 @@ public:
     QString related() const;
     QString registry() const;
     QString script() const;
+    QString alias() const;
 
 private slots:
     void onClassChanged(int index);
@@ -72,6 +73,7 @@ private:
     QComboBox *m_relatedCombo = nullptr;
     QLineEdit *m_registryEdit = nullptr;
     QLineEdit *m_scriptEdit = nullptr;
+    QLineEdit *m_aliasEdit = nullptr;
     QLineEdit *m_directoryEdit = nullptr;
     QWidget *m_parentWidget = nullptr;
     QWidget *m_relatedWidget = nullptr;

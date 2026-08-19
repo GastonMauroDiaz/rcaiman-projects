@@ -30,6 +30,7 @@ struct Collection {
     QString dirPath;        // absolute path to the folder
     QString dirName;        // folder name (basename of dirPath)
     QString collectionClass;
+    QString alias;
     QString parent;
     QString related;
     QString registry;
@@ -95,6 +96,7 @@ public:
                                    const QString &related,
                                    const QString &registry,
                                    const QString &script,
+                                   const QString &alias = {},
                                    QString *errorMessage = nullptr);
 
     // Discover collections: scan first-level subdirectories of rootPath
@@ -107,6 +109,19 @@ public:
                                      const QString &reference);
     static bool descriptionIsSupported(const QString &description,
                                        QString *errorMessage = nullptr);
+    static bool collectionAliasIsSupported(const QString &alias,
+                                           QString *errorMessage = nullptr);
+    static bool updateCollectionMetadata(const QString &projectRootPath,
+                                         const QString &dirPath,
+                                         const QString &alias,
+                                         const QString &parent,
+                                         const QString &related,
+                                         const QString &registry,
+                                         const QString &script,
+                                         QString *errorMessage = nullptr);
+    static bool unregisterCollection(const QString &projectRootPath,
+                                     const QString &dirPath,
+                                     QString *errorMessage = nullptr);
 
     bool isValid() const;
     bool save(QString *errorMessage = nullptr) const;

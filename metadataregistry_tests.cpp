@@ -27,6 +27,7 @@
 #include "project.h"
 #include "pgmreader.h"
 #include "tiffreader.h"
+#include "tiffwriter.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -126,6 +127,30 @@ int main(int argc, char *argv[])
         || pgm16Data.sample(0, 0, 1).toInt() != 258
         || pgm16Data.sample(0, 1, 1).toInt() != 1024) {
         return 63;
+    }
+
+    RasterData rgbData;
+    rgbData.allocate(2, 1, 3, RasterData::DataType::UInt8);
+    rgbData.rawData()[0] = static_cast<char>(10);
+    rgbData.rawData()[1] = static_cast<char>(20);
+    rgbData.rawData()[2] = static_cast<char>(30);
+    rgbData.rawData()[3] = static_cast<char>(40);
+    rgbData.rawData()[4] = static_cast<char>(50);
+    rgbData.rawData()[5] = static_cast<char>(60);
+    const QString rgbTiffPath =
+        QDir(directory.path()).filePath("rgb.tif");
+    if (!TiffWriter::write(rgbTiffPath, rgbData, &error))
+        return 86;
+    const RasterData rgbRead = TiffReader::load(rgbTiffPath, &error);
+    if (rgbRead.isNull()
+        || rgbRead.width() != 2
+        || rgbRead.height() != 1
+        || rgbRead.bands() != 3
+        || rgbRead.dataType() != RasterData::DataType::UInt8
+        || rgbRead.sample(0, 0, 1).toUInt() != 20
+        || rgbRead.sample(1, 0, 1).toUInt() != 40
+        || rgbRead.sample(2, 0, 1).toUInt() != 60) {
+        return 87;
     }
 
     const QString hspSource = QDir(directory.path()).filePath("legacy_hsp");

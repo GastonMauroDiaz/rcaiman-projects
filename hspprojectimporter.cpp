@@ -757,6 +757,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
         if (!Project::registerCollection(
                 project.rootPath(), preprocessedDir,
                 "preprocessed_image_collection", {}, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
@@ -775,18 +776,21 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
         if (!Project::registerCollection(
                 project.rootPath(), skyDir,
                 "point_collection", preprocessedDir, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
         if (!Project::registerCollection(
                 project.rootPath(), sunDir,
                 "point_collection", preprocessedDir, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
         if (!Project::registerCollection(
                 project.rootPath(), maskDir,
                 "segmentation_collection", preprocessedDir, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
@@ -797,6 +801,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
         if (!Project::registerCollection(
                 project.rootPath(), markedAreaDir,
                 "segmentation_collection", preprocessedDir, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
@@ -807,6 +812,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
         if (!Project::registerCollection(
                 project.rootPath(), optSkyCoefDir,
                 "other", {}, {}, {}, {},
+                {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
@@ -954,6 +960,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
     QString registrationError;
     if (!Project::registerCollection(
             project.rootPath(), fieldNotesDir, "other", {}, {}, {}, {},
+            {},
             &registrationError)) {
         return failAndRemove(registrationError);
     }

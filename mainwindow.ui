@@ -39,6 +39,7 @@
     <addaction name="separator"/>
     <addaction name="actionImportRaw"/>
     <addaction name="actionExtractRawData"/>
+    <addaction name="actionImportLegacyJpegs"/>
     <addaction name="separator"/>
     <addaction name="actionRegisterCollection"/>
     <addaction name="separator"/>
@@ -330,6 +331,14 @@
    </property>
    <property name="text">
     <string>Extract raw data and metadata</string>
+   </property>
+  </action>
+  <action name="actionImportLegacyJpegs">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Import legacy JPEGs as TIFF...</string>
    </property>
   </action>
   <action name="actionRegisterCollection">

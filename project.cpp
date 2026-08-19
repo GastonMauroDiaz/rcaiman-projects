@@ -29,6 +29,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
+#include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
 
@@ -422,6 +423,175 @@ bool Project::descriptionIsSupported(const QString &description,
     return true;
 }
 
+bool Project::collectionAliasIsSupported(const QString &alias,
+                                         QString *errorMessage)
+{
+    const QString trimmedAlias = alias.trimmed();
+    if (trimmedAlias.size() > 40) {
+        if (errorMessage)
+            *errorMessage = "Collection alias cannot be longer than 40 characters.";
+        return false;
+    }
+
+    for (const QChar character : trimmedAlias) {
+        if (character.category() == QChar::Other_Control) {
+            if (errorMessage) {
+                *errorMessage = "Collection alias cannot contain line breaks "
+                    "or control characters.";
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Project::updateCollectionMetadata(const QString &projectRootPath,
+                                       const QString &dirPath,
+                                       const QString &alias,
+                                       const QString &parent,
+                                       const QString &related,
+                                       const QString &registry,
+                                       const QString &script,
+                                       QString *errorMessage)
+{
+    if (!pathIsInsideRoot(dirPath, projectRootPath)
+        || normalizedAbsolutePath(dirPath)
+            == normalizedAbsolutePath(projectRootPath)) {
+        if (errorMessage)
+            *errorMessage = "Collection folder must be inside the project root.";
+        return false;
+    }
+
+    const QString cleanAlias = alias.trimmed();
+    if (!collectionAliasIsSupported(cleanAlias, errorMessage))
+        return false;
+
+    const QString filePath = QDir(dirPath).filePath("collection.yaml");
+    QFile input(filePath);
+    if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (errorMessage)
+            *errorMessage = "Could not read collection.yaml.";
+        return false;
+    }
+
+    QStringList lines;
+    QTextStream inputStream(&input);
+    while (!inputStream.atEnd())
+        lines.append(inputStream.readLine());
+    input.close();
+
+    bool sawClass = false;
+    bool wroteMetadata = false;
+    QStringList outputLines;
+    outputLines.reserve(lines.size() + 5);
+    const QStringList editedKeys = {
+        "alias:", "parent:", "related:", "registry:", "script:"
+    };
+    for (const QString &line : std::as_const(lines)) {
+        const QString trimmedLine = line.trimmed();
+        bool skipLine = false;
+        for (const QString &key : editedKeys) {
+            if (trimmedLine.startsWith(key)) {
+                skipLine = true;
+                break;
+            }
+        }
+        if (skipLine)
+            continue;
+
+        outputLines.append(line);
+        if (!wroteMetadata && trimmedLine.startsWith("class:")) {
+            sawClass = true;
+            if (!cleanAlias.isEmpty()) {
+                outputLines.append(QStringLiteral("alias: %1").arg(
+                    yamlString(cleanAlias)));
+            }
+            if (!parent.isEmpty()) {
+                outputLines.append(QStringLiteral("parent: %1").arg(
+                    portableReference(projectRootPath, parent)));
+            }
+            if (!related.isEmpty()) {
+                outputLines.append(QStringLiteral("related: %1").arg(
+                    portableReference(projectRootPath, related)));
+            }
+            if (!registry.isEmpty()) {
+                outputLines.append(QStringLiteral("registry: %1").arg(
+                    portableReference(projectRootPath, registry)));
+            }
+            if (!script.isEmpty()) {
+                outputLines.append(QStringLiteral("script: %1").arg(
+                    portableReference(projectRootPath, script)));
+            }
+            wroteMetadata = true;
+        }
+    }
+
+    if (!sawClass) {
+        if (errorMessage)
+            *errorMessage = "collection.yaml does not contain a class field.";
+        return false;
+    }
+
+    QSaveFile output(filePath);
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (errorMessage)
+            *errorMessage = "Could not write collection.yaml.";
+        return false;
+    }
+
+    QTextStream outputStream(&output);
+    for (const QString &line : std::as_const(outputLines))
+        outputStream << line << "\n";
+    if (!output.commit()) {
+        if (errorMessage)
+            *errorMessage = "Could not commit collection.yaml.";
+        return false;
+    }
+    return true;
+}
+
+bool Project::unregisterCollection(const QString &projectRootPath,
+                                   const QString &dirPath,
+                                   QString *errorMessage)
+{
+    if (!pathIsInsideRoot(dirPath, projectRootPath)
+        || normalizedAbsolutePath(dirPath)
+            == normalizedAbsolutePath(projectRootPath)) {
+        if (errorMessage)
+            *errorMessage = "Collection folder must be inside the project root.";
+        return false;
+    }
+
+    const QDir dir(dirPath);
+    if (!dir.exists()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Directory does not exist: %1").arg(dirPath);
+        return false;
+    }
+
+    const QString collectionPath = dir.filePath("collection.yaml");
+    if (!QFileInfo::exists(collectionPath)) {
+        if (errorMessage)
+            *errorMessage = "This folder is not a registered collection.";
+        return false;
+    }
+
+    const QString stylePath = dir.filePath("style.yaml");
+    if (QFileInfo::exists(stylePath) && !QFile::remove(stylePath)) {
+        if (errorMessage)
+            *errorMessage = "Could not remove style.yaml.";
+        return false;
+    }
+
+    if (!QFile::remove(collectionPath)) {
+        if (errorMessage)
+            *errorMessage = "Could not remove collection.yaml.";
+        return false;
+    }
+
+    return true;
+}
+
 bool Project::registerCollection(const QString &projectRootPath,
                                  const QString &dirPath,
                                  const QString &collectionClass,
@@ -429,6 +599,7 @@ bool Project::registerCollection(const QString &projectRootPath,
                                  const QString &related,
                                  const QString &registry,
                                  const QString &script,
+                                 const QString &alias,
                                  QString *errorMessage)
 {
     if (!pathIsInsideRoot(dirPath, projectRootPath)
@@ -446,6 +617,10 @@ bool Project::registerCollection(const QString &projectRootPath,
         return false;
     }
 
+    const QString cleanAlias = alias.trimmed();
+    if (!collectionAliasIsSupported(cleanAlias, errorMessage))
+        return false;
+
     const QString filePath = dir.filePath("collection.yaml");
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
@@ -457,6 +632,8 @@ bool Project::registerCollection(const QString &projectRootPath,
     QTextStream stream(&file);
     stream << "schema_version: 1\n";
     stream << "class: " << collectionClass << "\n";
+    if (!cleanAlias.isEmpty())
+        stream << "alias: " << yamlString(cleanAlias) << "\n";
     if (!parent.isEmpty())
         stream << "parent: "
                << portableReference(projectRootPath, parent) << "\n";
@@ -501,6 +678,8 @@ QVector<Collection> Project::discoverCollections(const QString &rootPath)
             const QString line = stream.readLine();
             if (line.startsWith("class:"))
                 col.collectionClass = valueAfterColon(line);
+            else if (line.startsWith("alias:"))
+                col.alias = yamlValueAfterColon(line);
             else if (line.startsWith("parent:"))
                 col.parent = valueAfterColon(line);
             else if (line.startsWith("related:"))
@@ -899,7 +1078,12 @@ bool Project::writeReport(QString *errorMessage) const
                 filters = imageFilters;
             const int fileCount = matchingRelativeFiles(
                 m_rootPath, collection.dirPath, filters, false).size();
-            stream << "| `" << collection.dirName << "` | "
+            const QString collectionName = collection.alias.isEmpty()
+                ? QStringLiteral("`%1`").arg(collection.dirName)
+                : QStringLiteral("`%1`<br>%2")
+                      .arg(collection.dirName,
+                           markdownEscaped(collection.alias));
+            stream << "| " << collectionName << " | "
                    << collection.collectionClass << " | "
                    << fileCount << " | "
                    << (collection.parent.isEmpty() ? "-" : collection.parent)

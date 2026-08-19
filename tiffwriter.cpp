@@ -25,15 +25,18 @@
 
 #include <tiffio.h>
 
+#include <cstring>
+#include <vector>
+
 bool TiffWriter::write(const QString &fileName,
                        const RasterData &data,
                        QString *errorMessage)
 {
     if (data.isNull() || data.width() <= 0 || data.height() <= 0
-        || data.bands() != 1) {
+        || (data.bands() != 1 && data.bands() != 3)) {
         if (errorMessage)
             *errorMessage = QStringLiteral(
-                "Only non-empty single-band rasters can be written as TIFF.");
+                "Only non-empty single-band or RGB rasters can be written as TIFF.");
         return false;
     }
 
@@ -46,6 +49,13 @@ bool TiffWriter::write(const QString &fileName,
         if (errorMessage)
             *errorMessage = QStringLiteral(
                 "Only UInt8 and UInt16 rasters can be written as TIFF.");
+        return false;
+    }
+    if (data.bands() == 3
+        && data.dataType() != RasterData::DataType::UInt8) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "Only UInt8 RGB rasters can be written as TIFF.");
         return false;
     }
 
@@ -62,22 +72,56 @@ bool TiffWriter::write(const QString &fileName,
                  static_cast<uint32_t>(data.width()));
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH,
                  static_cast<uint32_t>(data.height()));
-    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL,
+                 static_cast<uint16_t>(data.bands()));
     TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, bitsPerSample);
     TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,
+                 data.bands() == 3
+                     ? PHOTOMETRIC_RGB
+                     : PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
     TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,
                  TIFFDefaultStripSize(tif, 0));
 
-    const int bytesPerRow = data.width() * data.sampleSize();
     const char *base = data.rawData().constData();
+    const int bytesPerSample = data.sampleSize();
+    const qsizetype bandBytes =
+        static_cast<qsizetype>(data.width()) * data.height()
+        * bytesPerSample;
+    const int singleBandBytesPerRow = data.width() * bytesPerSample;
+    std::vector<char> rowBuffer(
+        static_cast<size_t>(data.width() * data.bands() * bytesPerSample));
+
     for (int row = 0; row < data.height(); ++row) {
-        const char *rowData =
-            base + static_cast<qsizetype>(row) * bytesPerRow;
-        if (TIFFWriteScanline(tif, const_cast<char *>(rowData), row, 0) < 0) {
+        char *rowData = nullptr;
+        if (data.bands() == 1) {
+            rowData = const_cast<char *>(
+                base + static_cast<qsizetype>(row)
+                           * singleBandBytesPerRow);
+        } else {
+            for (int col = 0; col < data.width(); ++col) {
+                for (int band = 0; band < data.bands(); ++band) {
+                    const char *src =
+                        base + static_cast<qsizetype>(band) * bandBytes
+                        + static_cast<qsizetype>(row)
+                              * singleBandBytesPerRow
+                        + static_cast<qsizetype>(col) * bytesPerSample;
+                    char *dst =
+                        rowBuffer.data()
+                        + static_cast<qsizetype>(
+                              col * data.bands() + band)
+                              * bytesPerSample;
+                    std::memcpy(dst, src,
+                                static_cast<size_t>(bytesPerSample));
+                }
+            }
+            rowData = rowBuffer.data();
+        }
+
+        if (TIFFWriteScanline(tif, rowData, row, 0) < 0) {
             TIFFClose(tif);
             if (errorMessage)
                 *errorMessage = QStringLiteral("Could not write TIFF row %1.")
