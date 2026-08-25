@@ -59,6 +59,7 @@
 #include "shortcuttext.h"
 
 #include <QAction>
+#include <QAbstractProxyModel>
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
@@ -97,6 +98,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPersistentModelIndex>
 #include <QPoint>
 #include <QPixmap>
 #include <QProcess>
@@ -108,7 +110,6 @@
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSlider>
-#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QSet>
 #include <QSpinBox>
@@ -119,11 +120,14 @@
 #include <QTextBrowser>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
 #include <QVBoxLayout>
 #include <QDateTime>
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 
 namespace {
 enum class ProjectExplorerSortMode {
@@ -649,6 +653,35 @@ int collectionIndexByPath(const QVector<Collection> &collections,
     for (int i = 0; i < collections.size(); ++i) {
         if (normalizedAbsolutePathForComparison(collections.at(i).dirPath)
             == normalizedPath) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int collectionIndexByDirectory(const QString &projectRoot,
+                               const QVector<Collection> &collections,
+                               const QString &directoryPath)
+{
+    const int byPath = collectionIndexByPath(collections, directoryPath);
+    if (byPath >= 0)
+        return byPath;
+
+    const QFileInfo directoryInfo(directoryPath);
+    if (!directoryInfo.isDir())
+        return -1;
+
+    // Collections are first-level project folders. The grouped explorer may
+    // route through virtual rows, so keep a name-based fallback at that level.
+    if (normalizedAbsolutePathForComparison(
+            directoryInfo.absoluteDir().absolutePath())
+        != normalizedAbsolutePathForComparison(projectRoot)) {
+        return -1;
+    }
+
+    for (int i = 0; i < collections.size(); ++i) {
+        if (collections.at(i).dirName.compare(
+                directoryInfo.fileName(), Qt::CaseInsensitive) == 0) {
             return i;
         }
     }
@@ -1510,14 +1543,51 @@ bool validateBinaryMask(const RasterData &mask, QString *errorMessage = nullptr)
     return true;
 }
 
-class ProjectExplorerSortProxyModel : public QSortFilterProxyModel
+class ProjectExplorerSortProxyModel : public QAbstractProxyModel
 {
 public:
     explicit ProjectExplorerSortProxyModel(QObject *parent = nullptr)
-        : QSortFilterProxyModel(parent)
+        : QAbstractProxyModel(parent)
     {
-        setDynamicSortFilter(true);
-        setSortCaseSensitivity(Qt::CaseInsensitive);
+    }
+
+    void setSourceModel(QAbstractItemModel *source) override
+    {
+        if (source == sourceModel())
+            return;
+
+        if (sourceModel())
+            disconnect(sourceModel(), nullptr, this, nullptr);
+
+        beginResetModel();
+        QAbstractProxyModel::setSourceModel(source);
+        clearCaches();
+        endResetModel();
+
+        if (!source)
+            return;
+
+        connect(source, &QAbstractItemModel::modelReset,
+                this, [this]() { invalidate(); });
+        connect(source, &QAbstractItemModel::layoutChanged,
+                this, [this](const QList<QPersistentModelIndex>&,
+                             QAbstractItemModel::LayoutChangeHint) {
+                    refreshSourceLayout();
+                });
+        connect(source, &QAbstractItemModel::rowsInserted,
+                this, [this](const QModelIndex &parent, int, int) {
+                    refreshSourceBranch(parent);
+                });
+        connect(source, &QAbstractItemModel::rowsRemoved,
+                this, [this](const QModelIndex &parent, int, int) {
+                    refreshSourceBranch(parent);
+                });
+        connect(source, &QAbstractItemModel::dataChanged,
+                this, [this](const QModelIndex &topLeft,
+                             const QModelIndex &bottomRight,
+                             const QList<int> &roles) {
+                    refreshSourceData(topLeft, bottomRight, roles);
+                });
     }
 
     void setSortMode(ProjectExplorerSortMode mode)
@@ -1542,59 +1612,367 @@ public:
         invalidate();
     }
 
-protected:
-    bool filterAcceptsRow(int sourceRow,
-                          const QModelIndex &sourceParent) const override
+    void invalidate()
     {
-        if (!m_starredOnly)
-            return true;
-
-        const auto *model =
-            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
-        if (!model)
-            return QSortFilterProxyModel::filterAcceptsRow(
-                sourceRow, sourceParent);
-
-        const QModelIndex index = sourceModel()->index(
-            sourceRow, 0, sourceParent);
-        if (!index.isValid())
-            return false;
-
-        const QFileInfo info = model->fileInfo(index);
-        if (isProjectRootOrAncestor(info.absoluteFilePath())) {
-            return true;
-        }
-
-        return model->isMarkedOrInherited(info)
-            || model->hasMarkedDescendant(info);
+        beginResetModel();
+        clearCaches();
+        endResetModel();
     }
 
-    bool lessThan(const QModelIndex &left,
-                  const QModelIndex &right) const override
+    QModelIndex mapToSource(const QModelIndex &proxyIndex) const override
     {
-        const auto *model =
-            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
-        if (!model)
-            return QSortFilterProxyModel::lessThan(left, right);
+        if (!proxyIndex.isValid() || !sourceModel())
+            return {};
 
-        const QFileInfo leftInfo = model->fileInfo(left);
-        const QFileInfo rightInfo = model->fileInfo(right);
-        if (leftInfo.isDir() != rightInfo.isDir())
-            return leftInfo.isDir();
+        const ProxyNode *node = nodeFromIndex(proxyIndex);
+        if (!node || node->kind != ProxyNode::Kind::Source)
+            return {};
 
-        if (!leftInfo.isDir()
-            && m_sortMode == ProjectExplorerSortMode::Type) {
-            const int extensionCompare = QString::compare(
-                leftInfo.suffix(), rightInfo.suffix(), Qt::CaseInsensitive);
-            if (extensionCompare != 0)
-                return extensionCompare < 0;
+        const QModelIndex sourceIndex = node->sourceIndex;
+        return sourceIndex.isValid()
+            ? sourceIndex.sibling(sourceIndex.row(), proxyIndex.column())
+            : QModelIndex();
+    }
+
+    QModelIndex mapFromSource(const QModelIndex &sourceIndex) const override
+    {
+        if (!sourceIndex.isValid() || !sourceModel())
+            return {};
+
+        const QModelIndex rowSource =
+            sourceIndex.sibling(sourceIndex.row(), 0);
+        if (!filterAcceptsSourceIndex(rowSource))
+            return {};
+
+        const int row = rowForSource(rowSource);
+        if (row < 0)
+            return {};
+
+        return createIndex(
+            row, sourceIndex.column(), nodeForSource(rowSource));
+    }
+
+    QModelIndex index(int row,
+                      int column,
+                      const QModelIndex &parent = {}) const override
+    {
+        if (!sourceModel() || row < 0 || column < 0)
+            return {};
+        if (parent.isValid() && parent.column() != 0)
+            return {};
+        if (column >= columnCount(parent))
+            return {};
+
+        const ProxyNode *parentNode = nodeFromIndex(parent);
+        if (parentNode && parentNode->kind == ProxyNode::Kind::Group) {
+            const QVector<QPersistentModelIndex> &children =
+                sourceChildrenForGroup(parentNode->group);
+            if (row >= children.size())
+                return {};
+            return createIndex(
+                row, column, nodeForSource(children.at(row)));
         }
 
-        return QString::compare(
-            leftInfo.fileName(), rightInfo.fileName(), Qt::CaseInsensitive) < 0;
+        if (!parent.isValid() && !m_projectRootPath.isEmpty()) {
+            const QModelIndex sourceRoot = projectRootSourceIndex();
+            if (row != 0 || !sourceRoot.isValid())
+                return {};
+            return createIndex(
+                row, column, nodeForSource(sourceRoot));
+        }
+
+        const QModelIndex sourceParent = parent.isValid()
+            ? mapToSource(parent)
+            : QModelIndex();
+        if (sourceParent.isValid() && isProjectRootSource(sourceParent)) {
+            const QVector<RootGroup> &groups = visibleRootGroups();
+            if (row < groups.size())
+                return createIndex(
+                    row, column, nodeForGroup(groups.at(row)));
+
+            const QVector<QPersistentModelIndex> &files =
+                directRootFiles();
+            const int fileRow = row - groups.size();
+            if (fileRow >= files.size())
+                return {};
+            return createIndex(
+                row, column, nodeForSource(files.at(fileRow)));
+        }
+
+        const QVector<QPersistentModelIndex> &children =
+            sourceChildrenForParent(sourceParent);
+        if (row >= children.size())
+            return {};
+        return createIndex(row, column, nodeForSource(children.at(row)));
+    }
+
+    QModelIndex parent(const QModelIndex &child) const override
+    {
+        if (!child.isValid() || !sourceModel())
+            return {};
+
+        const ProxyNode *node = nodeFromIndex(child);
+        if (!node)
+            return {};
+
+        if (node->kind == ProxyNode::Kind::Group)
+            return projectRootProxyIndex();
+
+        const QModelIndex sourceIndex = node->sourceIndex;
+        if (!sourceIndex.isValid() || isProjectRootSource(sourceIndex))
+            return {};
+
+        const RootGroup group = rootGroupForSource(sourceIndex);
+        if (group != RootGroup::None)
+            return groupIndex(group);
+
+        const QModelIndex sourceParent = sourceIndex.parent();
+        if (!sourceParent.isValid())
+            return {};
+        return mapFromSource(sourceParent);
+    }
+
+    int rowCount(const QModelIndex &parent = {}) const override
+    {
+        if (!sourceModel())
+            return 0;
+        if (parent.isValid() && parent.column() != 0)
+            return 0;
+
+        const ProxyNode *parentNode = nodeFromIndex(parent);
+        if (parentNode && parentNode->kind == ProxyNode::Kind::Group)
+            return sourceChildrenForGroup(parentNode->group).size();
+
+        if (!parent.isValid() && !m_projectRootPath.isEmpty())
+            return projectRootSourceIndex().isValid() ? 1 : 0;
+
+        const QModelIndex sourceParent = parent.isValid()
+            ? mapToSource(parent)
+            : QModelIndex();
+        if (sourceParent.isValid() && isProjectRootSource(sourceParent)) {
+            return visibleRootGroups().size() + directRootFiles().size();
+        }
+
+        return sourceChildrenForParent(sourceParent).size();
+    }
+
+    int columnCount(const QModelIndex &parent = {}) const override
+    {
+        if (!sourceModel())
+            return 0;
+
+        const ProxyNode *parentNode = nodeFromIndex(parent);
+        if (parentNode && parentNode->kind == ProxyNode::Kind::Group)
+            return sourceModel()->columnCount(projectRootSourceIndex());
+
+        const QModelIndex sourceParent = parent.isValid()
+            ? mapToSource(parent)
+            : QModelIndex();
+        return sourceModel()->columnCount(sourceParent);
+    }
+
+    QVariant data(const QModelIndex &index,
+                  int role = Qt::DisplayRole) const override
+    {
+        if (!index.isValid())
+            return {};
+
+        const ProxyNode *node = nodeFromIndex(index);
+        if (!node)
+            return {};
+
+        if (role == ProjectExplorerGroupRole)
+            return node->kind == ProxyNode::Kind::Group;
+        if (role == ProjectExplorerGroupIdRole)
+            return node->kind == ProxyNode::Kind::Group
+                ? groupId(node->group)
+                : QString();
+
+        if (node->kind == ProxyNode::Kind::Group)
+            return groupData(node->group, index.column(), role);
+
+        return sourceModel()
+            ? sourceModel()->data(mapToSource(index), role)
+            : QVariant();
+    }
+
+    QVariant headerData(int section,
+                        Qt::Orientation orientation,
+                        int role = Qt::DisplayRole) const override
+    {
+        return sourceModel()
+            ? sourceModel()->headerData(section, orientation, role)
+            : QVariant();
+    }
+
+    Qt::ItemFlags flags(const QModelIndex &index) const override
+    {
+        if (!index.isValid() || !sourceModel())
+            return {};
+
+        const ProxyNode *node = nodeFromIndex(index);
+        if (!node)
+            return {};
+        if (node->kind == ProxyNode::Kind::Group)
+            return Qt::ItemIsEnabled;
+
+        return sourceModel()->flags(mapToSource(index));
+    }
+
+    bool hasChildren(const QModelIndex &parent = {}) const override
+    {
+        if (!sourceModel())
+            return false;
+
+        const ProxyNode *parentNode = nodeFromIndex(parent);
+        if (parentNode && parentNode->kind == ProxyNode::Kind::Group)
+            return rowCount(parent) > 0;
+
+        const QModelIndex sourceParent = parent.isValid()
+            ? mapToSource(parent)
+            : QModelIndex();
+        if (sourceParent.isValid() && isProjectRootSource(sourceParent))
+            return rowCount(parent) > 0;
+
+        return sourceModel()->hasChildren(sourceParent);
+    }
+
+    bool canFetchMore(const QModelIndex &parent) const override
+    {
+        if (!sourceModel())
+            return false;
+
+        const ProxyNode *node = nodeFromIndex(parent);
+        if (node && node->kind == ProxyNode::Kind::Group)
+            return false;
+
+        return sourceModel()->canFetchMore(mapToSource(parent));
+    }
+
+    void fetchMore(const QModelIndex &parent) override
+    {
+        if (!sourceModel())
+            return;
+
+        const ProxyNode *node = nodeFromIndex(parent);
+        if (node && node->kind == ProxyNode::Kind::Group)
+            return;
+
+        const QModelIndex sourceParent = mapToSource(parent);
+        m_childrenCache.remove(childrenCacheKey(sourceParent));
+        sourceModel()->fetchMore(sourceParent);
+    }
+
+    QStringList mimeTypes() const override
+    {
+        return sourceModel() ? sourceModel()->mimeTypes() : QStringList();
+    }
+
+    QMimeData *mimeData(const QModelIndexList &indexes) const override
+    {
+        if (!sourceModel())
+            return nullptr;
+
+        QModelIndexList sourceIndexes;
+        QSet<QString> seenRows;
+        for (const QModelIndex &index : indexes) {
+            if (!index.isValid() || index.column() != 0)
+                continue;
+            if (index.data(ProjectExplorerGroupRole).toBool())
+                continue;
+
+            const QModelIndex sourceIndex = mapToSource(index);
+            if (!sourceIndex.isValid())
+                continue;
+
+            const QString key = sourceIndexKey(sourceIndex);
+            if (seenRows.contains(key))
+                continue;
+            seenRows.insert(key);
+            sourceIndexes.append(sourceIndex);
+        }
+        return sourceIndexes.isEmpty()
+            ? nullptr
+            : sourceModel()->mimeData(sourceIndexes);
+    }
+
+    bool canDropMimeData(const QMimeData *data,
+                         Qt::DropAction action,
+                         int row,
+                         int column,
+                         const QModelIndex &parent) const override
+    {
+        if (!sourceModel())
+            return false;
+
+        const ProxyNode *node = nodeFromIndex(parent);
+        if (node && node->kind == ProxyNode::Kind::Group)
+            return false;
+
+        return sourceModel()->canDropMimeData(
+            data, action, row, column, mapToSource(parent));
+    }
+
+    bool dropMimeData(const QMimeData *data,
+                      Qt::DropAction action,
+                      int row,
+                      int column,
+                      const QModelIndex &parent) override
+    {
+        if (!sourceModel())
+            return false;
+
+        const ProxyNode *node = nodeFromIndex(parent);
+        if (node && node->kind == ProxyNode::Kind::Group)
+            return false;
+
+        return sourceModel()->dropMimeData(
+            data, action, row, column, mapToSource(parent));
+    }
+
+    Qt::DropActions supportedDragActions() const override
+    {
+        return sourceModel()
+            ? sourceModel()->supportedDragActions()
+            : Qt::DropActions();
+    }
+
+    Qt::DropActions supportedDropActions() const override
+    {
+        return sourceModel()
+            ? sourceModel()->supportedDropActions()
+            : Qt::DropActions();
+    }
+
+    void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override
+    {
+        Q_UNUSED(column);
+        if (m_sortOrder == order)
+            return;
+        m_sortOrder = order;
+        invalidate();
     }
 
 private:
+    enum class RootGroup {
+        None = 0,
+        Reserved,
+        Collections,
+        RegularFolders
+    };
+
+    struct ProxyNode
+    {
+        enum class Kind {
+            Source,
+            Group
+        };
+
+        Kind kind = Kind::Source;
+        QPersistentModelIndex sourceIndex;
+        RootGroup group = RootGroup::None;
+    };
+
     static QString normalizedPath(const QString &path)
     {
         if (path.isEmpty())
@@ -1605,6 +1983,107 @@ private:
         normalized = normalized.toCaseFolded();
 #endif
         return normalized;
+    }
+
+    static QString sourceIndexKey(const QModelIndex &index)
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(index.model());
+        if (model)
+            return model->filePath(index);
+        return QStringLiteral("%1:%2:%3")
+            .arg(index.row())
+            .arg(index.column())
+            .arg(reinterpret_cast<quintptr>(index.internalPointer()));
+    }
+
+    const ProxyNode *nodeFromIndex(const QModelIndex &index) const
+    {
+        return index.isValid()
+            ? static_cast<const ProxyNode*>(index.internalPointer())
+            : nullptr;
+    }
+
+    ProxyNode *nodeForSource(const QModelIndex &sourceIndex) const
+    {
+        const QModelIndex rowSource =
+            sourceIndex.sibling(sourceIndex.row(), 0);
+        const QString key = sourceIndexKey(rowSource);
+        if (ProxyNode *node = m_sourceNodes.value(key, nullptr))
+            return node;
+
+        auto node = std::make_unique<ProxyNode>();
+        node->kind = ProxyNode::Kind::Source;
+        node->sourceIndex = rowSource;
+        ProxyNode *rawNode = node.get();
+        m_nodes.push_back(std::move(node));
+        m_sourceNodes.insert(key, rawNode);
+        return rawNode;
+    }
+
+    ProxyNode *nodeForGroup(RootGroup group) const
+    {
+        const int key = static_cast<int>(group);
+        if (ProxyNode *node = m_groupNodes.value(key, nullptr))
+            return node;
+
+        auto node = std::make_unique<ProxyNode>();
+        node->kind = ProxyNode::Kind::Group;
+        node->group = group;
+        ProxyNode *rawNode = node.get();
+        m_nodes.push_back(std::move(node));
+        m_groupNodes.insert(key, rawNode);
+        return rawNode;
+    }
+
+    void clearNodes()
+    {
+        m_sourceNodes.clear();
+        m_groupNodes.clear();
+        m_nodes.clear();
+    }
+
+    void clearCaches()
+    {
+        clearNodes();
+        clearLayoutCaches();
+    }
+
+    void clearLayoutCaches()
+    {
+        m_rootLayoutValid = false;
+        m_visibleRootGroupsCache.clear();
+        m_groupChildrenCache.clear();
+        m_directRootFilesCache.clear();
+        m_childrenCache.clear();
+    }
+
+    QModelIndex projectRootSourceIndex() const
+    {
+        if (!sourceModel() || m_projectRootPath.isEmpty())
+            return {};
+
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        return model ? model->index(m_projectRootPath) : QModelIndex();
+    }
+
+    QModelIndex projectRootProxyIndex() const
+    {
+        const QModelIndex sourceRoot = projectRootSourceIndex();
+        if (!sourceRoot.isValid())
+            return {};
+
+        return createIndex(0, 0, nodeForSource(sourceRoot));
+    }
+
+    QModelIndex groupIndex(RootGroup group) const
+    {
+        const QVector<RootGroup> &groups = visibleRootGroups();
+        const int row = groups.indexOf(group);
+        if (row < 0)
+            return {};
+        return createIndex(row, 0, nodeForGroup(group));
     }
 
     bool isProjectRootOrAncestor(const QString &path) const
@@ -1631,9 +2110,425 @@ private:
         return false;
     }
 
+    bool isProjectRootSource(const QModelIndex &sourceIndex) const
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model || !sourceIndex.isValid() || m_projectRootPath.isEmpty())
+            return false;
+        return normalizedPath(model->filePath(sourceIndex))
+            == m_projectRootPath;
+    }
+
+    bool isDirectProjectRootChildSource(
+        const QModelIndex &sourceIndex) const
+    {
+        return sourceIndex.isValid()
+            && sourceIndex.parent().isValid()
+            && isProjectRootSource(sourceIndex.parent());
+    }
+
+    RootGroup rootGroupForSource(const QModelIndex &sourceIndex) const
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model || !sourceIndex.isValid() || m_projectRootPath.isEmpty())
+            return RootGroup::None;
+
+        const QFileInfo info = model->fileInfo(sourceIndex);
+        if (!info.isDir())
+            return RootGroup::None;
+
+        const QString parentPath =
+            normalizedPath(info.absoluteDir().absolutePath());
+        if (parentPath != m_projectRootPath)
+            return RootGroup::None;
+
+        if (Project::reservedDirectories().contains(
+                info.fileName(), Qt::CaseInsensitive)) {
+            return RootGroup::Reserved;
+        }
+
+        if (!model->collectionClassForDirectory(
+                info.absoluteFilePath()).isEmpty()) {
+            return RootGroup::Collections;
+        }
+
+        return RootGroup::RegularFolders;
+    }
+
+    bool filterAcceptsSourceIndex(const QModelIndex &sourceIndex) const
+    {
+        if (!m_starredOnly)
+            return true;
+
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model || !sourceIndex.isValid())
+            return sourceIndex.isValid();
+
+        const QFileInfo info = model->fileInfo(sourceIndex);
+        if (isProjectRootOrAncestor(info.absoluteFilePath()))
+            return true;
+
+        return model->isMarkedOrInherited(info)
+            || model->hasMarkedDescendant(info);
+    }
+
+    QString childrenCacheKey(const QModelIndex &sourceParent) const
+    {
+        return sourceParent.isValid()
+            ? sourceIndexKey(sourceParent)
+            : QStringLiteral("<source-root>");
+    }
+
+    void refreshSourceBranch(const QModelIndex &sourceParent)
+    {
+        if (!sourceParent.isValid() || isProjectRootSource(sourceParent)) {
+            invalidate();
+            return;
+        }
+
+        m_childrenCache.remove(childrenCacheKey(sourceParent));
+        emit layoutAboutToBeChanged();
+        emit layoutChanged();
+
+        const QModelIndex proxyParent = mapFromSource(sourceParent);
+        if (!proxyParent.isValid())
+            return;
+
+        const QModelIndex left = proxyParent.sibling(proxyParent.row(), 0);
+        const QModelIndex right = proxyParent.sibling(
+            proxyParent.row(), qMax(0, columnCount(proxyParent.parent()) - 1));
+        emit dataChanged(left, right, {Qt::DisplayRole});
+    }
+
+    void refreshSourceData(const QModelIndex &topLeft,
+                           const QModelIndex &bottomRight,
+                           const QList<int> &roles)
+    {
+        if (!topLeft.isValid() || !bottomRight.isValid())
+            return;
+
+        const bool mayChangeRootGrouping =
+            roles.isEmpty()
+            || roles.contains(Qt::ForegroundRole)
+            || roles.contains(Qt::ToolTipRole);
+        if (mayChangeRootGrouping) {
+            for (int row = topLeft.row(); row <= bottomRight.row(); ++row) {
+                const QModelIndex sourceIndex =
+                    sourceModel()->index(row, 0, topLeft.parent());
+                if (isProjectRootSource(sourceIndex)
+                    || isDirectProjectRootChildSource(sourceIndex)) {
+                    invalidate();
+                    return;
+                }
+            }
+        }
+
+        const QModelIndex sourceParent = topLeft.parent();
+        if (sourceParent.isValid())
+            m_childrenCache.remove(childrenCacheKey(sourceParent));
+
+        const QModelIndex proxyTopLeft = mapFromSource(topLeft);
+        const QModelIndex proxyBottomRight = mapFromSource(bottomRight);
+        if (proxyTopLeft.isValid() && proxyBottomRight.isValid())
+            emit dataChanged(proxyTopLeft, proxyBottomRight, roles);
+    }
+
+    void refreshSourceLayout()
+    {
+        emit layoutAboutToBeChanged();
+        clearLayoutCaches();
+        emit layoutChanged();
+    }
+
+    const QVector<QPersistentModelIndex> &sourceChildrenForParent(
+        const QModelIndex &sourceParent) const
+    {
+        if (!sourceModel())
+            return m_emptyChildren;
+
+        const QString key = childrenCacheKey(sourceParent);
+        auto cached = m_childrenCache.constFind(key);
+        if (cached != m_childrenCache.constEnd())
+            return cached.value();
+
+        QVector<QPersistentModelIndex> children;
+        const int rows = sourceModel()->rowCount(sourceParent);
+        children.reserve(rows);
+        for (int row = 0; row < rows; ++row) {
+            const QModelIndex child =
+                sourceModel()->index(row, 0, sourceParent);
+            if (child.isValid() && filterAcceptsSourceIndex(child))
+                children.append(child);
+        }
+        sortSourceChildren(children);
+        auto inserted = m_childrenCache.insert(key, children);
+        return inserted.value();
+    }
+
+    const QVector<QPersistentModelIndex> &sourceChildrenForGroup(
+        RootGroup group) const
+    {
+        ensureRootLayout();
+        const int key = static_cast<int>(group);
+        auto it = m_groupChildrenCache.constFind(key);
+        return it == m_groupChildrenCache.constEnd()
+            ? m_emptyChildren
+            : it.value();
+    }
+
+    const QVector<QPersistentModelIndex> &directRootFiles() const
+    {
+        ensureRootLayout();
+        return m_directRootFilesCache;
+    }
+
+    const QVector<RootGroup> &visibleRootGroups() const
+    {
+        ensureRootLayout();
+        return m_visibleRootGroupsCache;
+    }
+
+    void ensureRootLayout() const
+    {
+        if (m_rootLayoutValid)
+            return;
+
+        m_visibleRootGroupsCache.clear();
+        m_groupChildrenCache.clear();
+        m_directRootFilesCache.clear();
+
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        const QModelIndex root = projectRootSourceIndex();
+        if (!model || !root.isValid()) {
+            m_rootLayoutValid = true;
+            return;
+        }
+
+        for (RootGroup group : {RootGroup::Reserved,
+                                RootGroup::Collections,
+                                RootGroup::RegularFolders}) {
+            m_groupChildrenCache.insert(
+                static_cast<int>(group), QVector<QPersistentModelIndex>());
+        }
+
+        const int rows = sourceModel()->rowCount(root);
+        for (int row = 0; row < rows; ++row) {
+            const QModelIndex child =
+                sourceModel()->index(row, 0, root);
+            if (!child.isValid())
+                continue;
+
+            if (!filterAcceptsSourceIndex(child))
+                continue;
+
+            const QFileInfo info = model->fileInfo(child);
+            if (!info.isDir()) {
+                m_directRootFilesCache.append(child);
+                continue;
+            }
+
+            const RootGroup group = rootGroupForSource(child);
+            if (group == RootGroup::None)
+                continue;
+            m_groupChildrenCache[static_cast<int>(group)].append(child);
+        }
+
+        sortSourceChildren(m_directRootFilesCache);
+        for (RootGroup group : {RootGroup::Reserved,
+                                RootGroup::Collections,
+                                RootGroup::RegularFolders}) {
+            QVector<QPersistentModelIndex> &children =
+                m_groupChildrenCache[static_cast<int>(group)];
+            sortSourceChildren(children);
+            if (!children.isEmpty())
+                m_visibleRootGroupsCache.append(group);
+        }
+        m_rootLayoutValid = true;
+    }
+
+    int rowForSource(const QModelIndex &sourceIndex) const
+    {
+        if (!sourceIndex.isValid())
+            return -1;
+
+        if (isProjectRootSource(sourceIndex))
+            return 0;
+
+        const RootGroup group = rootGroupForSource(sourceIndex);
+        if (group != RootGroup::None)
+            return indexOfSource(sourceChildrenForGroup(group), sourceIndex);
+
+        const QModelIndex sourceParent = sourceIndex.parent();
+        if (sourceParent.isValid() && isProjectRootSource(sourceParent)) {
+            const int fileRow =
+                indexOfSource(directRootFiles(), sourceIndex);
+            return fileRow < 0
+                ? -1
+                : visibleRootGroups().size() + fileRow;
+        }
+
+        return indexOfSource(
+            sourceChildrenForParent(sourceParent), sourceIndex);
+    }
+
+    int indexOfSource(
+        const QVector<QPersistentModelIndex> &indexes,
+        const QModelIndex &target) const
+    {
+        const QModelIndex rowTarget =
+            target.sibling(target.row(), 0);
+        for (int i = 0; i < indexes.size(); ++i) {
+            if (QModelIndex(indexes.at(i)) == rowTarget)
+                return i;
+        }
+        return -1;
+    }
+
+    void sortSourceChildren(
+        QVector<QPersistentModelIndex> &children) const
+    {
+        std::sort(
+            children.begin(),
+            children.end(),
+            [this](const QPersistentModelIndex &left,
+                   const QPersistentModelIndex &right) {
+                return m_sortOrder == Qt::AscendingOrder
+                    ? sourceIndexLessThan(QModelIndex(left),
+                                          QModelIndex(right))
+                    : sourceIndexLessThan(QModelIndex(right),
+                                          QModelIndex(left));
+            });
+    }
+
+    bool sourceIndexLessThan(const QModelIndex &left,
+                             const QModelIndex &right) const
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model)
+            return left.row() < right.row();
+
+        const QFileInfo leftInfo = model->fileInfo(left);
+        const QFileInfo rightInfo = model->fileInfo(right);
+        if (leftInfo.isDir() != rightInfo.isDir())
+            return leftInfo.isDir();
+
+        if (!leftInfo.isDir()
+            && m_sortMode == ProjectExplorerSortMode::Type) {
+            const int extensionCompare = QString::compare(
+                leftInfo.suffix(), rightInfo.suffix(), Qt::CaseInsensitive);
+            if (extensionCompare != 0)
+                return extensionCompare < 0;
+        }
+
+        const int nameCompare = QString::compare(
+            leftInfo.fileName(), rightInfo.fileName(), Qt::CaseInsensitive);
+        if (nameCompare != 0)
+            return nameCompare < 0;
+
+        return QString::compare(
+            leftInfo.absoluteFilePath(),
+            rightInfo.absoluteFilePath(),
+            Qt::CaseInsensitive) < 0;
+    }
+
+    QString labelForGroup(RootGroup group) const
+    {
+        switch (group) {
+        case RootGroup::Reserved:
+            return QStringLiteral("Reserved folders");
+        case RootGroup::Collections:
+            return QStringLiteral("Collections");
+        case RootGroup::RegularFolders:
+            return QStringLiteral("Regular folders");
+        case RootGroup::None:
+            break;
+        }
+        return {};
+    }
+
+    QString groupId(RootGroup group) const
+    {
+        switch (group) {
+        case RootGroup::Reserved:
+            return QStringLiteral("reserved");
+        case RootGroup::Collections:
+            return QStringLiteral("collections");
+        case RootGroup::RegularFolders:
+            return QStringLiteral("regular_folders");
+        case RootGroup::None:
+            break;
+        }
+        return {};
+    }
+
+    QString tooltipForGroup(RootGroup group) const
+    {
+        switch (group) {
+        case RootGroup::Reserved:
+            return QStringLiteral(
+                "Project folders managed by rcaiman-projects.");
+        case RootGroup::Collections:
+            return QStringLiteral("Registered project collections.");
+        case RootGroup::RegularFolders:
+            return QStringLiteral("Folders not registered as collections.");
+        case RootGroup::None:
+            break;
+        }
+        return {};
+    }
+
+    QVariant groupData(RootGroup group, int column, int role) const
+    {
+        if (role == ProjectFileMarkedRole
+            || role == ProjectFileDirectlyMarkedRole) {
+            return false;
+        }
+
+        if (column != 0)
+            return {};
+
+        if (role == Qt::DisplayRole) {
+            return QStringLiteral("%1 (%2)")
+                .arg(labelForGroup(group))
+                .arg(sourceChildrenForGroup(group).size());
+        }
+        if (role == Qt::ToolTipRole)
+            return tooltipForGroup(group);
+        if (role == Qt::FontRole) {
+            QFont font;
+            font.setBold(true);
+            return font;
+        }
+        if (role == Qt::ForegroundRole)
+            return QBrush(QColor("#243447"));
+        if (role == Qt::BackgroundRole)
+            return QBrush(QColor("#eef3f8"));
+        if (role == Qt::DecorationRole)
+            return {};
+        if (role == Qt::SizeHintRole)
+            return QSize(-1, 22);
+
+        return {};
+    }
+
     ProjectExplorerSortMode m_sortMode = ProjectExplorerSortMode::Name;
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
     bool m_starredOnly = false;
     QString m_projectRootPath;
+    mutable std::vector<std::unique_ptr<ProxyNode>> m_nodes;
+    mutable QHash<QString, ProxyNode*> m_sourceNodes;
+    mutable QHash<int, ProxyNode*> m_groupNodes;
+    mutable bool m_rootLayoutValid = false;
+    mutable QVector<RootGroup> m_visibleRootGroupsCache;
+    mutable QHash<int, QVector<QPersistentModelIndex>> m_groupChildrenCache;
+    mutable QVector<QPersistentModelIndex> m_directRootFilesCache;
+    mutable QHash<QString, QVector<QPersistentModelIndex>> m_childrenCache;
+    mutable QVector<QPersistentModelIndex> m_emptyChildren;
 };
 
 constexpr int ProjectFileMarkAreaWidth = 24;
@@ -1780,6 +2675,11 @@ public:
                const QStyleOptionViewItem &option,
                const QModelIndex &index) const override
     {
+        if (index.data(ProjectExplorerGroupRole).toBool()) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
         if (index.column() != 0) {
             QStyledItemDelegate::paint(painter, option, index);
             return;
@@ -2273,6 +3173,24 @@ MainWindow::MainWindow(QWidget *parent)
                 refreshProjectExplorerRootIndex();
                 updateProjectExplorerStarredEmptyMessage();
                 updateProjectActions();
+            });
+    connect(m_projectSortProxy, &QAbstractItemModel::modelReset,
+            this, [this]() {
+                QTimer::singleShot(
+                    0, this, &MainWindow::refreshProjectExplorerRootIndex);
+            });
+    connect(m_projectSortProxy, &QAbstractItemModel::rowsInserted,
+            this, [this](const QModelIndex&, int, int) {
+                QTimer::singleShot(
+                    0, this, &MainWindow::refreshProjectExplorerRootIndex);
+            });
+    connect(ui->projectTree, &QTreeView::expanded,
+            this, [this](const QModelIndex &index) {
+                rememberProjectExplorerGroupExpansion(index, true);
+            });
+    connect(ui->projectTree, &QTreeView::collapsed,
+            this, [this](const QModelIndex &index) {
+                rememberProjectExplorerGroupExpansion(index, false);
             });
 
     // Load recent projects
@@ -3681,6 +4599,9 @@ void MainWindow::showCollectionGraph()
 void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
 {
     const QString filePath = projectPathFromIndex(index);
+    if (filePath.isEmpty())
+        return;
+
     const QFileInfo fi(filePath);
 
     const QStringList imageExtensions = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
@@ -3709,7 +4630,11 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         ui->projectTree->setCurrentIndex(rowIndex);
     }
 
-    const QFileInfo info(projectPathFromIndex(rowIndex));
+    const QString itemPath = projectPathFromIndex(rowIndex);
+    if (itemPath.isEmpty())
+        return;
+
+    const QFileInfo info(itemPath);
 
     QMenu menu(this);
     QAction *openDefaultAction =
@@ -3756,13 +4681,11 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     bool hasRegisteredCollection = false;
     const QVector<Collection> collections =
         Project::discoverCollections(m_project.rootPath());
-    for (const Collection &collection : collections) {
-        if (QDir::cleanPath(collection.dirPath)
-            == QDir::cleanPath(info.absoluteFilePath())) {
-            selectedCollection = collection;
-            hasRegisteredCollection = true;
-            break;
-        }
+    const int selectedCollectionIndex = collectionIndexByDirectory(
+        m_project.rootPath(), collections, info.absoluteFilePath());
+    if (selectedCollectionIndex >= 0) {
+        selectedCollection = collections.at(selectedCollectionIndex);
+        hasRegisteredCollection = true;
     }
     if (registerAction)
         registerAction->setEnabled(!isReserved && !hasRegisteredCollection);
@@ -4360,7 +5283,13 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
 
-        QFileInfo destination(projectPathFromIndex(index));
+        const QString destinationPath = projectPathFromIndex(index);
+        if (destinationPath.isEmpty()) {
+            dropEvent->ignore();
+            return true;
+        }
+
+        QFileInfo destination(destinationPath);
         const QString destinationDirectory = destination.isDir()
             ? destination.absoluteFilePath()
             : destination.absoluteDir().absolutePath();
@@ -5780,6 +6709,7 @@ void MainWindow::loadProject(const Project &project)
 
     feedback.setStage(QStringLiteral("Loading project structure..."));
     m_project = project;
+    m_projectExplorerGroupExpansion.clear();
     loadProjectFileMarks();
     updateProjectExplorer();
     updateProjectActions();
@@ -5874,6 +6804,7 @@ void MainWindow::closeCurrentProject()
 
     m_project = Project();
     m_projectFileMarks.clear();
+    m_projectExplorerGroupExpansion.clear();
     m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
     m_projectFileSystemModel->setProjectRoot(QString());
     ui->projectTree->setRootIndex(projectProxyIndex(
@@ -6068,8 +6999,10 @@ void MainWindow::clearProjectFileMarks()
     if (m_projectFileSystemModel)
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
     if (m_projectSortProxy)
-        m_projectSortProxy->invalidate();
+        static_cast<ProjectExplorerSortProxyModel*>(
+            m_projectSortProxy)->invalidate();
     refreshProjectExplorerRootIndex();
+    expandProjectExplorerGroups();
     updateProjectExplorerStarredEmptyMessage();
     updateProjectActions();
     statusBar()->showMessage("Removed all stars", 3000);
@@ -6087,6 +7020,9 @@ bool MainWindow::projectFileMarkHitTest(
         return false;
 
     const QModelIndex markIndex = index.sibling(index.row(), 0);
+    if (markIndex.data(ProjectExplorerGroupRole).toBool())
+        return false;
+
     const QRect rowRect = ui->projectTree->visualRect(markIndex);
     if (!projectFileMarkAreaRect(rowRect).contains(position))
         return false;
@@ -6124,8 +7060,10 @@ void MainWindow::toggleProjectFileMark(const QString &path)
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
         m_projectFileSystemModel->refreshDirectory(info.absoluteFilePath());
         if (m_projectSortProxy)
-            m_projectSortProxy->invalidate();
+            static_cast<ProjectExplorerSortProxyModel*>(
+                m_projectSortProxy)->invalidate();
         refreshProjectExplorerRootIndex();
+        expandProjectExplorerGroups();
         updateProjectExplorerStarredEmptyMessage();
     }
     updateProjectActions();
@@ -6535,6 +7473,44 @@ void MainWindow::refreshProjectExplorerRootIndex()
         m_projectFileSystemModel->index(m_project.rootPath());
     const QModelIndex proxyRoot = projectProxyIndex(sourceRoot);
     ui->projectTree->setRootIndex(proxyRoot);
+    expandProjectExplorerGroups();
+}
+
+void MainWindow::expandProjectExplorerGroups()
+{
+    if (!m_project.isValid() || !ui->projectTree || !m_projectSortProxy)
+        return;
+
+    const QModelIndex root = ui->projectTree->rootIndex();
+    if (!root.isValid())
+        return;
+
+    const int rows = m_projectSortProxy->rowCount(root);
+    for (int row = 0; row < rows; ++row) {
+        const QModelIndex index = m_projectSortProxy->index(row, 0, root);
+        if (!index.data(ProjectExplorerGroupRole).toBool())
+            continue;
+
+        const QString groupId =
+            index.data(ProjectExplorerGroupIdRole).toString();
+        const bool shouldExpand =
+            !m_projectExplorerGroupExpansion.contains(groupId)
+            || m_projectExplorerGroupExpansion.value(groupId);
+        ui->projectTree->setExpanded(index, shouldExpand);
+    }
+}
+
+void MainWindow::rememberProjectExplorerGroupExpansion(
+    const QModelIndex &index,
+    bool expanded)
+{
+    if (!index.data(ProjectExplorerGroupRole).toBool())
+        return;
+
+    const QString groupId =
+        index.data(ProjectExplorerGroupIdRole).toString();
+    if (!groupId.isEmpty())
+        m_projectExplorerGroupExpansion.insert(groupId, expanded);
 }
 
 void MainWindow::updateProjectExplorerStarredEmptyMessage()
@@ -7023,20 +7999,11 @@ Collection MainWindow::collectionForPath(const QString &path) const
     const QString absolute = QFileInfo(path).isDir()
         ? QFileInfo(path).absoluteFilePath()
         : QFileInfo(path).absolutePath();
-#ifdef Q_OS_WIN
-    const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
-#else
-    const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
-#endif
     const QVector<Collection> collections =
         Project::discoverCollections(m_project.rootPath());
-    for (const Collection &collection : collections) {
-        if (QDir::cleanPath(collection.dirPath).compare(
-                QDir::cleanPath(absolute), sensitivity) == 0) {
-            return collection;
-        }
-    }
-    return {};
+    const int collectionIndex = collectionIndexByDirectory(
+        m_project.rootPath(), collections, absolute);
+    return collectionIndex >= 0 ? collections.at(collectionIndex) : Collection();
 }
 
 bool MainWindow::isEditableMaskLayer(ImageLayer *layer) const

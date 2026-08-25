@@ -95,6 +95,7 @@ ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
     : QFileSystemModel(parent)
 {
     auto refreshParent = [this](const QModelIndex &parent) {
+        clearAllDirectoryCaches();
         if (parent.isValid())
             emit dataChanged(parent, parent, {Qt::DisplayRole});
     };
@@ -106,6 +107,11 @@ ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
     connect(this, &QAbstractItemModel::rowsRemoved,
             this, [refreshParent](const QModelIndex &parent, int, int) {
                 refreshParent(parent);
+            });
+    connect(this, &QAbstractItemModel::dataChanged,
+            this, [this](const QModelIndex&, const QModelIndex&,
+                         const QList<int>&) {
+                clearAllDirectoryCaches();
             });
 }
 
@@ -182,6 +188,7 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
 void ProjectFileSystemModel::setProjectRoot(const QString &path)
 {
     m_projectRoot = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    clearAllDirectoryCaches();
 }
 
 void ProjectFileSystemModel::setFileMarks(const QSet<QString> &marks)
@@ -229,6 +236,7 @@ bool ProjectFileSystemModel::hasMarkedDescendant(const QFileInfo &info) const
 
 void ProjectFileSystemModel::refreshDirectory(const QString &path)
 {
+    clearDirectoryCache(path);
     const QModelIndex directoryIndex = index(path);
     if (directoryIndex.isValid())
         emit dataChanged(directoryIndex, directoryIndex,
@@ -267,33 +275,97 @@ QString ProjectFileSystemModel::projectRelativePath(
 QString ProjectFileSystemModel::collectionClass(
     const QString &directoryPath) const
 {
+    const QString key = cachePath(directoryPath);
+    if (m_collectionClassCache.contains(key))
+        return m_collectionClassCache.value(key);
+
+    QString className;
     QFile file(QDir(directoryPath).filePath("collection.yaml"));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        m_collectionClassCache.insert(key, className);
         return {};
+    }
 
     QTextStream stream(&file);
     while (!stream.atEnd()) {
         const QString line = stream.readLine().trimmed();
-        if (line.startsWith("class:"))
-            return valueAfterColon(line);
+        if (line.startsWith("class:")) {
+            className = valueAfterColon(line);
+            break;
+        }
     }
-    return {};
+    m_collectionClassCache.insert(key, className);
+    return className;
+}
+
+QString ProjectFileSystemModel::collectionClassForDirectory(
+    const QString &directoryPath) const
+{
+    return collectionClass(directoryPath);
 }
 
 QString ProjectFileSystemModel::collectionAlias(
     const QString &directoryPath) const
 {
+    const QString key = cachePath(directoryPath);
+    if (m_collectionAliasCache.contains(key))
+        return m_collectionAliasCache.value(key);
+
+    QString alias;
     QFile file(QDir(directoryPath).filePath("collection.yaml"));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        m_collectionAliasCache.insert(key, alias);
         return {};
+    }
 
     QTextStream stream(&file);
     while (!stream.atEnd()) {
         const QString line = stream.readLine().trimmed();
-        if (line.startsWith("alias:"))
-            return yamlValueAfterColon(line).trimmed();
+        if (line.startsWith("alias:")) {
+            alias = yamlValueAfterColon(line).trimmed();
+            break;
+        }
     }
-    return {};
+    m_collectionAliasCache.insert(key, alias);
+    return alias;
+}
+
+QString ProjectFileSystemModel::cachePath(const QString &path) const
+{
+    QString normalized = QDir::cleanPath(
+        QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
+QString ProjectFileSystemModel::cachePath(const QFileInfo &info) const
+{
+    return cachePath(info.absoluteFilePath());
+}
+
+void ProjectFileSystemModel::clearDirectoryCache(const QString &path) const
+{
+    const QString key = cachePath(path);
+    m_collectionClassCache.remove(key);
+    m_collectionAliasCache.remove(key);
+    m_directFileCountCache.remove(key);
+
+    const QString prefix = key + QLatin1Char('|');
+    const QStringList relevantKeys = m_relevantFileCountCache.keys();
+    for (const QString &relevantKey : relevantKeys) {
+        if (relevantKey.startsWith(prefix))
+            m_relevantFileCountCache.remove(relevantKey);
+    }
+}
+
+void ProjectFileSystemModel::clearAllDirectoryCaches() const
+{
+    m_collectionClassCache.clear();
+    m_collectionAliasCache.clear();
+    m_directFileCountCache.clear();
+    m_relevantFileCountCache.clear();
 }
 
 QString ProjectFileSystemModel::appendAlias(
@@ -317,15 +389,25 @@ bool ProjectFileSystemModel::reservedDirectoryShowsEmptyLabel(
 
 int ProjectFileSystemModel::directFileCount(const QFileInfo &info) const
 {
-    return QDir(info.absoluteFilePath())
+    const QString key = cachePath(info);
+    if (m_directFileCountCache.contains(key))
+        return m_directFileCountCache.value(key);
+
+    const int count = QDir(info.absoluteFilePath())
         .entryList(QDir::Files | QDir::NoSymLinks)
         .size();
+    m_directFileCountCache.insert(key, count);
+    return count;
 }
 
 int ProjectFileSystemModel::relevantFileCount(
     const QFileInfo &info,
     const QString &className) const
 {
+    const QString key = cachePath(info) + QLatin1Char('|') + className;
+    if (m_relevantFileCountCache.contains(key))
+        return m_relevantFileCountCache.value(key);
+
     QStringList filters;
     if (info.fileName().compare("raw_files", Qt::CaseInsensitive) == 0) {
         filters = {
@@ -340,10 +422,13 @@ int ProjectFileSystemModel::relevantFileCount(
     } else if (className == "point_collection") {
         filters = {"*.csv", "*.CSV"};
     } else {
+        m_relevantFileCountCache.insert(key, 0);
         return 0;
     }
 
-    return QDir(info.absoluteFilePath())
+    const int count = QDir(info.absoluteFilePath())
         .entryList(filters, QDir::Files | QDir::NoSymLinks)
         .size();
+    m_relevantFileCountCache.insert(key, count);
+    return count;
 }

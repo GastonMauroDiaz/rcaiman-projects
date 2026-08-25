@@ -58,7 +58,7 @@ class QFrame;
 class QLabel;
 class QModelIndex;
 class QPushButton;
-class QSortFilterProxyModel;
+class QAbstractProxyModel;
 class QSlider;
 class QSpinBox;
 class PointLayer;
@@ -184,6 +184,10 @@ private:
     void createViewerEmptyState();
     void updateViewerEmptyState();
     void refreshProjectExplorerRootIndex();
+    void expandProjectExplorerGroups();
+    void rememberProjectExplorerGroupExpansion(
+        const QModelIndex &index,
+        bool expanded);
     void updateProjectExplorerStarredEmptyMessage();
     void updateMaskBrushControls(ImageViewer *viewer);
     void createMaskTiffInCollection(
@@ -194,7 +198,7 @@ private:
 
     Ui::MainWindow *ui;
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
-    QSortFilterProxyModel *m_projectSortProxy = nullptr;
+    QAbstractProxyModel *m_projectSortProxy = nullptr;
     QFileSystemWatcher *m_artifactWatcher = nullptr;
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
@@ -237,6 +241,7 @@ private:
     QString m_copiedCollectionStyleKind;
     QString m_copiedCollectionStyleSource;
     QSet<QString> m_projectFileMarks;
+    QHash<QString, bool> m_projectExplorerGroupExpansion;
     void addToRecentProjects(const QString &path);
     void updateRecentProjectsMenu();
 };

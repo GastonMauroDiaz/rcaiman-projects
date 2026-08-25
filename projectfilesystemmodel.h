@@ -23,12 +23,15 @@
 #define PROJECTFILESYSTEMMODEL_H
 
 #include <QFileSystemModel>
+#include <QHash>
 #include <QSet>
 
 class QFileInfo;
 
 constexpr int ProjectFileMarkedRole = Qt::UserRole + 100;
 constexpr int ProjectFileDirectlyMarkedRole = Qt::UserRole + 101;
+constexpr int ProjectExplorerGroupRole = Qt::UserRole + 102;
+constexpr int ProjectExplorerGroupIdRole = Qt::UserRole + 103;
 
 class ProjectFileSystemModel : public QFileSystemModel
 {
@@ -45,12 +48,17 @@ public:
     bool isMarkedOrInherited(const QFileInfo &info) const;
     bool hasMarkedDescendant(const QFileInfo &info) const;
     void refreshDirectory(const QString &path);
+    QString collectionClassForDirectory(const QString &directoryPath) const;
 
 private:
     bool isDirectProjectChild(const QFileInfo &info) const;
     QString projectRelativePath(const QFileInfo &info) const;
     QString collectionClass(const QString &directoryPath) const;
     QString collectionAlias(const QString &directoryPath) const;
+    QString cachePath(const QString &path) const;
+    QString cachePath(const QFileInfo &info) const;
+    void clearDirectoryCache(const QString &path) const;
+    void clearAllDirectoryCaches() const;
     QString appendAlias(const QString &displayText,
                         const QString &directoryPath) const;
     bool reservedDirectoryShowsEmptyLabel(const QString &name) const;
@@ -60,6 +68,10 @@ private:
 
     QString m_projectRoot;
     QSet<QString> m_fileMarks;
+    mutable QHash<QString, QString> m_collectionClassCache;
+    mutable QHash<QString, QString> m_collectionAliasCache;
+    mutable QHash<QString, int> m_directFileCountCache;
+    mutable QHash<QString, int> m_relevantFileCountCache;
 };
 
 #endif // PROJECTFILESYSTEMMODEL_H
