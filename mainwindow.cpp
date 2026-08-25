@@ -38,6 +38,7 @@
 #include "rawreader.h"
 #include "collectiondialog.h"
 #include "collectioneditdialog.h"
+#include "collectiongraphdialog.h"
 #include "collectionautoload.h"
 #include "collectionstyledialog.h"
 #include "newprojectdialog.h"
@@ -72,6 +73,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
@@ -79,6 +81,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGraphicsScene>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
@@ -99,6 +102,7 @@
 #include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSizePolicy>
 #include <QSettings>
 #include <QSaveFile>
@@ -191,6 +195,1199 @@ QString normalizedAbsolutePathForComparison(const QString &path)
     normalized = normalized.toCaseFolded();
 #endif
     return normalized;
+}
+
+bool normalizedPathIsInside(const QString &path,
+                            const QString &directoryPath)
+{
+    const QString normalizedPath =
+        normalizedAbsolutePathForComparison(path);
+    const QString normalizedDirectory =
+        normalizedAbsolutePathForComparison(directoryPath);
+    if (normalizedPath.isEmpty() || normalizedDirectory.isEmpty())
+        return false;
+    return normalizedPath == normalizedDirectory
+        || normalizedPath.startsWith(normalizedDirectory + QLatin1Char('/'));
+}
+
+bool referenceEqualsDirectory(const QString &projectRoot,
+                              const QString &reference,
+                              const QString &directoryPath)
+{
+    return normalizedProjectReference(projectRoot, reference)
+        == normalizedAbsolutePathForComparison(directoryPath);
+}
+
+bool referenceIsInsideDirectory(const QString &projectRoot,
+                                const QString &reference,
+                                const QString &directoryPath)
+{
+    const QString resolved =
+        Project::resolveReference(projectRoot, reference);
+    return normalizedPathIsInside(resolved, directoryPath);
+}
+
+QString collectionImpactLabel(const Collection &collection)
+{
+    QString label = collection.dirName;
+    if (!collection.alias.isEmpty())
+        label += QStringLiteral(" | %1").arg(collection.alias);
+    return QStringLiteral("- %1 (%2)")
+        .arg(label, collection.collectionClass);
+}
+
+QStringList collectionImpactLabels(const QVector<Collection> &collections)
+{
+    QStringList labels;
+    labels.reserve(collections.size());
+    for (const Collection &collection : collections)
+        labels.append(collectionImpactLabel(collection));
+    labels.sort(Qt::CaseInsensitive);
+    return labels;
+}
+
+void appendImpactSection(QStringList *lines,
+                         const QString &title,
+                         const QStringList &items)
+{
+    if (!lines || items.isEmpty())
+        return;
+    lines->append(title);
+    lines->append(items);
+    lines->append(QString());
+}
+
+QStringList scriptFilesMentioningCollection(
+    const QString &projectRoot,
+    const QString &collectionDirPath)
+{
+    const QDir root(projectRoot);
+    const QString scriptsPath = root.filePath("scripts");
+    if (!QDir(scriptsPath).exists())
+        return {};
+
+    QStringList needles;
+    const QString relativePath =
+        QDir::fromNativeSeparators(root.relativeFilePath(collectionDirPath));
+    const QString nativeRelativePath =
+        QDir::toNativeSeparators(relativePath);
+    const QString folderName = QFileInfo(collectionDirPath).fileName();
+    for (const QString &needle : {
+             relativePath,
+             relativePath + QLatin1Char('/'),
+             nativeRelativePath,
+             nativeRelativePath + QLatin1Char('\\'),
+             folderName}) {
+        if (!needle.trimmed().isEmpty()
+            && !needles.contains(needle, Qt::CaseInsensitive)) {
+            needles.append(needle);
+        }
+    }
+
+    QStringList matches;
+    QDirIterator iterator(
+        scriptsPath,
+        {"*.R", "*.r", "*.Rmd", "*.rmd", "*.qmd"},
+        QDir::Files | QDir::NoSymLinks,
+        QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        const QString scriptPath = iterator.next();
+        QFile file(scriptPath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            continue;
+
+        const QString content = QString::fromUtf8(file.readAll());
+        for (const QString &needle : std::as_const(needles)) {
+            if (content.contains(needle, Qt::CaseInsensitive)) {
+                matches.append(QStringLiteral("- %1").arg(
+                    QDir::fromNativeSeparators(
+                        root.relativeFilePath(scriptPath))));
+                break;
+            }
+        }
+    }
+    matches.sort(Qt::CaseInsensitive);
+    matches.removeDuplicates();
+    return matches;
+}
+
+struct UnregisterImpact
+{
+    QVector<Collection> criticalParents;
+    QVector<Collection> optionalParents;
+    QVector<Collection> relatedLinks;
+    QVector<Collection> registryFields;
+    QVector<Collection> scriptFields;
+    QStringList scriptMentions;
+
+    bool hasCriticalParents() const
+    {
+        return !criticalParents.isEmpty();
+    }
+
+    bool hasCleanableNonCriticalReferences() const
+    {
+        return !optionalParents.isEmpty()
+            || !relatedLinks.isEmpty()
+            || !registryFields.isEmpty()
+            || !scriptFields.isEmpty();
+    }
+};
+
+struct UnregisterDecision
+{
+    bool accepted = false;
+    bool cleanNonCriticalReferences = false;
+    bool clearRequiredParents = true;
+};
+
+UnregisterImpact analyzeUnregisterImpact(
+    const QString &projectRoot,
+    const Collection &targetCollection,
+    const QVector<Collection> &collections)
+{
+    UnregisterImpact impact;
+
+    for (const Collection &collection : collections) {
+        if (normalizedAbsolutePathForComparison(collection.dirPath)
+            == normalizedAbsolutePathForComparison(targetCollection.dirPath)) {
+            continue;
+        }
+
+        if (referenceEqualsDirectory(
+                projectRoot, collection.parent, targetCollection.dirPath)) {
+            if (collection.collectionClass == "point_collection"
+                || collection.collectionClass == "segmentation_collection") {
+                impact.criticalParents.append(collection);
+            } else {
+                impact.optionalParents.append(collection);
+            }
+        }
+        if (referenceEqualsDirectory(
+                projectRoot, collection.related, targetCollection.dirPath)) {
+            impact.relatedLinks.append(collection);
+        }
+        if (referenceIsInsideDirectory(
+                projectRoot, collection.registry, targetCollection.dirPath)) {
+            impact.registryFields.append(collection);
+        }
+        if (referenceIsInsideDirectory(
+                projectRoot, collection.script, targetCollection.dirPath)) {
+            impact.scriptFields.append(collection);
+        }
+    }
+    impact.scriptMentions = scriptFilesMentioningCollection(
+        projectRoot, targetCollection.dirPath);
+    return impact;
+}
+
+QString unregisterImpactReport(const UnregisterImpact &impact)
+{
+    QStringList lines;
+    appendImpactSection(
+        &lines,
+        "Collections that use this folder as a required parent:",
+        collectionImpactLabels(impact.criticalParents));
+    appendImpactSection(
+        &lines,
+        "Collections that use this folder as an optional parent:",
+        collectionImpactLabels(impact.optionalParents));
+    appendImpactSection(
+        &lines,
+        "Collections that use this folder as related:",
+        collectionImpactLabels(impact.relatedLinks));
+    appendImpactSection(
+        &lines,
+        "Collections with registry files inside this folder:",
+        collectionImpactLabels(impact.registryFields));
+    appendImpactSection(
+        &lines,
+        "Collections with script files inside this folder:",
+        collectionImpactLabels(impact.scriptFields));
+    appendImpactSection(
+        &lines,
+        "Scripts that mention this folder name or path:",
+        impact.scriptMentions);
+
+    while (!lines.isEmpty() && lines.last().isEmpty())
+        lines.removeLast();
+
+    if (lines.isEmpty()) {
+        return "No registered collections or scripts were found referencing "
+               "this folder.";
+    }
+    return lines.join('\n');
+}
+
+UnregisterDecision confirmUnregisterCollection(
+    QWidget *parent,
+    const Collection &collection,
+    const UnregisterImpact &impact)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Unregister collection");
+    dialog.setMinimumWidth(620);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        QStringLiteral(
+            "Unregister collection \"%1\"?\n\n"
+            "This turns the collection into a regular folder. "
+            "Working files remain.")
+            .arg(collection.dirName),
+        &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *report = new QTextBrowser(&dialog);
+    report->setPlainText(QStringLiteral("Impact report:\n%1").arg(
+        unregisterImpactReport(impact)));
+    report->setMinimumHeight(220);
+    report->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(report);
+
+    QCheckBox *cleanNonCritical = nullptr;
+    if (impact.hasCleanableNonCriticalReferences()) {
+        cleanNonCritical = new QCheckBox(
+            "Clean non-required references in dependent collection metadata",
+            &dialog);
+        cleanNonCritical->setChecked(true);
+        cleanNonCritical->setToolTip(
+            "Clears optional parent, related, registry, and script fields "
+            "that point to this folder. Scripts themselves are not edited.");
+        layout->addWidget(cleanNonCritical);
+    }
+
+    QRadioButton *clearRequired = nullptr;
+    QRadioButton *keepRequired = nullptr;
+    if (impact.hasCriticalParents()) {
+        auto *criticalGroup = new QGroupBox("Required parent links", &dialog);
+        auto *criticalLayout = new QVBoxLayout(criticalGroup);
+        auto *criticalText = new QLabel(
+            "Some point or segmentation collections require a valid parent. "
+            "After unregistering, they will need attention. Use Edit "
+            "collection... to assign a new valid parent.",
+            criticalGroup);
+        criticalText->setWordWrap(true);
+        criticalLayout->addWidget(criticalText);
+
+        clearRequired = new QRadioButton(
+            "Clear required parent fields",
+            criticalGroup);
+        clearRequired->setToolTip(
+            "The dependent collections become explicitly orphaned until "
+            "you assign a new parent.");
+        keepRequired = new QRadioButton(
+            "Keep existing parent paths",
+            criticalGroup);
+        keepRequired->setToolTip(
+            "The dependent collections keep pointing to this folder, but it "
+            "will no longer be a registered collection.");
+        clearRequired->setChecked(true);
+        criticalLayout->addWidget(clearRequired);
+        criticalLayout->addWidget(keepRequired);
+        layout->addWidget(criticalGroup);
+    }
+
+    auto *note = new QLabel(
+        "Scripts are never edited automatically.",
+        &dialog);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText("Unregister");
+    buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
+    buttons->button(QDialogButtonBox::Cancel)->setFocus();
+    layout->addWidget(buttons);
+
+    QObject::connect(buttons, &QDialogButtonBox::accepted,
+                     &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected,
+                     &dialog, &QDialog::reject);
+
+    UnregisterDecision decision;
+    if (dialog.exec() != QDialog::Accepted)
+        return decision;
+
+    decision.accepted = true;
+    decision.cleanNonCriticalReferences =
+        cleanNonCritical && cleanNonCritical->isChecked();
+    decision.clearRequiredParents =
+        !clearRequired || clearRequired->isChecked();
+    return decision;
+}
+
+void queueCollectionMetadataUpdate(QVector<Collection> *updates,
+                                   const Collection &collection,
+                                   bool clearParent,
+                                   bool clearRelated,
+                                   bool clearRegistry,
+                                   bool clearScript)
+{
+    if (!updates)
+        return;
+
+    int index = -1;
+    const QString targetPath =
+        normalizedAbsolutePathForComparison(collection.dirPath);
+    for (int i = 0; i < updates->size(); ++i) {
+        if (normalizedAbsolutePathForComparison(updates->at(i).dirPath)
+            == targetPath) {
+            index = i;
+            break;
+        }
+    }
+
+    if (index < 0) {
+        updates->append(collection);
+        index = updates->size() - 1;
+    }
+
+    Collection &updated = (*updates)[index];
+    if (clearParent)
+        updated.parent.clear();
+    if (clearRelated)
+        updated.related.clear();
+    if (clearRegistry)
+        updated.registry.clear();
+    if (clearScript)
+        updated.script.clear();
+}
+
+bool applyUnregisterDependencyCleanup(
+    const QString &projectRoot,
+    const UnregisterImpact &impact,
+    const UnregisterDecision &decision,
+    int *updatedCollections,
+    QString *errorMessage)
+{
+    if (updatedCollections)
+        *updatedCollections = 0;
+
+    QVector<Collection> updates;
+    if (decision.clearRequiredParents) {
+        for (const Collection &collection : impact.criticalParents) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, true, false, false, false);
+        }
+    }
+
+    if (decision.cleanNonCriticalReferences) {
+        for (const Collection &collection : impact.optionalParents) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, true, false, false, false);
+        }
+        for (const Collection &collection : impact.relatedLinks) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, false, true, false, false);
+        }
+        for (const Collection &collection : impact.registryFields) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, false, false, true, false);
+        }
+        for (const Collection &collection : impact.scriptFields) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, false, false, false, true);
+        }
+    }
+
+    int written = 0;
+    for (const Collection &collection : std::as_const(updates)) {
+        if (!Project::updateCollectionMetadata(
+                projectRoot,
+                collection.dirPath,
+                collection.alias,
+                collection.parent,
+                collection.related,
+                collection.registry,
+                collection.script,
+                errorMessage)) {
+            return false;
+        }
+        ++written;
+    }
+
+    if (updatedCollections)
+        *updatedCollections = written;
+    return true;
+}
+
+struct CollectionCheckIssue
+{
+    QString collectionLabel;
+    QString message;
+};
+
+struct CollectionCheckResult
+{
+    int checkedCollections = 0;
+    QVector<CollectionCheckIssue> errors;
+    QVector<CollectionCheckIssue> warnings;
+};
+
+QString collectionDisplayLabel(const Collection &collection)
+{
+    QString label = collection.dirName;
+    if (!collection.alias.isEmpty())
+        label += QStringLiteral(" | %1").arg(collection.alias);
+    if (collection.collectionClass.isEmpty())
+        return label;
+    return QStringLiteral("%1 (%2)").arg(label, collection.collectionClass);
+}
+
+int collectionIndexByPath(const QVector<Collection> &collections,
+                          const QString &path)
+{
+    const QString normalizedPath = normalizedAbsolutePathForComparison(path);
+    if (normalizedPath.isEmpty())
+        return -1;
+
+    for (int i = 0; i < collections.size(); ++i) {
+        if (normalizedAbsolutePathForComparison(collections.at(i).dirPath)
+            == normalizedPath) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void addCollectionCheckIssue(QVector<CollectionCheckIssue> *issues,
+                             const Collection &collection,
+                             const QString &message)
+{
+    if (!issues)
+        return;
+    issues->append({collectionDisplayLabel(collection), message});
+}
+
+bool collectionClassIsKnown(const QString &collectionClass)
+{
+    return QStringList{
+        "preprocessed_image_collection",
+        "processed_image_collection",
+        "point_collection",
+        "segmentation_collection",
+        "other"
+    }.contains(collectionClass, Qt::CaseInsensitive);
+}
+
+QStringList compatibleParentClassesForCheck(const QString &collectionClass)
+{
+    if (collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection") {
+        return {"preprocessed_image_collection", "processed_image_collection"};
+    }
+    return {};
+}
+
+QStringList compatibleRelatedClassesForCheck(const QString &collectionClass)
+{
+    if (collectionClass == "point_collection")
+        return {"segmentation_collection"};
+    return {};
+}
+
+void checkCollectionReferenceToCollection(
+    const QString &projectRoot,
+    const QVector<Collection> &collections,
+    const Collection &collection,
+    const QString &fieldName,
+    const QString &reference,
+    const QStringList &allowedClasses,
+    bool required,
+    CollectionCheckResult *result)
+{
+    if (!result)
+        return;
+
+    if (reference.trimmed().isEmpty()) {
+        if (required) {
+            addCollectionCheckIssue(
+                &result->errors,
+                collection,
+                QStringLiteral("%1 is required but empty.").arg(fieldName));
+        }
+        return;
+    }
+
+    const QString resolvedPath =
+        Project::resolveReference(projectRoot, reference);
+    const int referencedIndex =
+        collectionIndexByPath(collections, resolvedPath);
+    if (referencedIndex < 0) {
+        const QFileInfo resolvedInfo(resolvedPath);
+        const QString message = resolvedInfo.exists()
+            ? QStringLiteral(
+                  "%1 points to \"%2\", but that folder is not registered "
+                  "as a collection.")
+                  .arg(fieldName, QDir::toNativeSeparators(resolvedPath))
+            : QStringLiteral(
+                  "%1 points to missing folder \"%2\".")
+                  .arg(fieldName, QDir::toNativeSeparators(resolvedPath));
+        if (required) {
+            addCollectionCheckIssue(&result->errors, collection, message);
+        } else {
+            addCollectionCheckIssue(&result->warnings, collection, message);
+        }
+        return;
+    }
+
+    const Collection &referenced = collections.at(referencedIndex);
+    if (normalizedAbsolutePathForComparison(referenced.dirPath)
+        == normalizedAbsolutePathForComparison(collection.dirPath)) {
+        addCollectionCheckIssue(
+            required ? &result->errors : &result->warnings,
+            collection,
+            QStringLiteral("%1 points to the collection itself.").arg(
+                fieldName));
+        return;
+    }
+
+    if (!allowedClasses.contains(
+            referenced.collectionClass, Qt::CaseInsensitive)) {
+        const QString message = QStringLiteral(
+            "%1 points to %2, but expected %3.")
+            .arg(fieldName,
+                 collectionDisplayLabel(referenced),
+                 allowedClasses.join(", "));
+        if (required) {
+            addCollectionCheckIssue(&result->errors, collection, message);
+        } else {
+            addCollectionCheckIssue(&result->warnings, collection, message);
+        }
+    }
+}
+
+void checkCollectionReferenceToFile(
+    const QString &projectRoot,
+    const Collection &collection,
+    const QString &fieldName,
+    const QString &reference,
+    CollectionCheckResult *result)
+{
+    if (!result || reference.trimmed().isEmpty())
+        return;
+
+    const QString resolvedPath =
+        Project::resolveReference(projectRoot, reference);
+    const QFileInfo info(resolvedPath);
+    if (!info.exists()) {
+        addCollectionCheckIssue(
+            &result->warnings,
+            collection,
+            QStringLiteral("%1 points to missing file \"%2\".")
+                .arg(fieldName, QDir::toNativeSeparators(resolvedPath)));
+        return;
+    }
+    if (!info.isFile()) {
+        addCollectionCheckIssue(
+            &result->warnings,
+            collection,
+            QStringLiteral("%1 points to \"%2\", but it is not a file.")
+                .arg(fieldName, QDir::toNativeSeparators(resolvedPath)));
+    }
+}
+
+CollectionCheckResult checkRegisteredCollections(
+    const QString &projectRoot,
+    const QVector<Collection> &collections)
+{
+    CollectionCheckResult result;
+    result.checkedCollections = collections.size();
+
+    for (const Collection &collection : collections) {
+        const QFileInfo collectionDir(collection.dirPath);
+        const QFileInfo yamlFile(
+            QDir(collection.dirPath).filePath("collection.yaml"));
+
+        if (!collectionDir.exists() || !collectionDir.isDir()) {
+            addCollectionCheckIssue(
+                &result.errors,
+                collection,
+                "Collection folder does not exist.");
+            continue;
+        }
+        if (!yamlFile.exists() || !yamlFile.isFile()) {
+            addCollectionCheckIssue(
+                &result.errors,
+                collection,
+                "collection.yaml is missing.");
+        }
+
+        if (collection.collectionClass.trimmed().isEmpty()) {
+            addCollectionCheckIssue(
+                &result.errors,
+                collection,
+                "collection.yaml does not declare a class.");
+            continue;
+        }
+        if (!collectionClassIsKnown(collection.collectionClass)) {
+            addCollectionCheckIssue(
+                &result.errors,
+                collection,
+                QStringLiteral("Unknown collection class \"%1\".")
+                    .arg(collection.collectionClass));
+            continue;
+        }
+
+        QString aliasError;
+        if (!Project::collectionAliasIsSupported(
+                collection.alias, &aliasError)) {
+            addCollectionCheckIssue(
+                &result.warnings,
+                collection,
+                QStringLiteral("Alias is not supported: %1").arg(aliasError));
+        }
+
+        const bool parentRequired =
+            collection.collectionClass == "point_collection"
+            || collection.collectionClass == "segmentation_collection";
+        const QStringList parentClasses =
+            compatibleParentClassesForCheck(collection.collectionClass);
+        if (!parentClasses.isEmpty() || parentRequired) {
+            checkCollectionReferenceToCollection(
+                projectRoot,
+                collections,
+                collection,
+                "Parent",
+                collection.parent,
+                parentClasses,
+                parentRequired,
+                &result);
+        } else if (!collection.parent.trimmed().isEmpty()) {
+            addCollectionCheckIssue(
+                &result.warnings,
+                collection,
+                "Parent is set, but this collection class does not use it.");
+        }
+
+        const QStringList relatedClasses =
+            compatibleRelatedClassesForCheck(collection.collectionClass);
+        if (!relatedClasses.isEmpty()) {
+            checkCollectionReferenceToCollection(
+                projectRoot,
+                collections,
+                collection,
+                "Related",
+                collection.related,
+                relatedClasses,
+                false,
+                &result);
+        } else if (!collection.related.trimmed().isEmpty()) {
+            addCollectionCheckIssue(
+                &result.warnings,
+                collection,
+                "Related is set, but this collection class does not use it.");
+        }
+
+        if (collection.collectionClass == "preprocessed_image_collection"
+            || collection.collectionClass == "other") {
+            checkCollectionReferenceToFile(
+                projectRoot,
+                collection,
+                "Registry",
+                collection.registry,
+                &result);
+        } else if (!collection.registry.trimmed().isEmpty()) {
+            addCollectionCheckIssue(
+                &result.warnings,
+                collection,
+                "Registry is set, but this collection class does not use it.");
+        }
+
+        checkCollectionReferenceToFile(
+            projectRoot, collection, "Script", collection.script, &result);
+    }
+
+    std::sort(result.errors.begin(), result.errors.end(),
+              [](const CollectionCheckIssue &left,
+                 const CollectionCheckIssue &right) {
+                  const int collectionCompare = QString::compare(
+                      left.collectionLabel,
+                      right.collectionLabel,
+                      Qt::CaseInsensitive);
+                  if (collectionCompare != 0)
+                      return collectionCompare < 0;
+                  return QString::compare(
+                      left.message,
+                      right.message,
+                      Qt::CaseInsensitive) < 0;
+              });
+    std::sort(result.warnings.begin(), result.warnings.end(),
+              [](const CollectionCheckIssue &left,
+                 const CollectionCheckIssue &right) {
+                  const int collectionCompare = QString::compare(
+                      left.collectionLabel,
+                      right.collectionLabel,
+                      Qt::CaseInsensitive);
+                  if (collectionCompare != 0)
+                      return collectionCompare < 0;
+                  return QString::compare(
+                      left.message,
+                      right.message,
+                      Qt::CaseInsensitive) < 0;
+              });
+
+    return result;
+}
+
+QString collectionCheckReportText(const CollectionCheckResult &result)
+{
+    QStringList lines;
+    lines.append("Collection check");
+    lines.append(QStringLiteral("Checked registered collections: %1")
+                     .arg(result.checkedCollections));
+    lines.append(QString());
+
+    if (result.errors.isEmpty() && result.warnings.isEmpty()) {
+        lines.append("No collection problems were found.");
+        return lines.join('\n');
+    }
+
+    auto appendIssues = [&lines](const QString &title,
+                                 const QVector<CollectionCheckIssue> &issues) {
+        if (issues.isEmpty())
+            return;
+        lines.append(QStringLiteral("%1 (%2)").arg(title).arg(issues.size()));
+        for (const CollectionCheckIssue &issue : issues) {
+            lines.append(QStringLiteral("- %1: %2")
+                             .arg(issue.collectionLabel, issue.message));
+        }
+        lines.append(QString());
+    };
+
+    appendIssues("Errors", result.errors);
+    appendIssues("Warnings", result.warnings);
+    while (!lines.isEmpty() && lines.last().isEmpty())
+        lines.removeLast();
+    return lines.join('\n');
+}
+
+void showCollectionCheckDialog(QWidget *parent,
+                               const CollectionCheckResult &result)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Check collections");
+    dialog.setMinimumSize(700, 420);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(
+        "This check reports broken collection contracts and missing "
+        "references. It does not modify the project.",
+        &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *report = new QTextBrowser(&dialog);
+    report->setPlainText(collectionCheckReportText(result));
+    report->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(report);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted,
+                     &dialog, &QDialog::accept);
+
+    dialog.exec();
+}
+
+struct RenameCollectionDecision
+{
+    bool accepted = false;
+    QString newName;
+};
+
+bool collectionReferenceTouchesDirectory(const QString &projectRoot,
+                                         const Collection &collection,
+                                         const QString &directoryPath,
+                                         QStringList *fields)
+{
+    QStringList touched;
+    if (referenceIsInsideDirectory(
+            projectRoot, collection.parent, directoryPath)) {
+        touched.append("parent");
+    }
+    if (referenceIsInsideDirectory(
+            projectRoot, collection.related, directoryPath)) {
+        touched.append("related");
+    }
+    if (referenceIsInsideDirectory(
+            projectRoot, collection.registry, directoryPath)) {
+        touched.append("registry");
+    }
+    if (referenceIsInsideDirectory(
+            projectRoot, collection.script, directoryPath)) {
+        touched.append("script");
+    }
+
+    if (fields)
+        *fields = touched;
+    return !touched.isEmpty();
+}
+
+QStringList collectionRenameReferenceLabels(
+    const QString &projectRoot,
+    const QVector<Collection> &collections,
+    const QString &oldDirectoryPath)
+{
+    QStringList labels;
+    for (const Collection &collection : collections) {
+        QStringList fields;
+        if (!collectionReferenceTouchesDirectory(
+                projectRoot, collection, oldDirectoryPath, &fields)) {
+            continue;
+        }
+        labels.append(QStringLiteral("- %1: %2")
+                          .arg(collectionDisplayLabel(collection),
+                               fields.join(", ")));
+    }
+    labels.sort(Qt::CaseInsensitive);
+    return labels;
+}
+
+bool widgetHasLayerInsideDirectory(QWidget *widget,
+                                   const QString &directoryPath)
+{
+    auto *splitter = qobject_cast<QSplitter*>(widget);
+    if (!splitter)
+        return false;
+
+    for (int panelIndex = 0; panelIndex < splitter->count(); ++panelIndex) {
+        auto *viewer = qobject_cast<ImageViewer*>(
+            splitter->widget(panelIndex));
+        if (!viewer || !viewer->layerManager())
+            continue;
+
+        LayerManager *manager = viewer->layerManager();
+        for (int layerIndex = 0; layerIndex < manager->layerCount();
+             ++layerIndex) {
+            Layer *layer = manager->layerAt(layerIndex);
+            if (layer
+                && normalizedPathIsInside(
+                    layer->sourcePath(), directoryPath)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+QVector<int> workspaceTabIndexesTouchingDirectory(QTabWidget *tabs,
+                                                  const QString &directoryPath)
+{
+    QVector<int> indexes;
+    if (!tabs)
+        return indexes;
+
+    for (int index = 0; index < tabs->count(); ++index) {
+        if (widgetHasLayerInsideDirectory(tabs->widget(index), directoryPath))
+            indexes.append(index);
+    }
+    return indexes;
+}
+
+QStringList workspaceTabLabelsTouchingDirectory(QTabWidget *tabs,
+                                                const QString &directoryPath)
+{
+    QStringList labels;
+    const QVector<int> indexes =
+        workspaceTabIndexesTouchingDirectory(tabs, directoryPath);
+    for (const int index : indexes) {
+        labels.append(QStringLiteral("- %1").arg(tabs->tabText(index)));
+    }
+    labels.sort(Qt::CaseInsensitive);
+    return labels;
+}
+
+bool pathsAreSameForRename(const QString &left, const QString &right)
+{
+    return normalizedAbsolutePathForComparison(left)
+        == normalizedAbsolutePathForComparison(right);
+}
+
+QString validateCollectionRenameFolderName(const QString &projectRoot,
+                                           const QString &oldName,
+                                           const QString &newName)
+{
+    const QString cleanName = newName.trimmed();
+    if (cleanName.isEmpty())
+        return "Folder name cannot be empty.";
+    if (cleanName == "." || cleanName == "..")
+        return "Folder name cannot be \".\" or \"..\".";
+    if (cleanName.contains('/') || cleanName.contains('\\'))
+        return "Enter a folder name, not a path.";
+    for (const QChar character : cleanName) {
+        if (character.unicode() < 32) {
+            return "Folder name cannot contain control characters.";
+        }
+    }
+    const QString invalidCharacters = QStringLiteral("<>:\"|?*");
+    for (const QChar character : invalidCharacters) {
+        if (cleanName.contains(character)) {
+            return QStringLiteral("Folder name cannot contain \"%1\".")
+                .arg(character);
+        }
+    }
+    if (Project::reservedDirectories().contains(
+            cleanName, Qt::CaseInsensitive)) {
+        return "Folder name is reserved by rcaiman-projects.";
+    }
+    if (cleanName == oldName)
+        return "Enter a different folder name.";
+
+    const QString oldPath = QDir(projectRoot).filePath(oldName);
+    const QString newPath = QDir(projectRoot).filePath(cleanName);
+    if (QFileInfo::exists(newPath)
+        && !pathsAreSameForRename(oldPath, newPath)) {
+        return "A folder or file with that name already exists.";
+    }
+    return {};
+}
+
+QString collectionRenameReport(
+    const QStringList &metadataReferences,
+    const QStringList &scriptMentions,
+    const QStringList &openTabs)
+{
+    QStringList lines;
+    lines.append("Rename impact");
+    lines.append(QString());
+
+    if (metadataReferences.isEmpty()) {
+        lines.append("No collection metadata references need updating.");
+        lines.append(QString());
+    } else {
+        lines.append("Collection metadata references that will be updated:");
+        lines.append(metadataReferences);
+        lines.append(QString());
+    }
+
+    if (scriptMentions.isEmpty()) {
+        lines.append("No scripts were found mentioning this folder.");
+        lines.append(QString());
+    } else {
+        lines.append("Scripts that mention the old folder name or path:");
+        lines.append(scriptMentions);
+        lines.append("Scripts are not edited automatically.");
+        lines.append(QString());
+    }
+
+    if (openTabs.isEmpty()) {
+        lines.append("No open viewer tabs use files from this collection.");
+    } else {
+        lines.append("Open viewer tabs that will be closed before renaming:");
+        lines.append(openTabs);
+    }
+
+    return lines.join('\n');
+}
+
+RenameCollectionDecision confirmRenameCollection(
+    QWidget *parent,
+    const QString &projectRoot,
+    const Collection &collection,
+    const QStringList &metadataReferences,
+    const QStringList &scriptMentions,
+    const QStringList &openTabs)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Rename collection folder");
+    dialog.setMinimumWidth(680);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        "Rename the collection folder. The collection class, files, "
+        "collection.yaml, and style.yaml stay with the folder.",
+        &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *form = new QFormLayout();
+    auto *currentName = new QLineEdit(collection.dirName, &dialog);
+    currentName->setReadOnly(true);
+    form->addRow("Current folder:", currentName);
+
+    auto *newName = new QLineEdit(collection.dirName, &dialog);
+    newName->selectAll();
+    form->addRow("New folder:", newName);
+    layout->addLayout(form);
+
+    auto *validationLabel = new QLabel(&dialog);
+    validationLabel->setWordWrap(true);
+    validationLabel->setStyleSheet("color: #9b1c1c;");
+    layout->addWidget(validationLabel);
+
+    auto *report = new QTextBrowser(&dialog);
+    report->setPlainText(
+        collectionRenameReport(metadataReferences, scriptMentions, openTabs));
+    report->setMinimumHeight(230);
+    report->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(report);
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText("Rename");
+    buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
+    layout->addWidget(buttons);
+
+    auto updateValidation = [&]() {
+        const QString error = validateCollectionRenameFolderName(
+            projectRoot, collection.dirName, newName->text());
+        validationLabel->setText(error);
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(error.isEmpty());
+    };
+    QObject::connect(newName, &QLineEdit::textChanged,
+                     &dialog, updateValidation);
+    QObject::connect(buttons, &QDialogButtonBox::accepted,
+                     &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected,
+                     &dialog, &QDialog::reject);
+    updateValidation();
+
+    RenameCollectionDecision decision;
+    if (dialog.exec() != QDialog::Accepted)
+        return decision;
+
+    decision.accepted = true;
+    decision.newName = newName->text().trimmed();
+    return decision;
+}
+
+QString remapReferenceInsideDirectory(const QString &projectRoot,
+                                      const QString &reference,
+                                      const QString &oldDirectoryPath,
+                                      const QString &newDirectoryPath)
+{
+    if (reference.trimmed().isEmpty())
+        return reference;
+
+    const QString resolvedPath =
+        Project::resolveReference(projectRoot, reference);
+    if (!normalizedPathIsInside(resolvedPath, oldDirectoryPath))
+        return reference;
+
+    const QString relativeInside =
+        QDir(oldDirectoryPath).relativeFilePath(resolvedPath);
+    const QString remappedPath = relativeInside == "."
+        ? newDirectoryPath
+        : QDir(newDirectoryPath).filePath(relativeInside);
+    return Project::portableReference(projectRoot, remappedPath);
+}
+
+bool updateCollectionReferencesAfterRename(
+    const QString &projectRoot,
+    const QVector<Collection> &collections,
+    const QString &oldDirectoryPath,
+    const QString &newDirectoryPath,
+    const QString &newName,
+    int *updatedCollections,
+    QString *errorMessage)
+{
+    if (updatedCollections)
+        *updatedCollections = 0;
+
+    int written = 0;
+    for (Collection collection : collections) {
+        const bool isRenamedCollection =
+            normalizedAbsolutePathForComparison(collection.dirPath)
+            == normalizedAbsolutePathForComparison(oldDirectoryPath);
+        if (isRenamedCollection) {
+            collection.dirPath = newDirectoryPath;
+            collection.dirName = newName;
+        }
+
+        const QString parent = remapReferenceInsideDirectory(
+            projectRoot, collection.parent, oldDirectoryPath,
+            newDirectoryPath);
+        const QString related = remapReferenceInsideDirectory(
+            projectRoot, collection.related, oldDirectoryPath,
+            newDirectoryPath);
+        const QString registry = remapReferenceInsideDirectory(
+            projectRoot, collection.registry, oldDirectoryPath,
+            newDirectoryPath);
+        const QString script = remapReferenceInsideDirectory(
+            projectRoot, collection.script, oldDirectoryPath,
+            newDirectoryPath);
+
+        if (parent == collection.parent
+            && related == collection.related
+            && registry == collection.registry
+            && script == collection.script) {
+            continue;
+        }
+
+        if (!Project::updateCollectionMetadata(
+                projectRoot,
+                collection.dirPath,
+                collection.alias,
+                parent,
+                related,
+                registry,
+                script,
+                errorMessage)) {
+            return false;
+        }
+        ++written;
+    }
+
+    if (updatedCollections)
+        *updatedCollections = written;
+    return true;
+}
+
+bool renameProjectChildDirectory(const QString &projectRoot,
+                                 const QString &oldName,
+                                 const QString &newName,
+                                 QString *errorMessage)
+{
+    QDir root(projectRoot);
+    const QString oldPath = root.filePath(oldName);
+    const QString newPath = root.filePath(newName);
+
+    if (!pathsAreSameForRename(oldPath, newPath)) {
+        if (root.rename(oldName, newName))
+            return true;
+        if (errorMessage) {
+            *errorMessage = QStringLiteral(
+                "Could not rename \"%1\" to \"%2\".")
+                .arg(oldName, newName);
+        }
+        return false;
+    }
+
+    QString temporaryName =
+        QStringLiteral("%1.rename_tmp_%2")
+            .arg(oldName,
+                 QString::number(QDateTime::currentMSecsSinceEpoch()));
+    while (QFileInfo::exists(root.filePath(temporaryName))) {
+        temporaryName.append('x');
+    }
+
+    if (!root.rename(oldName, temporaryName)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral(
+                "Could not prepare case-only rename for \"%1\".")
+                .arg(oldName);
+        }
+        return false;
+    }
+    if (!root.rename(temporaryName, newName)) {
+        root.rename(temporaryName, oldName);
+        if (errorMessage) {
+            *errorMessage = QStringLiteral(
+                "Could not rename \"%1\" to \"%2\".")
+                .arg(oldName, newName);
+        }
+        return false;
+    }
+    return true;
 }
 
 QVector<QString> tiffFilesWithBaseName(const QString &directoryPath,
@@ -987,6 +2184,21 @@ MainWindow::MainWindow(QWidget *parent)
     projectExplorerToolbarLayout->addStretch(1);
     projectExplorerToolbarLayout->addWidget(m_projectSortCombo);
 
+    m_collectionGraphButton = new QPushButton("Collection graph...", this);
+    m_collectionGraphButton->setEnabled(false);
+    m_collectionGraphButton->setToolTip("Show the registered collection graph.");
+    m_checkCollectionsButton = new QPushButton("Check collections...", this);
+    m_checkCollectionsButton->setEnabled(false);
+    m_checkCollectionsButton->setToolTip(
+        "Check registered collections for broken links and invalid fields.");
+    auto *projectStructureToolbar = new QWidget(this);
+    auto *projectStructureToolbarLayout =
+        new QHBoxLayout(projectStructureToolbar);
+    projectStructureToolbarLayout->setContentsMargins(0, 0, 0, 0);
+    projectStructureToolbarLayout->setSpacing(4);
+    projectStructureToolbarLayout->addWidget(m_collectionGraphButton, 1);
+    projectStructureToolbarLayout->addWidget(m_checkCollectionsButton, 1);
+
     m_projectHeaderWidget = new QWidget(this);
     auto *projectHeaderLayout = new QVBoxLayout(m_projectHeaderWidget);
     projectHeaderLayout->setContentsMargins(4, 2, 4, 6);
@@ -1008,6 +2220,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->dockProjectExplorerLayout->insertWidget(0, m_projectHeaderWidget);
     ui->dockProjectExplorerLayout->insertWidget(1, projectExplorerToolbar);
+    ui->dockProjectExplorerLayout->insertWidget(2, projectStructureToolbar);
     m_projectStarredEmptyLabel = new QLabel(
         "No starred files or folders.", this);
     m_projectStarredEmptyLabel->setWordWrap(true);
@@ -1015,11 +2228,15 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectStarredEmptyLabel->setStyleSheet(
         "QLabel { color: #6f7f90; padding: 8px 4px; }");
     m_projectStarredEmptyLabel->setVisible(false);
-    ui->dockProjectExplorerLayout->insertWidget(2, m_projectStarredEmptyLabel);
+    ui->dockProjectExplorerLayout->insertWidget(3, m_projectStarredEmptyLabel);
     connect(m_newFolderButton, &QToolButton::clicked,
             this, &MainWindow::createProjectFolder);
     connect(m_unstarAllButton, &QToolButton::clicked,
             this, &MainWindow::clearProjectFileMarks);
+    connect(m_collectionGraphButton, &QPushButton::clicked,
+            this, &MainWindow::showCollectionGraph);
+    connect(m_checkCollectionsButton, &QPushButton::clicked,
+            this, &MainWindow::checkCollections);
     connect(m_starredOnlyCheck, &QCheckBox::toggled,
             this, [this](bool checked) {
                 auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
@@ -1126,6 +2343,16 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::registerCollection);
+
+    connect(ui->actionCheckCollections,
+            &QAction::triggered,
+            this,
+            &MainWindow::checkCollections);
+
+    connect(ui->actionCollectionGraph,
+            &QAction::triggered,
+            this,
+            &MainWindow::showCollectionGraph);
 
     connect(ui->actionBuildMetadataRules,
             &QAction::triggered,
@@ -2404,6 +3631,53 @@ void MainWindow::registerCollection()
     }
 }
 
+void MainWindow::checkCollections()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(
+            this, "Check collections", "No project is open.");
+        return;
+    }
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    const CollectionCheckResult result =
+        checkRegisteredCollections(m_project.rootPath(), collections);
+    showCollectionCheckDialog(this, result);
+
+    if (result.errors.isEmpty() && result.warnings.isEmpty()) {
+        statusBar()->showMessage("Collection check found no problems.", 5000);
+    } else {
+        statusBar()->showMessage(
+            QStringLiteral(
+                "Collection check found %1 error(s) and %2 warning(s)")
+                .arg(result.errors.size())
+                .arg(result.warnings.size()),
+            7000);
+    }
+}
+
+void MainWindow::showCollectionGraph()
+{
+    if (!m_project.isValid()) {
+        QMessageBox::information(
+            this, "Collection graph", "No project is open.");
+        return;
+    }
+
+    if (m_collectionGraphDialog) {
+        m_collectionGraphDialog->show();
+        m_collectionGraphDialog->raise();
+        m_collectionGraphDialog->activateWindow();
+        return;
+    }
+
+    m_collectionGraphDialog =
+        new CollectionGraphDialog(m_project.rootPath(), this);
+    m_collectionGraphDialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_collectionGraphDialog->show();
+}
+
 void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
 {
     const QString filePath = projectPathFromIndex(index);
@@ -2448,6 +3722,7 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
     QAction *registerAction = nullptr;
     QAction *editCollectionAction = nullptr;
+    QAction *renameCollectionAction = nullptr;
     QAction *unregisterCollectionAction = nullptr;
     QAction *createPointsAction = nullptr;
     QAction *createMaskAction = nullptr;
@@ -2459,6 +3734,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         menu.addSeparator();
         registerAction = menu.addAction("Register collection...");
         editCollectionAction = menu.addAction("Edit collection...");
+        renameCollectionAction =
+            menu.addAction("Rename collection folder...");
         unregisterCollectionAction =
             menu.addAction("Unregister collection...");
         createPointsAction =
@@ -2515,6 +3792,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         createPointsAction->setEnabled(supportsCreatePoints);
     if (editCollectionAction)
         editCollectionAction->setEnabled(hasRegisteredCollection);
+    if (renameCollectionAction)
+        renameCollectionAction->setEnabled(hasRegisteredCollection);
     if (unregisterCollectionAction)
         unregisterCollectionAction->setEnabled(hasRegisteredCollection);
     if (createMaskAction)
@@ -2669,28 +3948,164 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                         3000);
                 });
     }
+    if (renameCollectionAction) {
+        connect(renameCollectionAction, &QAction::triggered,
+                this, [this, selectedCollection, hasRegisteredCollection]() {
+                    if (!hasRegisteredCollection)
+                        return;
+
+                    const QString projectRoot = m_project.rootPath();
+                    const QVector<Collection> collections =
+                        Project::discoverCollections(projectRoot);
+                    const QString oldDirectoryPath =
+                        selectedCollection.dirPath;
+                    const QStringList metadataReferences =
+                        collectionRenameReferenceLabels(
+                            projectRoot, collections, oldDirectoryPath);
+                    const QStringList scriptMentions =
+                        scriptFilesMentioningCollection(
+                            projectRoot, oldDirectoryPath);
+                    const QStringList openTabs =
+                        workspaceTabLabelsTouchingDirectory(
+                            ui->workspaceTabs, oldDirectoryPath);
+
+                    const RenameCollectionDecision decision =
+                        confirmRenameCollection(
+                            this,
+                            projectRoot,
+                            selectedCollection,
+                            metadataReferences,
+                            scriptMentions,
+                            openTabs);
+                    if (!decision.accepted)
+                        return;
+
+                    const QString newDirectoryPath =
+                        QDir(projectRoot).filePath(decision.newName);
+                    const QVector<int> tabsToClose =
+                        workspaceTabIndexesTouchingDirectory(
+                            ui->workspaceTabs, oldDirectoryPath);
+                    if (!tabsToClose.isEmpty())
+                        closeAttributeTables();
+                    for (int i = tabsToClose.size() - 1; i >= 0; --i)
+                        onWorkspaceTabCloseRequested(tabsToClose.at(i));
+
+                    QString errorMessage;
+                    if (!renameProjectChildDirectory(
+                            projectRoot,
+                            selectedCollection.dirName,
+                            decision.newName,
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this, "Rename collection folder", errorMessage);
+                        return;
+                    }
+
+                    int updatedCollections = 0;
+                    if (!updateCollectionReferencesAfterRename(
+                            projectRoot,
+                            collections,
+                            oldDirectoryPath,
+                            newDirectoryPath,
+                            decision.newName,
+                            &updatedCollections,
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this,
+                            "Rename collection folder",
+                            errorMessage.isEmpty()
+                                ? QStringLiteral(
+                                      "The folder was renamed, but some "
+                                      "collection references could not be updated.")
+                                : errorMessage);
+                    }
+
+                    int remappedMarks = 0;
+                    const QString oldRelativePath =
+                        QDir::fromNativeSeparators(
+                            QDir(projectRoot).relativeFilePath(
+                                oldDirectoryPath));
+                    const QString newRelativePath =
+                        QDir::fromNativeSeparators(
+                            QDir(projectRoot).relativeFilePath(
+                                newDirectoryPath));
+                    if (!oldRelativePath.isEmpty()
+                        && oldRelativePath != "."
+                        && !newRelativePath.isEmpty()
+                        && newRelativePath != ".") {
+                        const QString childPrefix = oldRelativePath + "/";
+                        QSet<QString> remapped;
+                        for (const QString &relativePath
+                             : std::as_const(m_projectFileMarks)) {
+                            if (relativePath == oldRelativePath) {
+                                remapped.insert(newRelativePath);
+                                ++remappedMarks;
+                            } else if (relativePath.startsWith(childPrefix)) {
+                                remapped.insert(
+                                    newRelativePath
+                                    + relativePath.mid(
+                                        oldRelativePath.size()));
+                                ++remappedMarks;
+                            } else {
+                                remapped.insert(relativePath);
+                            }
+                        }
+                        if (remappedMarks > 0) {
+                            m_projectFileMarks = remapped;
+                            saveProjectFileMarks();
+                            if (m_projectFileSystemModel)
+                                m_projectFileSystemModel->setFileMarks(
+                                    m_projectFileMarks);
+                        }
+                    }
+
+                    if (m_previewDock)
+                        m_previewDock->clear();
+                    updateProjectExplorer();
+                    saveProjectSession();
+                    refreshReloadableArtifactWatchers();
+                    updateProjectActions();
+
+                    statusBar()->showMessage(
+                        QStringLiteral(
+                            "Renamed collection %1 to %2; updated %3 collection file(s), remapped %4 star(s), closed %5 tab(s)")
+                            .arg(selectedCollection.dirName,
+                                 decision.newName)
+                            .arg(updatedCollections)
+                            .arg(remappedMarks)
+                            .arg(tabsToClose.size()),
+                        8000);
+                });
+    }
     if (unregisterCollectionAction) {
         connect(unregisterCollectionAction, &QAction::triggered,
                 this, [this, selectedCollection, hasRegisteredCollection]() {
                     if (!hasRegisteredCollection)
                         return;
 
-                    const auto reply = QMessageBox::warning(
-                        this,
-                        "Unregister collection",
-                        QStringLiteral(
-                            "Unregister collection \"%1\"?\n\n"
-                            "This removes collection.yaml and style.yaml only. "
-                            "Working files in the folder remain.\n\n"
-                            "Links from other collections and scripts are not "
-                            "updated automatically.")
-                            .arg(selectedCollection.dirName),
-                        QMessageBox::Yes | QMessageBox::No,
-                        QMessageBox::No);
-                    if (reply != QMessageBox::Yes)
+                    const UnregisterImpact impact = analyzeUnregisterImpact(
+                        m_project.rootPath(),
+                        selectedCollection,
+                        Project::discoverCollections(m_project.rootPath()));
+                    const UnregisterDecision decision =
+                        confirmUnregisterCollection(
+                            this, selectedCollection, impact);
+                    if (!decision.accepted)
                         return;
 
                     QString errorMessage;
+                    int updatedDependencies = 0;
+                    if (!applyUnregisterDependencyCleanup(
+                            m_project.rootPath(),
+                            impact,
+                            decision,
+                            &updatedDependencies,
+                            &errorMessage)) {
+                        QMessageBox::warning(
+                            this, "Unregister collection", errorMessage);
+                        return;
+                    }
+
                     if (!Project::unregisterCollection(
                             m_project.rootPath(),
                             selectedCollection.dirPath,
@@ -2705,10 +4120,14 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     m_projectFileSystemModel->refreshDirectory(
                         selectedCollection.dirPath);
                     updateProjectActions();
-                    statusBar()->showMessage(
-                        QStringLiteral("Unregistered collection: %1")
-                            .arg(selectedCollection.dirName),
-                        4000);
+                    const QString message = updatedDependencies > 0
+                        ? QStringLiteral(
+                              "Unregistered collection: %1; updated %2 dependent collection file(s)")
+                              .arg(selectedCollection.dirName)
+                              .arg(updatedDependencies)
+                        : QStringLiteral("Unregistered collection: %1")
+                              .arg(selectedCollection.dirName);
+                    statusBar()->showMessage(message, 5000);
                 });
     }
     if (createPointsAction) {
@@ -4380,6 +5799,11 @@ void MainWindow::loadProject(const Project &project)
 
 void MainWindow::closeCurrentProject()
 {
+    if (m_collectionGraphDialog) {
+        m_collectionGraphDialog->close();
+        m_collectionGraphDialog = nullptr;
+    }
+
     saveProjectSession();
     saveProjectFileMarks();
 
@@ -5168,6 +6592,8 @@ void MainWindow::updateProjectActions()
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionImportLegacyJpegs->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
+    ui->actionCheckCollections->setEnabled(hasProject);
+    ui->actionCollectionGraph->setEnabled(hasProject);
     ui->actionCleanProject->setEnabled(hasProject);
     ui->actionCreatePoints->setEnabled(hasProject);
     ui->actionCreatePointGrid->setEnabled(hasProject);
@@ -5181,6 +6607,10 @@ void MainWindow::updateProjectActions()
         m_newFolderButton->setEnabled(hasProject);
     if (m_unstarAllButton)
         m_unstarAllButton->setEnabled(hasProject && !m_projectFileMarks.isEmpty());
+    if (m_collectionGraphButton)
+        m_collectionGraphButton->setEnabled(hasProject);
+    if (m_checkCollectionsButton)
+        m_checkCollectionsButton->setEnabled(hasProject);
     if (m_starredOnlyCheck)
         m_starredOnlyCheck->setEnabled(hasProject);
 

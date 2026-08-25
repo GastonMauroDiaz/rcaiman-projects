@@ -42,6 +42,8 @@
     <addaction name="actionImportLegacyJpegs"/>
     <addaction name="separator"/>
     <addaction name="actionRegisterCollection"/>
+    <addaction name="actionCheckCollections"/>
+    <addaction name="actionCollectionGraph"/>
     <addaction name="separator"/>
     <addaction name="menuRecentProjects"/>
    </widget>
@@ -344,6 +346,22 @@
   <action name="actionRegisterCollection">
    <property name="text">
     <string>Register collection...</string>
+   </property>
+  </action>
+  <action name="actionCheckCollections">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Check collections...</string>
+   </property>
+  </action>
+  <action name="actionCollectionGraph">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Collection graph...</string>
    </property>
   </action>
   <action name="actionRecentDummy">

@@ -74,6 +74,21 @@ QString yamlValueAfterColon(const QString &line)
     }
     return value;
 }
+
+QColor explorerColorForCollectionClass(const QString &collectionClass)
+{
+    if (collectionClass == "preprocessed_image_collection")
+        return QColor("#2f6f3e");
+    if (collectionClass == "point_collection")
+        return QColor("#8a6200");
+    if (collectionClass == "segmentation_collection")
+        return QColor("#6d3f8c");
+    if (collectionClass == "processed_image_collection")
+        return QColor("#1f5f86");
+    if (collectionClass == "other")
+        return QColor("#9f2f2a");
+    return {};
+}
 }
 
 ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
@@ -117,20 +132,16 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (directProjectChild)
         className = collectionClass(info.absoluteFilePath());
     const bool otherCollection = className == "other";
-    const bool countedCollection =
-        className == "preprocessed_image_collection"
-        || className == "processed_image_collection"
-        || className == "segmentation_collection"
-        || className == "point_collection";
-
-    if (role == Qt::ForegroundRole && otherCollection)
-        return QBrush(QColor(170, 90, 0));
 
     if (role == Qt::ForegroundRole && reserved)
         return QBrush(QColor(35, 105, 190));
 
-    if (role == Qt::ForegroundRole && countedCollection)
-        return QBrush(QColor(0, 85, 0));
+    if (role == Qt::ForegroundRole) {
+        const QColor collectionColor =
+            explorerColorForCollectionClass(className);
+        if (collectionColor.isValid())
+            return QBrush(collectionColor);
+    }
 
     if (role == Qt::ToolTipRole
         && reserved

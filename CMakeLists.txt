@@ -82,6 +82,7 @@ qt_add_executable(rcaiman_projects
     rawreader.h rawreader.cpp
     collectiondialog.h collectiondialog.cpp
     collectioneditdialog.h collectioneditdialog.cpp
+    collectiongraphdialog.h collectiongraphdialog.cpp
     collectionautoload.h collectionautoload.cpp
     collectionstylefile.h collectionstylefile.cpp
     collectionstyledialog.h collectionstyledialog.cpp
