@@ -84,6 +84,23 @@ QString columnTitle(int column)
     }
 }
 
+bool parentIsRequired(const QString &collectionClass)
+{
+    return collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection";
+}
+
+QStringList compatibleParentClasses(const QString &collectionClass)
+{
+    if (collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection") {
+        return {"preprocessed_image_collection",
+                "processed_image_collection"};
+    }
+    return {};
+}
+
 void addArrowHead(QGraphicsScene *scene,
                   const QPointF &tip,
                   qreal angle,
@@ -186,35 +203,91 @@ void CollectionGraphDialog::rebuildGraph()
     for (const Collection &collection : std::as_const(m_collections))
         addCollectionNode(collection);
 
+    QHash<QString, int> collectionIndexesById;
+    QHash<QString, QString> collectionNamesById;
+    for (int i = 0; i < m_collections.size(); ++i) {
+        const QString id = nodeIdForCollection(m_collections.at(i));
+        collectionIndexesById.insert(id, i);
+        collectionNamesById.insert(id, m_collections.at(i).dirName);
+    }
+
+    int parentEdges = 0;
+    QStringList parentIssueLines;
+    for (const Collection &collection : std::as_const(m_collections)) {
+        const QString collectionId = nodeIdForCollection(collection);
+        const QStringList allowedParents =
+            compatibleParentClasses(collection.collectionClass);
+        if (collection.parent.trimmed().isEmpty()) {
+            if (parentIsRequired(collection.collectionClass)) {
+                parentIssueLines.append(
+                    QStringLiteral("- %1: Parent is required but empty.")
+                        .arg(displayLabel(collection).replace('\n', " | ")));
+                if (m_nodeIndexes.contains(collectionId))
+                    m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+            }
+            continue;
+        }
+
+        ++parentEdges;
+        if (allowedParents.isEmpty()) {
+            parentIssueLines.append(
+                QStringLiteral(
+                    "- %1: Parent is set, but this collection class does not use it.")
+                    .arg(displayLabel(collection).replace('\n', " | ")));
+            if (m_nodeIndexes.contains(collectionId))
+                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+            continue;
+        }
+
+        const QString parentId = nodeIdForReference(collection.parent);
+        const int parentIndex = collectionIndexesById.value(parentId, -1);
+        if (parentIndex < 0) {
+            const QString targetName = QFileInfo(
+                Project::resolveReference(m_projectRootPath,
+                                          collection.parent)).fileName();
+            parentIssueLines.append(
+                QStringLiteral("- %1 -> %2: parent target is missing or not registered.")
+                    .arg(displayLabel(collection).replace('\n', " | "),
+                         targetName.isEmpty() ? collection.parent : targetName));
+            if (m_nodeIndexes.contains(collectionId))
+                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+            continue;
+        }
+
+        const Collection &parentCollection =
+            m_collections.at(parentIndex);
+        if (parentId == collectionId) {
+            parentIssueLines.append(
+                QStringLiteral("- %1: Parent points to itself.")
+                    .arg(displayLabel(collection).replace('\n', " | ")));
+            if (m_nodeIndexes.contains(collectionId))
+                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+            continue;
+        }
+
+        if (!allowedParents.contains(parentCollection.collectionClass,
+                                     Qt::CaseInsensitive)) {
+            parentIssueLines.append(
+                QStringLiteral("- %1 -> %2: expected parent class %3.")
+                    .arg(displayLabel(collection).replace('\n', " | "),
+                         displayLabel(parentCollection).replace('\n', " | "),
+                         allowedParents.join(", ")));
+            if (m_nodeIndexes.contains(collectionId))
+                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+        }
+    }
+
     layoutNodes();
     drawEdges();
     drawNodes();
     drawLegend();
 
-    int parentEdges = 0;
-    QStringList brokenParentLines;
-    for (const Collection &collection : std::as_const(m_collections)) {
-        if (!collection.parent.trimmed().isEmpty()) {
-            ++parentEdges;
-            if (!m_nodeIndexes.contains(nodeIdForReference(collection.parent))) {
-                brokenParentLines.append(
-                    QStringLiteral("- %1 -> %2")
-                        .arg(collection.dirName, collection.parent));
-            }
-        }
-    }
-
     m_summaryLabel->setText(
         QStringLiteral(
-            "%1 collection(s). Parent links: %2. Broken parent links: %3.")
+            "%1 collection(s). Declared parent links: %2. Parent issues: %3.")
             .arg(m_collections.size())
             .arg(parentEdges)
-            .arg(brokenParentLines.size()));
-
-    QHash<QString, QString> collectionNamesById;
-    for (const Collection &collection : std::as_const(m_collections))
-        collectionNamesById.insert(nodeIdForCollection(collection),
-                                   collection.dirName);
+            .arg(parentIssueLines.size()));
 
     QStringList relatedLines;
     for (const Collection &collection : std::as_const(m_collections)) {
@@ -245,12 +318,12 @@ void CollectionGraphDialog::rebuildGraph()
         m_relatedLabel->clear();
     }
 
-    brokenParentLines.sort(Qt::CaseInsensitive);
-    m_brokenParentsLabel->setVisible(!brokenParentLines.isEmpty());
-    if (!brokenParentLines.isEmpty()) {
+    parentIssueLines.sort(Qt::CaseInsensitive);
+    m_brokenParentsLabel->setVisible(!parentIssueLines.isEmpty());
+    if (!parentIssueLines.isEmpty()) {
         m_brokenParentsLabel->setText(
-            QStringLiteral("Broken parent links:\n%1")
-                .arg(brokenParentLines.join('\n')));
+            QStringLiteral("Parent issues:\n%1")
+                .arg(parentIssueLines.join('\n')));
     } else {
         m_brokenParentsLabel->clear();
     }
@@ -478,16 +551,16 @@ void CollectionGraphDialog::drawEdges()
         if (!m_nodeIndexes.contains(collectionId))
             continue;
 
-        const NodeInfo &target = m_nodes.at(m_nodeIndexes.value(collectionId));
+        const NodeInfo &child = m_nodes.at(m_nodeIndexes.value(collectionId));
         if (!collection.parent.trimmed().isEmpty()) {
             const QString parentId = nodeIdForReference(collection.parent);
             if (m_nodeIndexes.contains(parentId)) {
-                const NodeInfo &source =
+                const NodeInfo &parentNode =
                     m_nodes.at(m_nodeIndexes.value(parentId));
-                drawParentArrow(source.rect, target.rect,
-                                source.missing ? QColor("#b3261e")
-                                               : QColor("#4b5563"),
-                                source.missing);
+                drawParentArrow(child.rect, parentNode.rect,
+                                parentNode.missing ? QColor("#b3261e")
+                                                   : QColor("#4b5563"),
+                                parentNode.missing);
             }
         }
     }
@@ -498,22 +571,24 @@ void CollectionGraphDialog::drawNodes()
     for (const NodeInfo &node : std::as_const(m_nodes)) {
         QPainterPath path;
         path.addRoundedRect(node.rect, 8, 8);
+        const bool hasIssue = node.missing || node.parentIssue;
         auto *rect = m_scene->addPath(
             path,
-            QPen(node.missing ? QColor("#b3261e") : QColor("#6b7280"), 1.2),
+            QPen(hasIssue ? QColor("#b3261e") : QColor("#6b7280"),
+                 hasIssue ? 2.0 : 1.2),
             QBrush(colorForClass(node.collectionClass, node.missing)));
         rect->setZValue(2);
 
         auto *text = m_scene->addText(QString());
         text->setDefaultTextColor(
-            node.missing ? QColor("#7f1d1d") : QColor("#111827"));
+            hasIssue ? QColor("#7f1d1d") : QColor("#111827"));
         const QStringList labelLines = node.label.split('\n');
         QString html = QStringLiteral(
             "<div style=\"font-size:9pt; font-weight:600;\">%1</div>")
             .arg(labelLines.value(0).toHtmlEscaped());
         if (labelLines.size() > 1) {
             html += QStringLiteral(
-                "<div style=\"font-size:8pt; color:#4b5563;\">%1</div>")
+                "<div style=\"font-size:7pt; color:#4b5563;\">%1</div>")
                 .arg(labelLines.mid(1).join(" ").toHtmlEscaped());
         }
         text->setHtml(html);
@@ -547,9 +622,19 @@ void CollectionGraphDialog::drawLegend()
         QPointF(LeftMargin + 64, legendY),
         QColor("#4b5563"),
         Qt::SolidLine);
-    auto *parentText = m_scene->addText("parent");
+    auto *parentText = m_scene->addText("child -> parent");
     parentText->setDefaultTextColor(QColor("#374151"));
     parentText->setPos(LeftMargin + 76, legendY - 13);
+
+    auto *note = m_scene->addText(
+        "Some collection classes can declare a parent. "
+        "Collections do not declare their children.");
+    QFont noteFont = note->font();
+    noteFont.setPointSize(8);
+    note->setFont(noteFont);
+    note->setDefaultTextColor(QColor("#6b7280"));
+    note->setTextWidth(520);
+    note->setPos(LeftMargin, legendY + 20);
 }
 
 void CollectionGraphDialog::drawParentArrow(const QRectF &sourceRect,

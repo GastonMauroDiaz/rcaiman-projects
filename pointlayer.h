@@ -40,6 +40,7 @@ public:
     ~PointLayer() override;
 
     const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) override;
+    bool lastBuildCanceled() const override;
     bool supportsReloadFromDisk() const override;
     bool reloadFromDisk(QString *errorMessage = nullptr) override;
 
@@ -54,6 +55,7 @@ public:
 
     void setEditMode(bool enabled);
     bool editMode() const { return m_editMode; }
+    bool usesAggregateRendering() const;
     void setActive(bool active) override;
 
     void cancelEdit();
@@ -84,12 +86,13 @@ private slots:
     void onPointDeleted(int index);
 
 private:
-    void rebuildItems(QGraphicsScene *scene);
+    bool rebuildItems(QGraphicsScene *scene, bool allowCancel = false);
     void applyStyleToItems();
     void applyStyleToPointItem(int index);
     QString labelTextForPoint(int index) const;
     QColor selectionColor() const;
     void clearPointItems();
+    bool shouldUseAggregateRendering() const;
     bool ensureBackup();
     void removeBackup();
 
@@ -97,6 +100,7 @@ private:
     PointLayerStyle m_style;
     QGraphicsScene *m_scene = nullptr;
     bool m_editMode = false;
+    bool m_lastBuildCanceled = false;
     QString m_backupPath;
     QSet<int> m_selectedPointIndices;
     int m_primarySelectedPointIndex = -1;

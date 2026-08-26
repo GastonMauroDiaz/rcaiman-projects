@@ -89,30 +89,28 @@ QString CollectionEditDialog::alias() const
 
 QString CollectionEditDialog::parentReference() const
 {
-    if (m_parentWidget && m_parentWidget->isVisible() && m_parentCombo)
+    if (hasParentField() && m_parentCombo)
         return m_parentCombo->currentData(Qt::UserRole).toString();
     return {};
 }
 
 QString CollectionEditDialog::relatedReference() const
 {
-    if (m_relatedWidget && m_relatedWidget->isVisible() && m_relatedCombo)
+    if (hasRelatedField() && m_relatedCombo)
         return m_relatedCombo->currentData(Qt::UserRole).toString();
     return {};
 }
 
 QString CollectionEditDialog::registry() const
 {
-    if (m_registryWidget && m_registryWidget->isVisible() && m_registryEdit)
+    if (hasRegistryField() && m_registryEdit)
         return m_registryEdit->text().trimmed();
     return {};
 }
 
 QString CollectionEditDialog::script() const
 {
-    if (m_scriptWidget && m_scriptWidget->isVisible() && m_scriptEdit)
-        return m_scriptEdit->text().trimmed();
-    return {};
+    return m_scriptEdit ? m_scriptEdit->text().trimmed() : QString();
 }
 
 void CollectionEditDialog::setupUI()
@@ -212,14 +210,9 @@ void CollectionEditDialog::setupUI()
 void CollectionEditDialog::updateFieldVisibility()
 {
     const QString collectionClass = m_collection.collectionClass;
-    m_parentWidget->setVisible(
-        collectionClass == "processed_image_collection"
-        || collectionClass == "point_collection"
-        || collectionClass == "segmentation_collection");
-    m_relatedWidget->setVisible(collectionClass == "point_collection");
-    m_registryWidget->setVisible(
-        collectionClass == "preprocessed_image_collection"
-        || collectionClass == "other");
+    m_parentWidget->setVisible(hasParentField());
+    m_relatedWidget->setVisible(hasRelatedField());
+    m_registryWidget->setVisible(hasRegistryField());
     m_scriptWidget->setVisible(true);
 
     QString text;
@@ -316,6 +309,33 @@ void CollectionEditDialog::setComboToReference(QComboBox *combo,
     combo->setCurrentIndex(qMax(0, combo->count() - 1));
 }
 
+bool CollectionEditDialog::hasParentField() const
+{
+    const QString collectionClass = m_collection.collectionClass;
+    return collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection";
+}
+
+bool CollectionEditDialog::hasRelatedField() const
+{
+    return m_collection.collectionClass == "point_collection";
+}
+
+bool CollectionEditDialog::hasRegistryField() const
+{
+    const QString collectionClass = m_collection.collectionClass;
+    return collectionClass == "preprocessed_image_collection"
+        || collectionClass == "other";
+}
+
+bool CollectionEditDialog::requiresParent() const
+{
+    const QString collectionClass = m_collection.collectionClass;
+    return collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection";
+}
+
 QStringList CollectionEditDialog::compatibleClasses(bool asParent) const
 {
     const QString targetClass = m_collection.collectionClass;
@@ -364,11 +384,8 @@ void CollectionEditDialog::updateOkButton()
     const QString cleanAlias = alias();
     bool enableOk = cleanAlias.isEmpty()
         || Project::collectionAliasIsSupported(cleanAlias);
-    const QString collectionClass = m_collection.collectionClass;
-    if (collectionClass == "point_collection"
-        || collectionClass == "segmentation_collection") {
+    if (requiresParent())
         enableOk = enableOk && !parentReference().isEmpty();
-    }
 
     if (auto *okButton = m_buttonBox->button(QDialogButtonBox::Ok))
         okButton->setEnabled(enableOk);

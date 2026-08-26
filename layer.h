@@ -54,6 +54,7 @@ public:
     // Construye y cachea los items gráficos.
     // Se llama una vez: en addLayer() o en el primer build necesario.
     virtual const QVector<QGraphicsItem*> &buildItems(QGraphicsScene *scene) = 0;
+    virtual bool lastBuildCanceled() const;
     virtual bool supportsReloadFromDisk() const;
     virtual bool reloadFromDisk(QString *errorMessage = nullptr);
 

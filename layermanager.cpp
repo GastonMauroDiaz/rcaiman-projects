@@ -81,6 +81,12 @@ void LayerManager::addLayer(Layer *layer)
 
     if (m_scene) {
         layer->buildItems(m_scene);
+        if (layer->lastBuildCanceled()) {
+            layer->removeFromScene(m_scene);
+            m_layers.removeOne(layer);
+            delete layer;
+            return;
+        }
         rebuildZOrder();
         layer->addToScene(m_scene);
     }

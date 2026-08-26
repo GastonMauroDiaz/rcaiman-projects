@@ -22,18 +22,183 @@
 #include "pointlayer.h"
 #include "pointitem.h"
 
+#include <QApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QGraphicsEllipseItem>
+#include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPen>
+#include <QProgressDialog>
+#include <QStyleOptionGraphicsItem>
 #include <QBrush>
 #include <QColor>
 #include <QtGlobal>
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <limits>
+#include <memory>
+
+namespace {
+constexpr int PointBuildProgressThreshold = 20000;
+constexpr int PointBuildProgressStep = 1000;
+constexpr int PointAggregateRenderThreshold = 20000;
+constexpr int PointAggregateDrawBudget = 50000;
+constexpr double PointAggregateBoundsMargin = 1024.0;
+
+QRectF boundsForPoints(const QVector<PointRecord> &points)
+{
+    if (points.isEmpty())
+        return QRectF(0.0, 0.0, 1.0, 1.0);
+
+    double minCol = std::numeric_limits<double>::max();
+    double minRow = std::numeric_limits<double>::max();
+    double maxCol = std::numeric_limits<double>::lowest();
+    double maxRow = std::numeric_limits<double>::lowest();
+
+    for (const PointRecord &point : points) {
+        if (!std::isfinite(point.col) || !std::isfinite(point.row))
+            continue;
+        minCol = qMin(minCol, point.col);
+        minRow = qMin(minRow, point.row);
+        maxCol = qMax(maxCol, point.col);
+        maxRow = qMax(maxRow, point.row);
+    }
+
+    if (minCol > maxCol || minRow > maxRow)
+        return QRectF(0.0, 0.0, 1.0, 1.0);
+
+    return QRectF(QPointF(minCol, minRow), QPointF(maxCol, maxRow))
+        .normalized()
+        .adjusted(-PointAggregateBoundsMargin,
+                  -PointAggregateBoundsMargin,
+                  PointAggregateBoundsMargin,
+                  PointAggregateBoundsMargin);
+}
+
+class PointAggregateItem : public QGraphicsItem
+{
+public:
+    explicit PointAggregateItem(PointLayer *layer)
+        : m_layer(layer)
+        , m_bounds(layer ? boundsForPoints(layer->collection().points())
+                         : QRectF(0.0, 0.0, 1.0, 1.0))
+    {
+        setAcceptedMouseButtons(Qt::NoButton);
+        setAcceptHoverEvents(false);
+        setFlag(QGraphicsItem::ItemUsesExtendedStyleOption, true);
+    }
+
+    QRectF boundingRect() const override
+    {
+        return m_bounds;
+    }
+
+    void paint(QPainter *painter,
+               const QStyleOptionGraphicsItem *option,
+               QWidget *) override
+    {
+        if (!m_layer || !painter)
+            return;
+
+        const QVector<PointRecord> &points =
+            m_layer->collection().points();
+        if (points.isEmpty())
+            return;
+
+        const PointLayerStyle style = m_layer->style();
+        QColor color = style.color;
+        color.setAlpha(qMax(80, color.alpha()));
+
+        const double lod = qMax(
+            1.0e-6,
+            QStyleOptionGraphicsItem::levelOfDetailFromTransform(
+                painter->worldTransform()));
+        const double screenSize = qBound(1.0, style.size, 96.0);
+        const double sceneRadius = screenSize / (2.0 * lod);
+        QRectF exposed = option ? option->exposedRect : m_bounds;
+        exposed.adjust(-sceneRadius, -sceneRadius,
+                       sceneRadius, sceneRadius);
+
+        const int total = points.size();
+        const int step = qMax(
+            1,
+            static_cast<int>(
+                std::ceil(static_cast<double>(total)
+                          / PointAggregateDrawBudget)));
+
+        painter->setRenderHint(QPainter::Antialiasing,
+                               step == 1 && screenSize >= 5.0);
+
+        if (screenSize <= 3.0) {
+            QPen pointPen(color);
+            pointPen.setCosmetic(true);
+            painter->setPen(pointPen);
+            for (int i = 0; i < total; i += step) {
+                const PointRecord &point = points[i];
+                const QPointF pos(point.col, point.row);
+                if (exposed.contains(pos))
+                    painter->drawPoint(pos);
+            }
+            return;
+        }
+
+        if (style.symbol == PointSymbol::Circle) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QBrush(color));
+            const double diameter = sceneRadius * 2.0;
+            for (int i = 0; i < total; i += step) {
+                const PointRecord &point = points[i];
+                const QPointF pos(point.col, point.row);
+                if (!exposed.contains(pos))
+                    continue;
+                painter->drawEllipse(
+                    QRectF(pos.x() - sceneRadius,
+                           pos.y() - sceneRadius,
+                           diameter,
+                           diameter));
+            }
+            return;
+        }
+
+        QPen crossPen(color);
+        crossPen.setCosmetic(true);
+        crossPen.setWidthF(qMax(1.0, screenSize * 0.18));
+        crossPen.setCapStyle(Qt::RoundCap);
+        painter->setPen(crossPen);
+        painter->setBrush(Qt::NoBrush);
+        const double arm = sceneRadius * 0.82;
+        for (int i = 0; i < total; i += step) {
+            const PointRecord &point = points[i];
+            const QPointF pos(point.col, point.row);
+            if (!exposed.contains(pos))
+                continue;
+            painter->drawLine(QPointF(pos.x() - arm, pos.y()),
+                              QPointF(pos.x() + arm, pos.y()));
+            painter->drawLine(QPointF(pos.x(), pos.y() - arm),
+                              QPointF(pos.x(), pos.y() + arm));
+        }
+    }
+
+private:
+    PointLayer *m_layer = nullptr;
+    QRectF m_bounds;
+};
+
+void deletePointItems(QVector<QGraphicsItem*> &items)
+{
+    for (QGraphicsItem *item : std::as_const(items)) {
+        if (item->scene())
+            item->scene()->removeItem(item);
+        delete item;
+    }
+    items.clear();
+}
+}
 
 PointLayer::PointLayer(const QString &path, QGraphicsScene *scene, QObject *parent)
     : Layer(QFileInfo(path).fileName(), path, parent)
@@ -57,9 +222,19 @@ const QVector<QGraphicsItem*> &PointLayer::buildItems(QGraphicsScene *scene)
     if (m_itemsBuilt)
         return m_items;
 
-    rebuildItems(scene);
-    m_itemsBuilt = true;
+    if (rebuildItems(scene, true))
+        m_itemsBuilt = true;
     return m_items;
+}
+
+bool PointLayer::lastBuildCanceled() const
+{
+    return m_lastBuildCanceled;
+}
+
+bool PointLayer::usesAggregateRendering() const
+{
+    return shouldUseAggregateRendering();
 }
 
 bool PointLayer::supportsReloadFromDisk() const
@@ -97,13 +272,25 @@ bool PointLayer::reloadFromDisk(QString *errorMessage)
         return false;
     }
 
+    const PointCollection previousCollection = m_collection;
+    const QSet<int> previousSelection = m_selectedPointIndices;
+    const int previousPrimarySelection = m_primarySelectedPointIndex;
+
     m_collection = reloaded;
     m_selectedPointIndices.clear();
     m_primarySelectedPointIndex = -1;
 
     if (m_scene) {
         m_itemsBuilt = false;
-        rebuildItems(m_scene);
+        if (!rebuildItems(m_scene, true)) {
+            m_collection = previousCollection;
+            m_selectedPointIndices = previousSelection;
+            m_primarySelectedPointIndex = previousPrimarySelection;
+            m_itemsBuilt = !m_items.isEmpty();
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Point rendering was stopped.");
+            return false;
+        }
         m_itemsBuilt = true;
     }
 
@@ -113,15 +300,50 @@ bool PointLayer::reloadFromDisk(QString *errorMessage)
     return true;
 }
 
-void PointLayer::rebuildItems(QGraphicsScene *scene)
+bool PointLayer::rebuildItems(QGraphicsScene *scene, bool allowCancel)
 {
-    clearPointItems();
+    m_lastBuildCanceled = false;
+
+    if (shouldUseAggregateRendering()) {
+        QVector<QGraphicsItem*> newItems;
+        auto *aggregateItem = new PointAggregateItem(this);
+        aggregateItem->setZValue(zOrder());
+        aggregateItem->setVisible(isVisible());
+        if (scene)
+            scene->addItem(aggregateItem);
+        newItems.append(aggregateItem);
+
+        clearPointItems();
+        m_items = newItems;
+        qDebug() << "PointLayer: using aggregate renderer for"
+                 << m_collection.recordCount() << "points";
+        return true;
+    }
 
     const double width = m_style.size;
     const double height = m_style.size;
     const QPointF offset(-width / 2.0, -height / 2.0);
 
     const QVector<PointRecord> &points = m_collection.points();
+    QVector<QGraphicsItem*> newItems;
+    newItems.reserve(points.size());
+
+    std::unique_ptr<QProgressDialog> progress;
+    if (allowCancel && points.size() >= PointBuildProgressThreshold) {
+        progress = std::make_unique<QProgressDialog>(
+            QStringLiteral("Rendering %1 point%2...")
+                .arg(points.size())
+                .arg(points.size() == 1 ? "" : "s"),
+            QStringLiteral("Stop"),
+            0,
+            points.size(),
+            QApplication::activeWindow());
+        progress->setWindowTitle("Render Points");
+        progress->setWindowModality(Qt::ApplicationModal);
+        progress->setMinimumDuration(0);
+        progress->setValue(0);
+    }
+
     for (int i = 0; i < points.size(); ++i) {
         const PointRecord &rec = points[i];
 
@@ -145,13 +367,36 @@ void PointLayer::rebuildItems(QGraphicsScene *scene)
         pointItem->setBrush(QBrush(m_style.color));
         pointItem->setPos(rec.col, rec.row);
         pointItem->setZValue(zOrder());
-        pointItem->setVisible(isVisible());
-        scene->addItem(pointItem);
-        m_items.append(pointItem);
+        pointItem->setVisible(false);
+        if (scene)
+            scene->addItem(pointItem);
+        newItems.append(pointItem);
+
+        if (progress
+            && ((i + 1) % PointBuildProgressStep == 0
+                || i + 1 == points.size())) {
+            progress->setValue(i + 1);
+            QApplication::processEvents();
+            if (progress->wasCanceled()) {
+                m_lastBuildCanceled = true;
+                deletePointItems(newItems);
+                return false;
+            }
+        }
     }
 
+    if (progress)
+        progress->setValue(points.size());
+
+    clearPointItems();
+    m_items = newItems;
     applyStyleToItems();
+    for (QGraphicsItem *item : std::as_const(m_items)) {
+        item->setZValue(zOrder());
+        item->setVisible(isVisible());
+    }
     qDebug() << "PointLayer: built" << m_items.size() << "points (editMode=" << m_editMode << ")";
+    return true;
 }
 
 void PointLayer::setStyle(const PointLayerStyle &style)
@@ -214,8 +459,12 @@ void PointLayer::setActive(bool active)
 
 void PointLayer::applyStyleToItems()
 {
-    for (int i = 0; i < m_items.size(); ++i)
-        applyStyleToPointItem(i);
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (dynamic_cast<PointItem*>(m_items[i]))
+            applyStyleToPointItem(i);
+        else
+            m_items[i]->update();
+    }
 }
 
 void PointLayer::applyStyleToPointItem(int index)
@@ -297,10 +546,29 @@ void PointLayer::clearPointItems()
     m_items.clear();
 }
 
+bool PointLayer::shouldUseAggregateRendering() const
+{
+    return !m_editMode
+        && m_collection.recordCount() >= PointAggregateRenderThreshold;
+}
+
 void PointLayer::setEditMode(bool enabled)
 {
     if (m_editMode == enabled)
         return;
+
+    if (enabled && shouldUseAggregateRendering()) {
+        QMessageBox::information(
+            nullptr,
+            "Edit Points",
+            QStringLiteral(
+                "This point layer has %1 points and is displayed in a "
+                "fast preview mode.\n\n"
+                "Interactive point editing is disabled for dense point "
+                "layers to keep pan and zoom responsive.")
+                .arg(m_collection.recordCount()));
+        return;
+    }
 
     m_editMode = enabled;
 

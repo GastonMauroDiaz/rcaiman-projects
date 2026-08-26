@@ -47,6 +47,7 @@ private:
         QString collectionClass;
         QRectF rect;
         bool missing = false;
+        bool parentIssue = false;
     };
 
     void rebuildGraph();

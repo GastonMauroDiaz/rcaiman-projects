@@ -2533,6 +2533,8 @@ private:
 
 constexpr int ProjectFileMarkAreaWidth = 24;
 constexpr int ProjectFileMarkSize = 15;
+constexpr int ProjectFileImageDimensionsAreaWidth = 104;
+constexpr int ProjectFileImageDimensionsMinimumRowWidth = 260;
 constexpr int MaskBrushSliderMaximum = 1000;
 constexpr double MaskBrushSliderGamma = 2.5;
 
@@ -2666,6 +2668,33 @@ void drawProjectExplorerRowGuide(QPainter *painter,
     painter->restore();
 }
 
+void drawProjectFileImageDimensions(QPainter *painter,
+                                    const QRect &rowRect,
+                                    const QString &text,
+                                    bool selected)
+{
+    if (text.isEmpty())
+        return;
+
+    const QRect textRect(
+        rowRect.right() - ProjectFileMarkAreaWidth
+            - ProjectFileImageDimensionsAreaWidth + 1,
+        rowRect.top(),
+        ProjectFileImageDimensionsAreaWidth - 8,
+        rowRect.height());
+
+    painter->save();
+    QFont font = painter->font();
+    if (font.pointSize() > 0)
+        font.setPointSize(qMax(1, font.pointSize() - 1));
+    painter->setFont(font);
+    painter->setPen(selected ? QColor("#ffffff") : QColor("#6b7280"));
+    painter->drawText(textRect,
+                      Qt::AlignRight | Qt::AlignVCenter,
+                      text);
+    painter->restore();
+}
+
 class ProjectExplorerDelegate : public QStyledItemDelegate
 {
 public:
@@ -2685,10 +2714,23 @@ public:
             return;
         }
 
+        const QString dimensions =
+            index.data(ProjectFileImageDimensionsRole).toString();
+        const bool showDimensions = !dimensions.isEmpty()
+            && option.rect.width() >= ProjectFileImageDimensionsMinimumRowWidth;
+
         QStyleOptionViewItem contentOption = option;
         contentOption.rect.setRight(
-            option.rect.right() - ProjectFileMarkAreaWidth);
+            option.rect.right() - ProjectFileMarkAreaWidth
+            - (showDimensions ? ProjectFileImageDimensionsAreaWidth : 0));
         QStyledItemDelegate::paint(painter, contentOption, index);
+        if (showDimensions) {
+            drawProjectFileImageDimensions(
+                painter,
+                option.rect,
+                dimensions,
+                option.state.testFlag(QStyle::State_Selected));
+        }
         drawProjectExplorerRowGuide(
             painter,
             option.rect,
@@ -3172,6 +3214,18 @@ MainWindow::MainWindow(QWidget *parent)
             this, [this]() {
                 refreshProjectExplorerRootIndex();
                 updateProjectExplorerStarredEmptyMessage();
+                updateProjectActions();
+            });
+    connect(m_projectFileSystemModel, &QFileSystemModel::fileRenamed,
+            this, [this](const QString &path, const QString&, const QString&) {
+                if (!m_project.isValid() || !samePath(path, m_project.rootPath()))
+                    return;
+
+                m_projectFileSystemModel->setProjectRoot(m_project.rootPath());
+                static_cast<ProjectExplorerSortProxyModel*>(
+                    m_projectSortProxy)->invalidate();
+                QTimer::singleShot(
+                    0, this, &MainWindow::refreshProjectExplorerRootIndex);
                 updateProjectActions();
             });
     connect(m_projectSortProxy, &QAbstractItemModel::modelReset,
@@ -4985,6 +5039,12 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     if (m_previewDock)
                         m_previewDock->clear();
                     updateProjectExplorer();
+                    m_projectFileSystemModel->refreshDirectory(projectRoot);
+                    m_projectFileSystemModel->refreshDirectory(
+                        newDirectoryPath);
+                    static_cast<ProjectExplorerSortProxyModel*>(
+                        m_projectSortProxy)->invalidate();
+                    refreshProjectExplorerRootIndex();
                     saveProjectSession();
                     refreshReloadableArtifactWatchers();
                     updateProjectActions();
@@ -5597,7 +5657,9 @@ void MainWindow::onLayerSelectionChanged(int index)
             pointLayer, &PointLayer::collectionChanged,
             this, &MainWindow::onPointSelectionChanged);
         updatePropertiesForPointLayer(pointLayer);
-        ui->actionEditPoints->setEnabled(true);
+        ui->actionEditPoints->setEnabled(
+            !pointLayer->usesAggregateRendering()
+            || viewer->pointEditEnabled());
     } else {
         m_currentPointLayer = nullptr;
         ui->actionEditPoints->setEnabled(viewer->pointEditEnabled());
@@ -6034,7 +6096,10 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     auto *pointLayer = qobject_cast<PointLayer*>(active);
     const bool isPointLayer = (pointLayer != nullptr);
     PointLayer *editingLayer = viewer->editingPointLayer();
-    ui->actionEditPoints->setEnabled(isPointLayer || viewer->pointEditEnabled());
+    const bool canEditActivePointLayer =
+        pointLayer && !pointLayer->usesAggregateRendering();
+    ui->actionEditPoints->setEnabled(
+        canEditActivePointLayer || viewer->pointEditEnabled());
     ui->actionEditPoints->setChecked(viewer->pointEditEnabled());
     ui->actionCancelEdit->setEnabled(editingLayer && editingLayer->editMode());
     updateMaskEditControls(viewer);
@@ -6806,9 +6871,7 @@ void MainWindow::closeCurrentProject()
     m_projectFileMarks.clear();
     m_projectExplorerGroupExpansion.clear();
     m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
-    m_projectFileSystemModel->setProjectRoot(QString());
-    ui->projectTree->setRootIndex(projectProxyIndex(
-        m_projectFileSystemModel->setRootPath(QString())));
+    resetProjectExplorerToFileSystemRoot();
     updateProjectHeader();
     setWindowTitle("rcaiman-projects");
     updateProjectActions();
@@ -6998,11 +7061,16 @@ void MainWindow::clearProjectFileMarks()
     saveProjectFileMarks();
     if (m_projectFileSystemModel)
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
-    if (m_projectSortProxy)
+    const bool filteringStarred =
+        m_starredOnlyCheck && m_starredOnlyCheck->isChecked();
+    if (filteringStarred && m_projectSortProxy) {
         static_cast<ProjectExplorerSortProxyModel*>(
             m_projectSortProxy)->invalidate();
-    refreshProjectExplorerRootIndex();
-    expandProjectExplorerGroups();
+        refreshProjectExplorerRootIndex();
+        expandProjectExplorerGroups();
+    } else if (ui->projectTree && ui->projectTree->viewport()) {
+        ui->projectTree->viewport()->update();
+    }
     updateProjectExplorerStarredEmptyMessage();
     updateProjectActions();
     statusBar()->showMessage("Removed all stars", 3000);
@@ -7057,13 +7125,17 @@ void MainWindow::toggleProjectFileMark(const QString &path)
 
     saveProjectFileMarks();
     if (m_projectFileSystemModel) {
+        const bool filteringStarred =
+            m_starredOnlyCheck && m_starredOnlyCheck->isChecked();
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
-        m_projectFileSystemModel->refreshDirectory(info.absoluteFilePath());
-        if (m_projectSortProxy)
+        if (filteringStarred && m_projectSortProxy) {
             static_cast<ProjectExplorerSortProxyModel*>(
                 m_projectSortProxy)->invalidate();
-        refreshProjectExplorerRootIndex();
-        expandProjectExplorerGroups();
+            refreshProjectExplorerRootIndex();
+            expandProjectExplorerGroups();
+        } else if (ui->projectTree && ui->projectTree->viewport()) {
+            ui->projectTree->viewport()->update();
+        }
         updateProjectExplorerStarredEmptyMessage();
     }
     updateProjectActions();
@@ -7413,11 +7485,7 @@ void MainWindow::updateProjectExplorer()
     if (!m_project.isValid()) {
         m_projectFileMarks.clear();
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
-        if (auto *proxy =
-                static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy)) {
-            proxy->setProjectRootPath(QString());
-        }
-        ui->projectTree->setRootIndex(QModelIndex());
+        resetProjectExplorerToFileSystemRoot();
         updateProjectExplorerStarredEmptyMessage();
         return;
     }
@@ -7429,6 +7497,23 @@ void MainWindow::updateProjectExplorer()
     refreshProjectExplorerRootIndex();
     ui->projectTree->setColumnWidth(0, 220);
     updateProjectExplorerStarredEmptyMessage();
+}
+
+void MainWindow::resetProjectExplorerToFileSystemRoot()
+{
+    if (!ui->projectTree || !m_projectFileSystemModel || !m_projectSortProxy)
+        return;
+
+    auto *proxy =
+        static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy);
+    proxy->setProjectRootPath(QString());
+    m_projectFileSystemModel->setProjectRoot(QString());
+
+    const QModelIndex sourceRoot =
+        m_projectFileSystemModel->setRootPath(QString());
+    const QModelIndex proxyRoot = projectProxyIndex(sourceRoot);
+    ui->projectTree->setRootIndex(
+        proxyRoot.isValid() ? proxyRoot : QModelIndex());
 }
 
 void MainWindow::updateProjectHeader()

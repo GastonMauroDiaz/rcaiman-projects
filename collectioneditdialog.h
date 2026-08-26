@@ -61,6 +61,10 @@ private:
     void populateRelatedCombo();
     void setComboToReference(QComboBox *combo,
                              const QString &reference);
+    bool hasParentField() const;
+    bool hasRelatedField() const;
+    bool hasRegistryField() const;
+    bool requiresParent() const;
     QStringList compatibleClasses(bool asParent) const;
     QString collectionLabel(const Collection &collection) const;
     bool hasCompatibleCollection(const QStringList &classes) const;

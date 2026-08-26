@@ -96,6 +96,11 @@ bool Layer::supportsReloadFromDisk() const
     return false;
 }
 
+bool Layer::lastBuildCanceled() const
+{
+    return false;
+}
+
 bool Layer::reloadFromDisk(QString *errorMessage)
 {
     if (errorMessage)

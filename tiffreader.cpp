@@ -54,6 +54,41 @@ static RasterData::DataType mapDataType(int bitsPerSample, int sampleFormat)
     return RasterData::DataType::Invalid;
 }
 
+TiffImageInfo TiffReader::imageInfo(const QString &fileName,
+                                    QString *errorMessage)
+{
+    TiffImageInfo result;
+    const QByteArray path = QFileInfo(fileName).absoluteFilePath().toUtf8();
+
+    TIFF *tif = TIFFOpen(path.constData(), "r");
+    if (!tif) {
+        if (errorMessage) {
+            *errorMessage =
+                QStringLiteral("Cannot open TIFF file: %1").arg(fileName);
+        }
+        return result;
+    }
+
+    uint32_t w = 0;
+    uint32_t h = 0;
+    uint16_t samplesPerPixel = 1;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+    TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesPerPixel);
+    TIFFClose(tif);
+
+    if (w == 0 || h == 0) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Invalid TIFF dimensions.");
+        return {};
+    }
+
+    result.width = static_cast<int>(w);
+    result.height = static_cast<int>(h);
+    result.bands = static_cast<int>(samplesPerPixel);
+    return result;
+}
+
 static void readGdalBandDescriptions(TIFF *tif, RasterData *data)
 {
     if (!tif || !data)

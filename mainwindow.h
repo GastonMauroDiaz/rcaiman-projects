@@ -183,6 +183,7 @@ private:
     void setHistogramLayer(Layer *layer);
     void createViewerEmptyState();
     void updateViewerEmptyState();
+    void resetProjectExplorerToFileSystemRoot();
     void refreshProjectExplorerRootIndex();
     void expandProjectExplorerGroups();
     void rememberProjectExplorerGroupExpansion(

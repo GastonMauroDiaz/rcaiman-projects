@@ -32,6 +32,7 @@ constexpr int ProjectFileMarkedRole = Qt::UserRole + 100;
 constexpr int ProjectFileDirectlyMarkedRole = Qt::UserRole + 101;
 constexpr int ProjectExplorerGroupRole = Qt::UserRole + 102;
 constexpr int ProjectExplorerGroupIdRole = Qt::UserRole + 103;
+constexpr int ProjectFileImageDimensionsRole = Qt::UserRole + 104;
 
 class ProjectFileSystemModel : public QFileSystemModel
 {
@@ -51,8 +52,16 @@ public:
     QString collectionClassForDirectory(const QString &directoryPath) const;
 
 private:
+    struct ImageDimensionsCacheEntry {
+        qint64 fileSize = -1;
+        qint64 lastModified = -1;
+        QString text;
+    };
+
     bool isDirectProjectChild(const QFileInfo &info) const;
     QString projectRelativePath(const QFileInfo &info) const;
+    bool isTiffFile(const QFileInfo &info) const;
+    QString imageDimensions(const QFileInfo &info) const;
     QString collectionClass(const QString &directoryPath) const;
     QString collectionAlias(const QString &directoryPath) const;
     QString cachePath(const QString &path) const;
@@ -72,6 +81,7 @@ private:
     mutable QHash<QString, QString> m_collectionAliasCache;
     mutable QHash<QString, int> m_directFileCountCache;
     mutable QHash<QString, int> m_relevantFileCountCache;
+    mutable QHash<QString, ImageDimensionsCacheEntry> m_imageDimensionsCache;
 };
 
 #endif // PROJECTFILESYSTEMMODEL_H

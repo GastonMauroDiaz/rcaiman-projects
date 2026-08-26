@@ -303,6 +303,20 @@ void ImageViewer::setPointEditEnabled(bool enabled)
 
         if (!m_editingPointLayer)
             enabled = false;
+
+        if (enabled && m_editingPointLayer
+            && m_editingPointLayer->usesAggregateRendering()) {
+            QMessageBox::information(
+                this,
+                "Edit Points",
+                QStringLiteral(
+                    "This point layer has %1 points and is displayed in a "
+                    "fast preview mode.\n\n"
+                    "Interactive point editing is disabled for dense point "
+                    "layers to keep pan and zoom responsive.")
+                    .arg(m_editingPointLayer->collection().recordCount()));
+            enabled = false;
+        }
     }
 
     m_pointEditEnabled = enabled;
@@ -1005,11 +1019,17 @@ void ImageViewer::mouseReleaseEvent(QMouseEvent *event)
 
 PointLayer *ImageViewer::boxSelectionPointLayer() const
 {
-    if (m_pointEditEnabled && m_editingPointLayer)
+    if (m_pointEditEnabled && m_editingPointLayer) {
+        if (m_editingPointLayer->usesAggregateRendering())
+            return nullptr;
         return m_editingPointLayer;
+    }
 
     Layer *active = m_layerManager ? m_layerManager->activeLayer() : nullptr;
-    return qobject_cast<PointLayer*>(active);
+    auto *pointLayer = qobject_cast<PointLayer*>(active);
+    if (pointLayer && pointLayer->usesAggregateRendering())
+        return nullptr;
+    return pointLayer;
 }
 
 void ImageViewer::beginPointBoxSelection(const QPoint &pos)

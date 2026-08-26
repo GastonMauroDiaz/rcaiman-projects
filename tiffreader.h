@@ -25,9 +25,20 @@
 #include "rasterdata.h"
 #include <QString>
 
+struct TiffImageInfo
+{
+    int width = 0;
+    int height = 0;
+    int bands = 0;
+
+    bool isValid() const { return width > 0 && height > 0; }
+};
+
 class TiffReader
 {
 public:
+    static TiffImageInfo imageInfo(const QString &fileName,
+                                   QString *errorMessage = nullptr);
     static RasterData load(const QString &fileName, QString *errorMessage = nullptr);
 };
 

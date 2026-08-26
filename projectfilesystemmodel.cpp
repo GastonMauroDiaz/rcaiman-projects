@@ -21,8 +21,10 @@
 
 #include "projectfilesystemmodel.h"
 #include "project.h"
+#include "tiffreader.h"
 
 #include <QBrush>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -125,6 +127,8 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
         return isMarkedOrInherited(info);
     if (role == ProjectFileDirectlyMarkedRole)
         return m_fileMarks.contains(projectRelativePath(info));
+    if (role == ProjectFileImageDimensionsRole)
+        return imageDimensions(info);
 
     if (!info.isDir())
         return QFileSystemModel::data(index, role);
@@ -242,6 +246,7 @@ void ProjectFileSystemModel::refreshDirectory(const QString &path)
         emit dataChanged(directoryIndex, directoryIndex,
                          {Qt::DisplayRole, ProjectFileMarkedRole,
                           ProjectFileDirectlyMarkedRole,
+                          ProjectFileImageDimensionsRole,
                           Qt::ForegroundRole, Qt::ToolTipRole});
 }
 
@@ -270,6 +275,47 @@ QString ProjectFileSystemModel::projectRelativePath(
     if (relative == "." || relative.startsWith("../"))
         return {};
     return QDir::fromNativeSeparators(relative);
+}
+
+bool ProjectFileSystemModel::isTiffFile(const QFileInfo &info) const
+{
+    if (!info.isFile())
+        return false;
+
+    const QString suffix = info.suffix();
+    return suffix.compare("tif", Qt::CaseInsensitive) == 0
+        || suffix.compare("tiff", Qt::CaseInsensitive) == 0;
+}
+
+QString ProjectFileSystemModel::imageDimensions(
+    const QFileInfo &info) const
+{
+    if (!isTiffFile(info))
+        return {};
+
+    const QString key = cachePath(info);
+    const qint64 fileSize = info.size();
+    const qint64 lastModified = info.lastModified().toMSecsSinceEpoch();
+    const auto cached = m_imageDimensionsCache.constFind(key);
+    if (cached != m_imageDimensionsCache.constEnd()
+        && cached->fileSize == fileSize
+        && cached->lastModified == lastModified) {
+        return cached->text;
+    }
+
+    QString text;
+    const TiffImageInfo tiffInfo =
+        TiffReader::imageInfo(info.absoluteFilePath());
+    if (tiffInfo.isValid()) {
+        text = QStringLiteral("%1 x %2")
+            .arg(tiffInfo.width)
+            .arg(tiffInfo.height);
+    }
+
+    m_imageDimensionsCache.insert(
+        key,
+        ImageDimensionsCacheEntry{fileSize, lastModified, text});
+    return text;
 }
 
 QString ProjectFileSystemModel::collectionClass(
@@ -351,6 +397,7 @@ void ProjectFileSystemModel::clearDirectoryCache(const QString &path) const
     m_collectionClassCache.remove(key);
     m_collectionAliasCache.remove(key);
     m_directFileCountCache.remove(key);
+    m_imageDimensionsCache.remove(key);
 
     const QString prefix = key + QLatin1Char('|');
     const QStringList relevantKeys = m_relevantFileCountCache.keys();
@@ -366,6 +413,7 @@ void ProjectFileSystemModel::clearAllDirectoryCaches() const
     m_collectionAliasCache.clear();
     m_directFileCountCache.clear();
     m_relevantFileCountCache.clear();
+    m_imageDimensionsCache.clear();
 }
 
 QString ProjectFileSystemModel::appendAlias(

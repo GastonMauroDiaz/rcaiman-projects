@@ -542,6 +542,13 @@ bool Project::updateCollectionMetadata(const QString &projectRootPath,
     QTextStream outputStream(&output);
     for (const QString &line : std::as_const(outputLines))
         outputStream << line << "\n";
+    outputStream.flush();
+    if (outputStream.status() != QTextStream::Ok) {
+        output.cancelWriting();
+        if (errorMessage)
+            *errorMessage = "Could not write collection.yaml.";
+        return false;
+    }
     if (!output.commit()) {
         if (errorMessage)
             *errorMessage = "Could not commit collection.yaml.";
