@@ -56,6 +56,7 @@ public:
     void setEditMode(bool enabled);
     bool editMode() const { return m_editMode; }
     bool usesAggregateRendering() const;
+    int fastPreviewLimit() const { return m_fastPreviewLimit; }
     void setActive(bool active) override;
 
     void cancelEdit();
@@ -101,6 +102,8 @@ private:
     QGraphicsScene *m_scene = nullptr;
     bool m_editMode = false;
     bool m_lastBuildCanceled = false;
+    bool m_aggregateRendering = false;
+    int m_fastPreviewLimit = 0;
     QString m_backupPath;
     QSet<int> m_selectedPointIndices;
     int m_primarySelectedPointIndex = -1;

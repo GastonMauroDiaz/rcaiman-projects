@@ -401,8 +401,9 @@ void LayersDock::updateList()
 
     for (int i = 0; i < m_manager->layerCount(); ++i) {
         Layer *layer = m_manager->layerAt(i);
-        auto *item = new QListWidgetItem(layer->name());
+        auto *item = new QListWidgetItem(layerDisplayName(layer));
         item->setIcon(pointLayerIcon(layer));
+        item->setToolTip(layerToolTip(layer));
         item->setFlags(
             item->flags()
             | Qt::ItemIsUserCheckable
@@ -415,6 +416,11 @@ void LayersDock::updateList()
         if (qobject_cast<PointLayer*>(layer)) {
             connect(layer, &Layer::styleChanged,
                     this, &LayersDock::onLayerStyleChanged,
+                    Qt::UniqueConnection);
+            connect(qobject_cast<PointLayer*>(layer),
+                    &PointLayer::collectionChanged,
+                    this,
+                    &LayersDock::onLayerStyleChanged,
                     Qt::UniqueConnection);
         }
         connect(layer, &Layer::visibilityChanged,
@@ -448,8 +454,7 @@ void LayersDock::onLayerStyleChanged()
     if (index < 0)
         return;
 
-    if (QListWidgetItem *item = m_listWidget->item(index))
-        item->setIcon(pointLayerIcon(layer));
+    updateLayerListItem(index);
 }
 
 void LayersDock::onLayerVisibilityChanged(bool visible)
@@ -554,6 +559,55 @@ void LayersDock::onLayerContextMenuRequested(const QPoint &position)
         }
 #endif
     }
+}
+
+QString LayersDock::layerDisplayName(const Layer *layer) const
+{
+    if (!layer)
+        return {};
+
+    QString name = layer->name();
+    const auto *pointLayer = qobject_cast<const PointLayer*>(layer);
+    if (pointLayer && pointLayer->usesAggregateRendering())
+        name += QStringLiteral(" (fast preview)");
+    return name;
+}
+
+QString LayersDock::layerToolTip(const Layer *layer) const
+{
+    if (!layer)
+        return {};
+
+    const auto *pointLayer = qobject_cast<const PointLayer*>(layer);
+    if (pointLayer && pointLayer->usesAggregateRendering()) {
+        return QStringLiteral(
+            "Dense point layer shown as a fast preview.\n"
+            "The CSV still contains all points.\n"
+            "Interactive point editing and box selection are disabled "
+            "to keep pan and zoom responsive.\n"
+            "Fast preview limit used: %1 points.\n\n"
+            "%2").arg(pointLayer->fastPreviewLimit())
+                 .arg(layer->sourcePath());
+    }
+
+    return layer->sourcePath();
+}
+
+void LayersDock::updateLayerListItem(int index)
+{
+    if (!m_manager || !m_listWidget || index < 0
+        || index >= m_manager->layerCount()) {
+        return;
+    }
+
+    Layer *layer = m_manager->layerAt(index);
+    QListWidgetItem *item = m_listWidget->item(index);
+    if (!layer || !item)
+        return;
+
+    item->setText(layerDisplayName(layer));
+    item->setIcon(pointLayerIcon(layer));
+    item->setToolTip(layerToolTip(layer));
 }
 
 QIcon LayersDock::pointLayerIcon(const Layer *layer) const

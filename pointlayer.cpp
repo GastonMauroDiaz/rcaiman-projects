@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "pointlayer.h"
+#include "apppreferences.h"
 #include "pointitem.h"
 
 #include <QApplication>
@@ -46,7 +47,6 @@
 namespace {
 constexpr int PointBuildProgressThreshold = 20000;
 constexpr int PointBuildProgressStep = 1000;
-constexpr int PointAggregateRenderThreshold = 20000;
 constexpr int PointAggregateDrawBudget = 50000;
 constexpr double PointAggregateBoundsMargin = 1024.0;
 
@@ -234,7 +234,7 @@ bool PointLayer::lastBuildCanceled() const
 
 bool PointLayer::usesAggregateRendering() const
 {
-    return shouldUseAggregateRendering();
+    return m_aggregateRendering;
 }
 
 bool PointLayer::supportsReloadFromDisk() const
@@ -305,6 +305,7 @@ bool PointLayer::rebuildItems(QGraphicsScene *scene, bool allowCancel)
     m_lastBuildCanceled = false;
 
     if (shouldUseAggregateRendering()) {
+        const int fastPreviewLimit = AppPreferences::pointFastPreviewLimit();
         QVector<QGraphicsItem*> newItems;
         auto *aggregateItem = new PointAggregateItem(this);
         aggregateItem->setZValue(zOrder());
@@ -315,8 +316,11 @@ bool PointLayer::rebuildItems(QGraphicsScene *scene, bool allowCancel)
 
         clearPointItems();
         m_items = newItems;
+        m_aggregateRendering = true;
+        m_fastPreviewLimit = fastPreviewLimit;
         qDebug() << "PointLayer: using aggregate renderer for"
-                 << m_collection.recordCount() << "points";
+                 << m_collection.recordCount() << "points, limit"
+                 << m_fastPreviewLimit;
         return true;
     }
 
@@ -390,6 +394,8 @@ bool PointLayer::rebuildItems(QGraphicsScene *scene, bool allowCancel)
 
     clearPointItems();
     m_items = newItems;
+    m_aggregateRendering = false;
+    m_fastPreviewLimit = AppPreferences::pointFastPreviewLimit();
     applyStyleToItems();
     for (QGraphicsItem *item : std::as_const(m_items)) {
         item->setZValue(zOrder());
@@ -549,7 +555,8 @@ void PointLayer::clearPointItems()
 bool PointLayer::shouldUseAggregateRendering() const
 {
     return !m_editMode
-        && m_collection.recordCount() >= PointAggregateRenderThreshold;
+        && m_collection.recordCount()
+            >= AppPreferences::pointFastPreviewLimit();
 }
 
 void PointLayer::setEditMode(bool enabled)
@@ -557,7 +564,7 @@ void PointLayer::setEditMode(bool enabled)
     if (m_editMode == enabled)
         return;
 
-    if (enabled && shouldUseAggregateRendering()) {
+    if (enabled && usesAggregateRendering()) {
         QMessageBox::information(
             nullptr,
             "Edit Points",
@@ -565,8 +572,12 @@ void PointLayer::setEditMode(bool enabled)
                 "This point layer has %1 points and is displayed in a "
                 "fast preview mode.\n\n"
                 "Interactive point editing is disabled for dense point "
-                "layers to keep pan and zoom responsive.")
-                .arg(m_collection.recordCount()));
+                "layers to keep pan and zoom responsive.\n\n"
+                "Current fast preview limit: %2 points.")
+                .arg(m_collection.recordCount())
+                .arg(m_fastPreviewLimit > 0
+                         ? m_fastPreviewLimit
+                         : AppPreferences::pointFastPreviewLimit()));
         return;
     }
 

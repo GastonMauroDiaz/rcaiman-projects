@@ -26,6 +26,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
 
@@ -34,6 +35,11 @@ PointLayerPropertiesWidget::PointLayerPropertiesWidget(QWidget *parent)
 {
     auto *layout = new QFormLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+
+    m_fastPreviewLabel = new QLabel(this);
+    m_fastPreviewLabel->setWordWrap(true);
+    m_fastPreviewLabel->setStyleSheet("color: #6b7280;");
+    layout->addRow(m_fastPreviewLabel);
 
     m_colorButton = new QPushButton(this);
     m_colorButton->setMinimumWidth(64);
@@ -114,6 +120,21 @@ void PointLayerPropertiesWidget::updateFromLayer()
     m_updating = true;
     const bool hasLayer = (m_layer != nullptr);
     setEnabled(hasLayer);
+
+    if (m_fastPreviewLabel) {
+        const bool fastPreview =
+            hasLayer && m_layer->usesAggregateRendering();
+        m_fastPreviewLabel->setVisible(fastPreview);
+        if (fastPreview) {
+            m_fastPreviewLabel->setText(
+                QStringLiteral(
+                    "Fast preview mode: the CSV is complete, but dense "
+                    "points are drawn as a lightweight preview. Interactive "
+                    "editing and box selection are disabled to keep pan and "
+                    "zoom responsive. Limit used: %1 points.")
+                    .arg(m_layer->fastPreviewLimit()));
+        }
+    }
 
     if (hasLayer) {
         const PointLayerStyle style = m_layer->style();

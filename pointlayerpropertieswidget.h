@@ -28,6 +28,7 @@
 class PointLayer;
 class QComboBox;
 class QDoubleSpinBox;
+class QLabel;
 class QPushButton;
 
 class PointLayerPropertiesWidget : public QWidget
@@ -46,6 +47,7 @@ private:
     void updateLabelFields();
 
     QPointer<PointLayer> m_layer;
+    QLabel *m_fastPreviewLabel = nullptr;
     QPushButton *m_colorButton = nullptr;
     QDoubleSpinBox *m_sizeSpin = nullptr;
     QComboBox *m_symbolCombo = nullptr;

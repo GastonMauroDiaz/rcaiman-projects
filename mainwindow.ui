@@ -61,6 +61,9 @@
     <addaction name="actionCreatePoints"/>
     <addaction name="actionCreatePointGrid"/>
     <addaction name="actionSelectPointsByMask"/>
+    <addaction name="separator"/>
+    <addaction name="actionPointFastPreviewLimit"/>
+    <addaction name="separator"/>
     <addaction name="actionEditPoints"/>
     <addaction name="actionCancelEdit"/>
    </widget>
@@ -413,6 +416,11 @@ Hold Z for temporary zoom from any interaction mode.</string>
   <action name="actionSelectPointsByMask">
    <property name="text">
     <string>Select by mask...</string>
+   </property>
+  </action>
+  <action name="actionPointFastPreviewLimit">
+   <property name="text">
+    <string>Fast preview limit...</string>
    </property>
   </action>
   <action name="actionCreateMask">

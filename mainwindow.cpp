@@ -21,6 +21,7 @@
 
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include "apppreferences.h"
 #include "imageviewer.h"
 #include "layersdock.h"
 #include "layermanager.h"
@@ -3353,6 +3354,10 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::selectPointsByMask);
+    connect(ui->actionPointFastPreviewLimit,
+            &QAction::triggered,
+            this,
+            &MainWindow::configurePointFastPreviewLimit);
 
     connect(ui->actionCreateMask,
             &QAction::triggered,
@@ -9002,6 +9007,66 @@ void MainWindow::selectPointsByMask()
             .arg(selectedIndices.size())
             .arg(selectedIndices.size() == 1 ? "" : "s")
             .arg(QFileInfo(candidate.path).fileName()),
+        4000);
+}
+
+void MainWindow::configurePointFastPreviewLimit()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle("Fast preview limit");
+    dialog.setMinimumWidth(520);
+
+    auto *layout = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        "Point layers with this many points or more are shown as a fast preview. "
+        "The CSV remains complete, but interactive point editing and box "
+        "selection are disabled to keep pan and zoom responsive.",
+        &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *form = new QFormLayout();
+    auto *limitSpin = new QSpinBox(&dialog);
+    limitSpin->setRange(AppPreferences::minimumPointFastPreviewLimit(),
+                        AppPreferences::maximumPointFastPreviewLimit());
+    limitSpin->setSingleStep(1000);
+    limitSpin->setValue(AppPreferences::pointFastPreviewLimit());
+    limitSpin->setSuffix(" points");
+    form->addRow("Fast preview from:", limitSpin);
+    layout->addLayout(form);
+
+    auto *note = new QLabel(
+        "This is a local application preference, not project metadata. "
+        "It applies when point layers are opened or reloaded.",
+        &dialog);
+    note->setWordWrap(true);
+    note->setStyleSheet("color: #6b7280;");
+    layout->addWidget(note);
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    auto *resetButton = buttons->addButton(
+        "Reset recommended",
+        QDialogButtonBox::ResetRole);
+    layout->addWidget(buttons);
+
+    connect(resetButton, &QPushButton::clicked, &dialog, [limitSpin]() {
+        limitSpin->setValue(AppPreferences::defaultPointFastPreviewLimit());
+    });
+    connect(buttons, &QDialogButtonBox::accepted,
+            &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected,
+            &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    AppPreferences::setPointFastPreviewLimit(limitSpin->value());
+    statusBar()->showMessage(
+        QStringLiteral("Point fast preview limit set to %1 points")
+            .arg(AppPreferences::pointFastPreviewLimit()),
         4000);
 }
 

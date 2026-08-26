@@ -49,6 +49,7 @@ set(CMAKE_AUTORCC ON)
 qt_add_executable(rcaiman_projects
     WIN32 MACOSX_BUNDLE
     main.cpp
+    apppreferences.h apppreferences.cpp
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui

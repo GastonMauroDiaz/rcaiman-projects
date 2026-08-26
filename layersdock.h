@@ -78,6 +78,9 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
+    QString layerDisplayName(const Layer *layer) const;
+    QString layerToolTip(const Layer *layer) const;
+    void updateLayerListItem(int index);
     QIcon pointLayerIcon(const Layer *layer) const;
     QVector<int> selectedLayerRows() const;
 

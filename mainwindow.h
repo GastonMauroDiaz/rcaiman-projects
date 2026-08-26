@@ -118,6 +118,7 @@ private slots:
     void createPointsCsv();
     void createPointGrid();
     void selectPointsByMask();
+    void configurePointFastPreviewLimit();
     void createMaskTiff();
     void buildMetadataRules();
     void validateImageMetadata();

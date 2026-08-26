@@ -313,8 +313,10 @@ void ImageViewer::setPointEditEnabled(bool enabled)
                     "This point layer has %1 points and is displayed in a "
                     "fast preview mode.\n\n"
                     "Interactive point editing is disabled for dense point "
-                    "layers to keep pan and zoom responsive.")
-                    .arg(m_editingPointLayer->collection().recordCount()));
+                    "layers to keep pan and zoom responsive.\n\n"
+                    "Current fast preview limit: %2 points.")
+                    .arg(m_editingPointLayer->collection().recordCount())
+                    .arg(m_editingPointLayer->fastPreviewLimit()));
             enabled = false;
         }
     }
