@@ -24,6 +24,7 @@
 #include "rasterdata.h"
 #include "rasterrenderer.h"
 
+#include <QApplication>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QStringList>
@@ -173,9 +174,9 @@ void HistogramWidget::setLayer(ImageLayer *layer)
 void HistogramWidget::rebuild()
 {
     m_series.clear();
-    m_computing = false;
 
     if (!m_layer || m_layer->rasterData().isNull()) {
+        setComputing(false);
         update();
         return;
     }
@@ -183,12 +184,14 @@ void HistogramWidget::rebuild()
     const CacheKey key = currentCacheKey();
     if (loadFromCache(key)) {
         updateRenderRanges();
+        setComputing(false);
         update();
         return;
     }
 
-    m_computing = true;
+    setComputing(true);
     update();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     if (m_rebuildQueued)
         return;
 
@@ -204,7 +207,7 @@ void HistogramWidget::rebuildNow()
 
     if (!m_layer || m_layer->rasterData().isNull()) {
         m_series.clear();
-        m_computing = false;
+        setComputing(false);
         update();
         return;
     }
@@ -212,7 +215,7 @@ void HistogramWidget::rebuildNow()
     const CacheKey key = currentCacheKey();
     if (loadFromCache(key)) {
         updateRenderRanges();
-        m_computing = false;
+        setComputing(false);
         update();
         return;
     }
@@ -240,7 +243,7 @@ void HistogramWidget::rebuildNow()
     m_series = series;
     m_displayMin = displayMin;
     m_displayMax = displayMax;
-    m_computing = false;
+    setComputing(false);
     update();
 }
 
@@ -384,6 +387,20 @@ void HistogramWidget::trimCache()
     constexpr int MaximumCacheEntries = 16;
     while (m_cache.size() > MaximumCacheEntries)
         m_cache.removeFirst();
+}
+
+void HistogramWidget::setComputing(bool computing)
+{
+    if (m_computing == computing)
+        return;
+
+    m_computing = computing;
+    if (m_computing) {
+        emit computationStarted(QStringLiteral(
+            "Computing histogram from sampled image values..."));
+    } else {
+        emit computationFinished(QStringLiteral("Histogram ready"));
+    }
 }
 
 void HistogramWidget::updateRenderRanges()
@@ -678,6 +695,10 @@ HistogramDock::HistogramDock(QWidget *parent)
 {
     setObjectName(QStringLiteral("dockHistogram"));
     m_widget = new HistogramWidget(this);
+    connect(m_widget, &HistogramWidget::computationStarted,
+            this, &HistogramDock::computationStarted);
+    connect(m_widget, &HistogramWidget::computationFinished,
+            this, &HistogramDock::computationFinished);
     setWidget(m_widget);
 }
 

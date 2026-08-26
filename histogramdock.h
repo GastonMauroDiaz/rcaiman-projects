@@ -42,6 +42,10 @@ public:
 
     void setLayer(ImageLayer *layer);
 
+signals:
+    void computationStarted(const QString &message);
+    void computationFinished(const QString &message);
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -102,6 +106,7 @@ private:
                       double displayMin,
                       double displayMax);
     void trimCache();
+    void setComputing(bool computing);
     void updateRenderRanges();
     QString summaryText() const;
     QRect plotRectForSummary(const QString &summary) const;
@@ -129,6 +134,10 @@ public:
     explicit HistogramDock(QWidget *parent = nullptr);
 
     void setLayer(ImageLayer *layer);
+
+signals:
+    void computationStarted(const QString &message);
+    void computationFinished(const QString &message);
 
 private:
     HistogramWidget *m_widget = nullptr;

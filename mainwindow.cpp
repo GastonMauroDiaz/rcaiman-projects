@@ -107,7 +107,6 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSizePolicy>
-#include <QSettings>
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -3099,21 +3098,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectSortCombo->setMinimumWidth(
         m_projectSortCombo->fontMetrics().horizontalAdvance(
             QStringLiteral("Order files by name")) + 22);
-    QSettings explorerSettings;
     const int savedSortMode =
-        explorerSettings.value("projectExplorer/sortMode",
-                               static_cast<int>(ProjectExplorerSortMode::Name)).toInt();
-    const bool savedStarredOnly =
-        explorerSettings.value("projectExplorer/starredOnly", false).toBool();
+        AppPreferences::projectExplorerSortMode(
+            static_cast<int>(ProjectExplorerSortMode::Name));
     const int savedSortIndex = m_projectSortCombo->findData(savedSortMode);
     if (savedSortIndex >= 0)
         m_projectSortCombo->setCurrentIndex(savedSortIndex);
-    m_starredOnlyCheck->setChecked(savedStarredOnly);
     auto *projectSortProxy =
         static_cast<ProjectExplorerSortProxyModel*>(m_projectSortProxy);
     projectSortProxy->setSortMode(static_cast<ProjectExplorerSortMode>(
         m_projectSortCombo->currentData().toInt()));
-    projectSortProxy->setStarredOnly(savedStarredOnly);
+    projectSortProxy->setStarredOnly(false);
     m_projectSortProxy->sort(0, Qt::AscendingOrder);
 
     auto *projectExplorerToolbar = new QWidget(this);
@@ -3187,8 +3182,7 @@ MainWindow::MainWindow(QWidget *parent)
                 proxy->setStarredOnly(checked);
                 refreshProjectExplorerRootIndex();
                 updateProjectExplorerStarredEmptyMessage();
-                QSettings settings;
-                settings.setValue("projectExplorer/starredOnly", checked);
+                saveProjectExplorerState();
                 if (checked && m_projectFileMarks.isEmpty()) {
                     statusBar()->showMessage(
                         "No starred files or folders",
@@ -3202,9 +3196,8 @@ MainWindow::MainWindow(QWidget *parent)
                 proxy->setSortMode(static_cast<ProjectExplorerSortMode>(
                     m_projectSortCombo->currentData().toInt()));
                 m_projectSortProxy->sort(0, Qt::AscendingOrder);
-                QSettings settings;
-                settings.setValue("projectExplorer/sortMode",
-                                  m_projectSortCombo->currentData().toInt());
+                AppPreferences::setProjectExplorerSortMode(
+                    m_projectSortCombo->currentData().toInt());
             });
 
     connect(m_projectFileSystemModel, &QAbstractItemModel::rowsInserted,
@@ -3249,8 +3242,7 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
     // Load recent projects
-    QSettings recentSettings;
-    m_recentProjects = recentSettings.value("recentProjects").toStringList();
+    m_recentProjects = AppPreferences::recentProjects();
 
     connect(ui->actionNewProject,
             &QAction::triggered,
@@ -3607,6 +3599,14 @@ MainWindow::MainWindow(QWidget *parent)
     addDockWidget(Qt::RightDockWidgetArea, m_histogramDock);
     tabifyDockWidget(ui->dockProperties, m_histogramDock);
     m_histogramDock->raise();
+    connect(m_histogramDock, &HistogramDock::computationStarted,
+            this, [this](const QString &message) {
+                beginStatusProgress(message);
+            });
+    connect(m_histogramDock, &HistogramDock::computationFinished,
+            this, [this](const QString &message) {
+                endStatusProgress(message, 1500);
+            });
 
     configureDockSizing();
 
@@ -3940,8 +3940,7 @@ void MainWindow::addToRecentProjects(const QString &path)
     m_recentProjects.push_front(path);
     if (m_recentProjects.size() > 5)
         m_recentProjects.erase(m_recentProjects.end() - 1, m_recentProjects.end());
-    QSettings settings;
-    settings.setValue("recentProjects", m_recentProjects);
+    AppPreferences::setRecentProjects(m_recentProjects);
     updateRecentProjectsMenu();
 }
 
@@ -6259,7 +6258,8 @@ void MainWindow::openImageAtPath(const QString &filePath)
 
 bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
                                      const QString &filePath,
-                                     bool showWarning)
+                                     bool showWarning,
+                                     bool showProgress)
 {
     if (!viewer)
         return false;
@@ -6297,8 +6297,25 @@ bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
 
     CollectionStyleResolver styleResolver;
     int loadedImageCount = 0;
+    const bool progressEnabled = showProgress && !candidates.isEmpty();
+    if (progressEnabled) {
+        beginStatusProgress(
+            QStringLiteral("Opening TIFF: %1").arg(fi.fileName()),
+            candidates.size());
+    }
 
+    int candidateIndex = 0;
     for (const AutoloadCandidate &candidate : std::as_const(candidates)) {
+        ++candidateIndex;
+        if (progressEnabled) {
+            updateStatusProgress(
+                QStringLiteral("Loading layer %1/%2: %3")
+                    .arg(candidateIndex)
+                    .arg(candidates.size())
+                    .arg(QFileInfo(candidate.filePath).fileName()),
+                candidateIndex - 1);
+        }
+
         Layer *layer = nullptr;
         if (candidate.layerKind == AutoloadLayerKind::Image) {
             auto *imageLayer = new ImageLayer(candidate.filePath);
@@ -6329,9 +6346,18 @@ bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
                                    QFileInfo(candidate.filePath).fileName()));
         }
         viewer->layerManager()->addLayer(layer);
+
+        if (progressEnabled)
+            updateStatusProgress(
+                QStringLiteral("Loaded layer %1/%2")
+                    .arg(candidateIndex)
+                    .arg(candidates.size()),
+                candidateIndex);
     }
 
     if (loadedImageCount == 0) {
+        if (progressEnabled)
+            endStatusProgress(QStringLiteral("Could not load TIFF"), 3000);
         if (showWarning) {
             QMessageBox::warning(
                 this, "Open Image",
@@ -6344,6 +6370,13 @@ bool MainWindow::loadImageIntoViewer(ImageViewer *viewer,
     viewer->setPrimarySourcePath(absolutePath);
     qInfo() << "Autoload loaded" << viewer->layerManager()->layerCount()
             << "layer(s) for" << fi.completeBaseName();
+    if (progressEnabled) {
+        endStatusProgress(
+            QStringLiteral("Opened %1 layer%2")
+                .arg(viewer->layerManager()->layerCount())
+                .arg(viewer->layerManager()->layerCount() == 1 ? "" : "s"),
+            3000);
+    }
     return true;
 }
 
@@ -6781,6 +6814,7 @@ void MainWindow::loadProject(const Project &project)
     m_project = project;
     m_projectExplorerGroupExpansion.clear();
     loadProjectFileMarks();
+    loadProjectExplorerState();
     updateProjectExplorer();
     updateProjectActions();
     setWindowTitle(QString("%1 - rcaiman-projects").arg(m_project.name()));
@@ -6806,6 +6840,7 @@ void MainWindow::closeCurrentProject()
 
     saveProjectSession();
     saveProjectFileMarks();
+    saveProjectExplorerState();
 
     closeAttributeTables();
 
@@ -6875,6 +6910,13 @@ void MainWindow::closeCurrentProject()
     m_project = Project();
     m_projectFileMarks.clear();
     m_projectExplorerGroupExpansion.clear();
+    if (m_starredOnlyCheck) {
+        const QSignalBlocker blocker(m_starredOnlyCheck);
+        m_starredOnlyCheck->setChecked(false);
+    }
+    if (m_projectSortProxy)
+        static_cast<ProjectExplorerSortProxyModel*>(
+            m_projectSortProxy)->setStarredOnly(false);
     m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
     resetProjectExplorerToFileSystemRoot();
     updateProjectHeader();
@@ -6883,20 +6925,61 @@ void MainWindow::closeCurrentProject()
     updateViewerEmptyState();
 }
 
+void MainWindow::beginStatusProgress(const QString &message, int maximum)
+{
+    if (!m_statusProgressBar) {
+        m_statusProgressBar = new QProgressBar(statusBar());
+        m_statusProgressBar->setMinimumWidth(160);
+        m_statusProgressBar->setMaximumWidth(220);
+        statusBar()->addPermanentWidget(m_statusProgressBar);
+    }
+
+    m_statusProgressBar->setMinimum(0);
+    m_statusProgressBar->setMaximum(maximum > 0 ? maximum : 0);
+    m_statusProgressBar->setValue(0);
+    m_statusProgressBar->setTextVisible(maximum > 0);
+    if (maximum > 0)
+        m_statusProgressBar->setFormat(QStringLiteral("%v/%m"));
+    else
+        m_statusProgressBar->setFormat(QString());
+    statusBar()->showMessage(message, 0);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+void MainWindow::updateStatusProgress(const QString &message, int value)
+{
+    if (!m_statusProgressBar)
+        return;
+
+    if (value >= 0)
+        m_statusProgressBar->setValue(value);
+    if (!message.isEmpty())
+        statusBar()->showMessage(message, 0);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
+void MainWindow::endStatusProgress(const QString &message, int timeoutMs)
+{
+    if (!m_statusProgressBar)
+        return;
+
+    statusBar()->removeWidget(m_statusProgressBar);
+    m_statusProgressBar->deleteLater();
+    m_statusProgressBar = nullptr;
+    if (!message.isEmpty())
+        statusBar()->showMessage(message, timeoutMs);
+}
+
 void MainWindow::saveApplicationState()
 {
-    QSettings settings;
-    settings.setValue("mainWindow/geometry", saveGeometry());
-    settings.setValue("mainWindow/state", saveState(1));
+    AppPreferences::setMainWindowGeometry(saveGeometry());
+    AppPreferences::setMainWindowState(saveState(1));
 }
 
 void MainWindow::restoreApplicationState()
 {
-    QSettings settings;
-    const QByteArray geometry =
-        settings.value("mainWindow/geometry").toByteArray();
-    const QByteArray state =
-        settings.value("mainWindow/state").toByteArray();
+    const QByteArray geometry = AppPreferences::mainWindowGeometry();
+    const QByteArray state = AppPreferences::mainWindowState();
     if (!geometry.isEmpty())
         restoreGeometry(geometry);
     if (!state.isEmpty())
@@ -6922,8 +7005,7 @@ void MainWindow::resetWindowLayout()
         if (m_previewDock)
             m_previewDock->setVisible(m_project.isValid());
 
-        QSettings settings;
-        settings.setValue("mainWindow/state", m_defaultWindowState);
+        AppPreferences::setMainWindowState(m_defaultWindowState);
         statusBar()->showMessage("Window layout reset", 3000);
     });
 }
@@ -6949,6 +7031,14 @@ QString MainWindow::projectFileMarksPath() const
     if (!m_project.isValid())
         return {};
     return QDir(m_project.rootPath()).filePath(".rcaiman/file_marks.json");
+}
+
+QString MainWindow::projectExplorerStatePath() const
+{
+    if (!m_project.isValid())
+        return {};
+    return QDir(m_project.rootPath()).filePath(
+        ".rcaiman/project_explorer_state.json");
 }
 
 void MainWindow::loadProjectFileMarks()
@@ -7013,6 +7103,60 @@ void MainWindow::loadProjectFileMarks()
 
     if (m_projectFileSystemModel)
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
+}
+
+void MainWindow::loadProjectExplorerState()
+{
+    bool starredOnly = false;
+    if (m_project.isValid()) {
+        QFile file(projectExplorerStatePath());
+        if (file.open(QIODevice::ReadOnly)) {
+            QJsonParseError parseError;
+            const QJsonDocument document =
+                QJsonDocument::fromJson(file.readAll(), &parseError);
+            if (parseError.error == QJsonParseError::NoError
+                && document.isObject()) {
+                starredOnly =
+                    document.object().value("starred_only").toBool(false);
+            }
+        }
+    }
+
+    if (m_starredOnlyCheck) {
+        const QSignalBlocker blocker(m_starredOnlyCheck);
+        m_starredOnlyCheck->setChecked(starredOnly);
+    }
+    if (m_projectSortProxy)
+        static_cast<ProjectExplorerSortProxyModel*>(
+            m_projectSortProxy)->setStarredOnly(starredOnly);
+    updateProjectExplorerStarredEmptyMessage();
+}
+
+void MainWindow::saveProjectExplorerState() const
+{
+    if (!m_project.isValid() || !m_starredOnlyCheck)
+        return;
+
+    const QString statePath = projectExplorerStatePath();
+    if (!m_starredOnlyCheck->isChecked()) {
+        QFile::remove(statePath);
+        return;
+    }
+
+    const QString stateDirectory =
+        QDir(m_project.rootPath()).filePath(".rcaiman");
+    if (!QDir().mkpath(stateDirectory))
+        return;
+
+    QJsonObject root;
+    root["schema_version"] = 1;
+    root["starred_only"] = true;
+
+    QSaveFile file(statePath);
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    file.commit();
 }
 
 void MainWindow::saveProjectFileMarks() const
@@ -7371,7 +7515,7 @@ void MainWindow::restoreProjectSession()
             // Keep their previous behavior without involving autoload for
             // sessions that do contain explicit layers.
             if (savedLayers.isEmpty()
-                && loadImageIntoViewer(viewer, absolutePath, false)) {
+                && loadImageIntoViewer(viewer, absolutePath, false, false)) {
                 loadedImageCount = 1;
             }
 
@@ -7743,6 +7887,10 @@ void MainWindow::buildMetadataRules()
         return;
     }
 
+    beginStatusProgress(
+        QStringLiteral("Extracting metadata from %1 calibration image%2...")
+            .arg(files.size())
+            .arg(files.size() == 1 ? "" : "s"));
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QList<MetadataObservation> observations;
     const bool extracted =
@@ -7750,6 +7898,11 @@ void MainWindow::buildMetadataRules()
     const QString version = extracted
         ? ExifToolService::version(&errorMessage) : QString();
     QApplication::restoreOverrideCursor();
+    endStatusProgress(
+        extracted && !version.isEmpty()
+            ? QStringLiteral("Metadata extracted")
+            : QStringLiteral("Metadata extraction failed"),
+        3000);
     if (!extracted || version.isEmpty()) {
         QMessageBox::critical(this, "Metadata Extraction", errorMessage);
         return;
@@ -8135,9 +8288,14 @@ void MainWindow::updateMaskEditControls(ImageViewer *viewer)
 
 ImageLayer *MainWindow::createStyledImageLayer(const QString &path)
 {
+    const QFileInfo info(path);
+    beginStatusProgress(
+        QStringLiteral("Loading TIFF: %1").arg(info.fileName()));
+
     auto *layer = new ImageLayer(path);
     if (layer->rasterData().isNull()) {
         delete layer;
+        endStatusProgress(QStringLiteral("Could not load TIFF"), 3000);
         QMessageBox::warning(this, "Add TIFF", "Could not load TIFF.");
         return nullptr;
     }
@@ -8148,6 +8306,9 @@ ImageLayer *MainWindow::createStyledImageLayer(const QString &path)
         layer->setStyle(styleResolver.imageStyle(
             collection, layer->rasterData()));
     }
+    endStatusProgress(
+        QStringLiteral("Loaded TIFF: %1").arg(info.fileName()),
+        3000);
     return layer;
 }
 

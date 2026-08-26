@@ -29,7 +29,6 @@
 #include <QMap>
 #include <QMetaObject>
 #include <QPointer>
-#include <QSettings>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QHash>
@@ -58,6 +57,7 @@ class QFrame;
 class QLabel;
 class QModelIndex;
 class QPushButton;
+class QProgressBar;
 class QAbstractProxyModel;
 class QSlider;
 class QSpinBox;
@@ -130,9 +130,14 @@ private slots:
 private:
     void openImageAtPath(const QString &filePath);
     bool loadImageIntoViewer(ImageViewer *viewer, const QString &filePath,
-                             bool showWarning = true);
+                             bool showWarning = true,
+                             bool showProgress = true);
     void loadProject(const Project &project);
     void closeCurrentProject();
+    void beginStatusProgress(const QString &message, int maximum = 0);
+    void updateStatusProgress(const QString &message, int value = -1);
+    void endStatusProgress(const QString &message = QString(),
+                           int timeoutMs = 0);
     void saveApplicationState();
     void restoreApplicationState();
     void saveProjectSession();
@@ -140,8 +145,11 @@ private:
     QString projectRelativePath(const QString &absolutePath) const;
     QString projectAbsolutePath(const QString &relativePath) const;
     QString projectFileMarksPath() const;
+    QString projectExplorerStatePath() const;
     void loadProjectFileMarks();
     void saveProjectFileMarks() const;
+    void loadProjectExplorerState();
+    void saveProjectExplorerState() const;
     void clearProjectFileMarks();
     bool projectFileMarkHitTest(const QPoint &position,
                                 QModelIndex *rowIndex = nullptr) const;
@@ -226,6 +234,7 @@ private:
     QFrame *m_viewerQuickRule = nullptr;
     QLabel *m_viewerQuickTitle = nullptr;
     QLabel *m_viewerQuickBody = nullptr;
+    QProgressBar *m_statusProgressBar = nullptr;
     QStringList m_recentProjects;
     QPointer<PointLayer> m_currentPointLayer;
     QMetaObject::Connection m_pointLayerConnection;

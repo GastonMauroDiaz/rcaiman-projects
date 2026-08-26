@@ -1325,6 +1325,15 @@ ProjectCleanupPlan Project::buildCleanupPlan() const
                     QDir::fromNativeSeparators(
                         QDir(m_rootPath).relativeFilePath(marksPath)));
             }
+            const QString projectExplorerStatePath =
+                QDir(m_rootPath).filePath(
+                    ".rcaiman/project_explorer_state.json");
+            if (QFileInfo::exists(projectExplorerStatePath)) {
+                temporaryFiles.append(
+                    QDir::fromNativeSeparators(
+                        QDir(m_rootPath).relativeFilePath(
+                            projectExplorerStatePath)));
+            }
             const QString rstudioStatePath =
                 QDir(m_rootPath).filePath(".Rproj.user");
             if (QFileInfo(rstudioStatePath).isDir()) {

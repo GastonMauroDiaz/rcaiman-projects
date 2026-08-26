@@ -29,6 +29,26 @@ constexpr int DefaultPointFastPreviewLimit = 20000;
 constexpr int MinimumPointFastPreviewLimit = 1000;
 constexpr int MaximumPointFastPreviewLimit = 10000000;
 
+const char *projectExplorerSortModeKey()
+{
+    return "projectExplorer/sortMode";
+}
+
+const char *recentProjectsKey()
+{
+    return "recentProjects";
+}
+
+const char *mainWindowGeometryKey()
+{
+    return "mainWindow/geometry";
+}
+
+const char *mainWindowStateKey()
+{
+    return "mainWindow/state";
+}
+
 const char *pointFastPreviewLimitKey()
 {
     // Local user preference, not project metadata. Keep this class as the
@@ -42,6 +62,54 @@ int normalizePointFastPreviewLimit(int limit)
                   limit,
                   MaximumPointFastPreviewLimit);
 }
+}
+
+int AppPreferences::projectExplorerSortMode(int fallback)
+{
+    QSettings settings;
+    return settings.value(projectExplorerSortModeKey(), fallback).toInt();
+}
+
+void AppPreferences::setProjectExplorerSortMode(int mode)
+{
+    QSettings settings;
+    settings.setValue(projectExplorerSortModeKey(), mode);
+}
+
+QStringList AppPreferences::recentProjects()
+{
+    QSettings settings;
+    return settings.value(recentProjectsKey()).toStringList();
+}
+
+void AppPreferences::setRecentProjects(const QStringList &paths)
+{
+    QSettings settings;
+    settings.setValue(recentProjectsKey(), paths);
+}
+
+QByteArray AppPreferences::mainWindowGeometry()
+{
+    QSettings settings;
+    return settings.value(mainWindowGeometryKey()).toByteArray();
+}
+
+void AppPreferences::setMainWindowGeometry(const QByteArray &geometry)
+{
+    QSettings settings;
+    settings.setValue(mainWindowGeometryKey(), geometry);
+}
+
+QByteArray AppPreferences::mainWindowState()
+{
+    QSettings settings;
+    return settings.value(mainWindowStateKey()).toByteArray();
+}
+
+void AppPreferences::setMainWindowState(const QByteArray &state)
+{
+    QSettings settings;
+    settings.setValue(mainWindowStateKey(), state);
 }
 
 int AppPreferences::defaultPointFastPreviewLimit()

@@ -22,9 +22,24 @@
 #ifndef APPPREFERENCES_H
 #define APPPREFERENCES_H
 
+#include <QByteArray>
+#include <QStringList>
+
 class AppPreferences
 {
 public:
+    static int projectExplorerSortMode(int fallback);
+    static void setProjectExplorerSortMode(int mode);
+
+    static QStringList recentProjects();
+    static void setRecentProjects(const QStringList &paths);
+
+    static QByteArray mainWindowGeometry();
+    static void setMainWindowGeometry(const QByteArray &geometry);
+
+    static QByteArray mainWindowState();
+    static void setMainWindowState(const QByteArray &state);
+
     static int defaultPointFastPreviewLimit();
     static int minimumPointFastPreviewLimit();
     static int maximumPointFastPreviewLimit();
