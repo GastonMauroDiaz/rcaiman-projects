@@ -281,6 +281,7 @@ bool ImageLayer::setBinaryMaskEditMode(bool enabled,
         }
         if (!ensureBinaryMaskBackup(errorMessage))
             return false;
+        m_binaryMaskDirty = false;
         bool normalized = false;
         if (!normalizeBinaryMaskToImageJValues(m_rasterData,
                                                errorMessage,
@@ -288,8 +289,12 @@ bool ImageLayer::setBinaryMaskEditMode(bool enabled,
             removeBinaryMaskBackup();
             return false;
         }
+        m_binaryMaskEditMode = true;
+        emit binaryMaskEditModeChanged(true);
         if (normalized) {
             if (!TiffWriter::write(sourcePath(), m_rasterData, errorMessage)) {
+                m_binaryMaskEditMode = false;
+                emit binaryMaskEditModeChanged(false);
                 removeBinaryMaskBackup();
                 return false;
             }
@@ -298,12 +303,13 @@ bool ImageLayer::setBinaryMaskEditMode(bool enabled,
             refreshRenderedImageNow();
             emit dataChanged();
         }
-        m_binaryMaskEditMode = true;
         return true;
     }
 
     removeBinaryMaskBackup();
     m_binaryMaskEditMode = false;
+    m_binaryMaskDirty = false;
+    emit binaryMaskEditModeChanged(false);
     return true;
 }
 
@@ -338,6 +344,8 @@ bool ImageLayer::cancelBinaryMaskEdit(QString *errorMessage)
     m_renderer.clearCache();
     ++m_dataRevision;
     m_binaryMaskEditMode = false;
+    m_binaryMaskDirty = false;
+    emit binaryMaskEditModeChanged(false);
     removeBinaryMaskBackup();
     refreshRenderedImageNow();
     emit dataChanged();
@@ -392,10 +400,8 @@ bool ImageLayer::paintBinaryMaskAtScenePos(const QPointF &scenePos,
     }
 
     if (changed) {
-        m_renderer.clearCache();
-        ++m_dataRevision;
-        refreshRenderedImageNow();
-        emit dataChanged();
+        m_binaryMaskDirty = true;
+        scheduleThrottledRenderRefresh();
     }
     return changed;
 }
@@ -535,13 +541,22 @@ bool ImageLayer::saveBinaryMask(QString *errorMessage)
                                            &normalized)) {
         return false;
     }
-    if (normalized) {
+    const bool changed = normalized || m_binaryMaskDirty;
+    if (changed) {
         m_renderer.clearCache();
         ++m_dataRevision;
         refreshRenderedImageNow();
+    }
+    if (!TiffWriter::write(sourcePath(), m_rasterData, errorMessage)) {
+        if (changed)
+            m_binaryMaskDirty = true;
+        return false;
+    }
+    if (changed) {
+        m_binaryMaskDirty = false;
         emit dataChanged();
     }
-    return TiffWriter::write(sourcePath(), m_rasterData, errorMessage);
+    return true;
 }
 
 bool ImageLayer::ensureBinaryMaskBackup(QString *errorMessage)
@@ -777,6 +792,13 @@ void ImageLayer::scheduleRenderRefresh()
 {
     m_renderRefreshPending = true;
     if (m_renderRefreshTimer)
+        m_renderRefreshTimer->start();
+}
+
+void ImageLayer::scheduleThrottledRenderRefresh()
+{
+    m_renderRefreshPending = true;
+    if (m_renderRefreshTimer && !m_renderRefreshTimer->isActive())
         m_renderRefreshTimer->start();
 }
 

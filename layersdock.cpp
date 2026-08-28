@@ -310,7 +310,7 @@ LayersDock::LayersDock(QWidget *parent)
             return;
         auto *pointLayer = qobject_cast<PointLayer*>(
             m_manager->layerAt(m_listWidget->currentRow()));
-        if (pointLayer)
+        if (pointLayer && !pointLayer->usesAggregateRendering())
             emit pointAttributeTableRequested(pointLayer);
     });
 
@@ -327,7 +327,8 @@ LayersDock::LayersDock(QWidget *parent)
                 const int row = m_listWidget->row(item);
                 if (auto *pointLayer =
                         qobject_cast<PointLayer*>(m_manager->layerAt(row))) {
-                    emit pointAttributeTableRequested(pointLayer);
+                    if (!pointLayer->usesAggregateRendering())
+                        emit pointAttributeTableRequested(pointLayer);
                 }
             });
     connect(m_listWidget->model(), &QAbstractItemModel::rowsMoved,
@@ -567,6 +568,32 @@ QString LayersDock::layerDisplayName(const Layer *layer) const
         return {};
 
     QString name = layer->name();
+    const QFileInfo sourceInfo(layer->sourcePath());
+    const QString fileName = sourceInfo.fileName();
+    if (m_manager && !fileName.isEmpty()) {
+#ifdef Q_OS_WIN
+        const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+        const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+        int matchingFileNames = 0;
+        for (int i = 0; i < m_manager->layerCount(); ++i) {
+            const Layer *candidate = m_manager->layerAt(i);
+            if (!candidate)
+                continue;
+            const QString candidateFileName =
+                QFileInfo(candidate->sourcePath()).fileName();
+            if (candidateFileName.compare(fileName, sensitivity) == 0)
+                ++matchingFileNames;
+        }
+
+        if (matchingFileNames > 1) {
+            const QString folderName = sourceInfo.dir().dirName();
+            if (!folderName.isEmpty())
+                name = QStringLiteral("%1/%2").arg(folderName, fileName);
+        }
+    }
+
     const auto *pointLayer = qobject_cast<const PointLayer*>(layer);
     if (pointLayer && pointLayer->usesAggregateRendering())
         name += QStringLiteral(" (fast preview)");
@@ -583,8 +610,8 @@ QString LayersDock::layerToolTip(const Layer *layer) const
         return QStringLiteral(
             "Dense point layer shown as a fast preview.\n"
             "The CSV still contains all points.\n"
-            "Interactive point editing and box selection are disabled "
-            "to keep pan and zoom responsive.\n"
+            "Interactive point editing, box selection, labels, and the "
+            "attribute table are disabled to keep pan and zoom responsive.\n"
             "Fast preview limit used: %1 points.\n\n"
             "%2").arg(pointLayer->fastPreviewLimit())
                  .arg(layer->sourcePath());
@@ -814,7 +841,16 @@ void LayersDock::onCurrentRowChanged(int row)
     }
 
     Layer *layer = m_manager->layerAt(row);
-    m_openTableBtn->setEnabled(qobject_cast<PointLayer*>(layer) != nullptr);
+    auto *pointLayer = qobject_cast<PointLayer*>(layer);
+    m_openTableBtn->setEnabled(
+        pointLayer && !pointLayer->usesAggregateRendering());
+    m_openTableBtn->setToolTip(
+        pointLayer && pointLayer->usesAggregateRendering()
+            ? QStringLiteral(
+                  "Attribute table is disabled in fast preview mode.")
+            : QStringLiteral(
+                  "Open the attribute table for the selected point layer.\n"
+                  "You can also double-click the layer."));
     m_trackedLayer = layer;
     if (m_propertiesWidget)
         m_propertiesWidget->setLayer(layer);

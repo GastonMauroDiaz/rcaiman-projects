@@ -129,6 +129,18 @@ void PointItem::setSymbol(PointSymbol symbol)
     update();
 }
 
+void PointItem::setSelectionHalo(bool enabled, const QColor &color)
+{
+    if (m_selectionHaloEnabled == enabled
+        && m_selectionHaloColor == color) {
+        return;
+    }
+
+    m_selectionHaloEnabled = enabled;
+    m_selectionHaloColor = color;
+    update();
+}
+
 void PointItem::setLabel(const QString &text, double pointSize)
 {
     if (!m_labelItem)
@@ -148,23 +160,52 @@ void PointItem::setLabel(const QString &text, double pointSize)
 
 void PointItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
+    Q_UNUSED(option);
+    Q_UNUSED(widget);
+
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    const QRectF r = rect();
+    const double symbolSize = qMin(r.width(), r.height());
+
     if (m_symbol == PointSymbol::Circle) {
-        QGraphicsEllipseItem::paint(painter, option, widget);
+        if (m_selectionHaloEnabled && m_selectionHaloColor.isValid()) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QBrush(m_selectionHaloColor));
+            painter->drawEllipse(r);
+
+            const double inset = qMax(1.5, symbolSize * 0.16);
+            painter->setBrush(brush());
+            painter->drawEllipse(r.adjusted(inset, inset, -inset, -inset));
+            return;
+        }
+
+        painter->setPen(pen());
+        painter->setBrush(brush());
+        painter->drawEllipse(r);
         return;
     }
 
-    painter->setRenderHint(QPainter::Antialiasing, true);
     QPen crossPen = pen();
     crossPen.setCapStyle(Qt::RoundCap);
-    crossPen.setWidthF(qMax(0.25, qMin(rect().width(), rect().height()) * 0.18));
-    painter->setPen(crossPen);
-    painter->setBrush(Qt::NoBrush);
-
-    const QRectF r = rect();
+    crossPen.setWidthF(qMax(0.25, symbolSize * 0.18));
     const QPointF center = r.center();
-    const double half = qMin(r.width(), r.height()) / 2.0;
+    const double half = symbolSize / 2.0;
     const double arm = half * 0.82;
 
+    if (m_selectionHaloEnabled && m_selectionHaloColor.isValid()) {
+        QPen haloPen(m_selectionHaloColor);
+        haloPen.setCapStyle(Qt::RoundCap);
+        haloPen.setWidthF(qMax(crossPen.widthF() + 2.0, symbolSize * 0.34));
+        painter->setPen(haloPen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawLine(QPointF(center.x() - arm, center.y()),
+                          QPointF(center.x() + arm, center.y()));
+        painter->drawLine(QPointF(center.x(), center.y() - arm),
+                          QPointF(center.x(), center.y() + arm));
+    }
+
+    painter->setPen(crossPen);
+    painter->setBrush(Qt::NoBrush);
     painter->drawLine(QPointF(center.x() - arm, center.y()),
                       QPointF(center.x() + arm, center.y()));
     painter->drawLine(QPointF(center.x(), center.y() - arm),

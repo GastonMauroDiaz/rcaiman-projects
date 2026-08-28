@@ -167,15 +167,27 @@ HistogramWidget::HistogramWidget(QWidget *parent)
 
 void HistogramWidget::setLayer(ImageLayer *layer)
 {
+    if (m_layer != layer) {
+        m_series.clear();
+        m_displayMin = 0.0;
+        m_displayMax = 1.0;
+        m_dragHandle = Handle::None;
+    }
     m_layer = layer;
     rebuild();
 }
 
 void HistogramWidget::rebuild()
 {
-    m_series.clear();
+    m_paused = histogramPaused();
+    if (m_paused) {
+        setComputing(false);
+        update();
+        return;
+    }
 
     if (!m_layer || m_layer->rasterData().isNull()) {
+        m_series.clear();
         setComputing(false);
         update();
         return;
@@ -204,6 +216,12 @@ void HistogramWidget::rebuild()
 void HistogramWidget::rebuildNow()
 {
     m_rebuildQueued = false;
+    m_paused = histogramPaused();
+    if (m_paused) {
+        setComputing(false);
+        update();
+        return;
+    }
 
     if (!m_layer || m_layer->rasterData().isNull()) {
         m_series.clear();
@@ -389,6 +407,11 @@ void HistogramWidget::trimCache()
         m_cache.removeFirst();
 }
 
+bool HistogramWidget::histogramPaused() const
+{
+    return m_layer && m_layer->binaryMaskEditMode();
+}
+
 void HistogramWidget::setComputing(bool computing)
 {
     if (m_computing == computing)
@@ -509,7 +532,7 @@ double HistogramWidget::valueForX(int x) const
 HistogramWidget::Handle HistogramWidget::handleAtPosition(
     const QPoint &position) const
 {
-    if (!m_layer || !m_layer->style().render.manualRangeEnabled
+    if (m_paused || !m_layer || !m_layer->style().render.manualRangeEnabled
         || m_series.isEmpty()) {
         return Handle::None;
     }
@@ -542,8 +565,10 @@ void HistogramWidget::updateCursorForPosition(const QPoint &position)
 
 void HistogramWidget::applyHandleDrag(int x)
 {
-    if (!m_layer || m_dragHandle == Handle::None || m_series.isEmpty())
+    if (m_paused || !m_layer || m_dragHandle == Handle::None
+        || m_series.isEmpty()) {
         return;
+    }
 
     const double epsilon = (m_displayMax - m_displayMin) / 1000000.0;
     const double minGap = epsilon > 0.0 ? epsilon : 1.0e-9;
@@ -575,8 +600,15 @@ void HistogramWidget::paintEvent(QPaintEvent *event)
         return;
     }
 
+    const bool paused = m_paused || histogramPaused();
     const QRect textRect = rect().adjusted(8, 6, -8, -8);
-    const QString summary = summaryText();
+    const QString summary = paused
+        ? (m_series.isEmpty()
+               ? QStringLiteral("Histogram paused while editing mask.")
+               : QStringLiteral(
+                     "Histogram paused while editing mask.\n%1").arg(
+                     summaryText()))
+        : summaryText();
     const QRect plotRect = plotRectForSummary(summary);
     if (plotRect.height() < 40 || m_series.isEmpty()) {
         painter.setPen(palette().text().color());
@@ -631,7 +663,7 @@ void HistogramWidget::paintEvent(QPaintEvent *event)
         painter.drawLine(maxX, plotRect.top(), maxX, plotRect.bottom());
     }
 
-    if (m_layer && m_layer->style().render.manualRangeEnabled) {
+    if (!paused && m_layer && m_layer->style().render.manualRangeEnabled) {
         const RasterRenderStyle style = m_layer->style().render;
         painter.setPen(QPen(QColor(35, 35, 35), 3));
         painter.drawLine(xForValue(style.manualMin), plotRect.top(),

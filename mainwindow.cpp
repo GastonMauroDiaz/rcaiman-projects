@@ -30,6 +30,7 @@
 #include "pointlayer.h"
 #include "pointcollection.h"
 #include "pointcsvcreationdialog.h"
+#include "pointgridcreationdialog.h"
 #include "pointattributetablewindow.h"
 #include "histogramdock.h"
 #include "previewdock.h"
@@ -313,6 +314,32 @@ QStringList scriptFilesMentioningCollection(
     matches.sort(Qt::CaseInsensitive);
     matches.removeDuplicates();
     return matches;
+}
+
+QString readPreviewTextFile(const QString &filePath, bool *truncated)
+{
+    if (truncated)
+        *truncated = false;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+
+    constexpr qint64 PreviewTextByteLimit = 64 * 1024;
+    const QByteArray bytes = file.read(PreviewTextByteLimit + 1);
+    QByteArray previewBytes = bytes;
+    if (previewBytes.size() > PreviewTextByteLimit) {
+        previewBytes.truncate(PreviewTextByteLimit);
+        if (truncated)
+            *truncated = true;
+    }
+
+    QString text = QString::fromUtf8(previewBytes);
+    if (truncated && *truncated) {
+        text += QStringLiteral(
+            "\n\n--- Preview truncated: showing the first 64 KB only. ---");
+    }
+    return text;
 }
 
 struct UnregisterImpact
@@ -2533,8 +2560,8 @@ private:
 
 constexpr int ProjectFileMarkAreaWidth = 24;
 constexpr int ProjectFileMarkSize = 15;
-constexpr int ProjectFileImageDimensionsAreaWidth = 104;
-constexpr int ProjectFileImageDimensionsMinimumRowWidth = 260;
+constexpr int ProjectFileDetailAreaWidth = 104;
+constexpr int ProjectFileDetailMinimumRowWidth = 260;
 constexpr int MaskBrushSliderMaximum = 1000;
 constexpr double MaskBrushSliderGamma = 2.5;
 
@@ -2668,19 +2695,19 @@ void drawProjectExplorerRowGuide(QPainter *painter,
     painter->restore();
 }
 
-void drawProjectFileImageDimensions(QPainter *painter,
-                                    const QRect &rowRect,
-                                    const QString &text,
-                                    bool selected)
+void drawProjectFileDetail(QPainter *painter,
+                           const QRect &rowRect,
+                           const QString &text,
+                           bool selected)
 {
     if (text.isEmpty())
         return;
 
     const QRect textRect(
         rowRect.right() - ProjectFileMarkAreaWidth
-            - ProjectFileImageDimensionsAreaWidth + 1,
+            - ProjectFileDetailAreaWidth + 1,
         rowRect.top(),
-        ProjectFileImageDimensionsAreaWidth - 8,
+        ProjectFileDetailAreaWidth - 8,
         rowRect.height());
 
     painter->save();
@@ -2714,21 +2741,29 @@ public:
             return;
         }
 
-        const QString dimensions =
+        const QString imageDimensions =
             index.data(ProjectFileImageDimensionsRole).toString();
-        const bool showDimensions = !dimensions.isEmpty()
-            && option.rect.width() >= ProjectFileImageDimensionsMinimumRowWidth;
+        const QString pointCount =
+            index.data(ProjectFilePointCountRole).toString();
+        const QString detail = imageDimensions.isEmpty()
+            ? pointCount
+            : imageDimensions;
+        const bool showDetail = !detail.isEmpty()
+            && option.rect.width() >= ProjectFileDetailMinimumRowWidth;
 
         QStyleOptionViewItem contentOption = option;
         contentOption.rect.setRight(
             option.rect.right() - ProjectFileMarkAreaWidth
-            - (showDimensions ? ProjectFileImageDimensionsAreaWidth : 0));
+            - (showDetail ? ProjectFileDetailAreaWidth : 0));
+        if (option.state.testFlag(QStyle::State_Selected)) {
+            painter->fillRect(option.rect, option.palette.highlight());
+        }
         QStyledItemDelegate::paint(painter, contentOption, index);
-        if (showDimensions) {
-            drawProjectFileImageDimensions(
+        if (showDetail) {
+            drawProjectFileDetail(
                 painter,
                 option.rect,
-                dimensions,
+                detail,
                 option.state.testFlag(QStyle::State_Selected));
         }
         drawProjectExplorerRowGuide(
@@ -3040,6 +3075,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_artifactWatcher(new QFileSystemWatcher(this))
 {
     ui->setupUi(this);
+    statusBar()->setFixedHeight(30);
     setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
     qApp->setWindowIcon(windowIcon());
     ui->actionPan->setToolTip(ShortcutText::panTooltip());
@@ -3273,6 +3309,11 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::triggered,
             this,
             &MainWindow::cleanProject);
+
+    connect(ui->actionEditProjectDescription,
+            &QAction::triggered,
+            this,
+            &MainWindow::editProjectDescription);
 
     connect(ui->actionProjectReport,
             &QAction::triggered,
@@ -4216,6 +4257,77 @@ void MainWindow::cleanProject()
         5000);
 }
 
+void MainWindow::editProjectDescription()
+{
+    if (!m_project.isValid())
+        return;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Edit project description");
+    dialog.setMinimumWidth(760);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *form = new QFormLayout;
+    auto *descriptionEdit = new QLineEdit(&dialog);
+    descriptionEdit->setMinimumWidth(620);
+    descriptionEdit->setText(m_project.description());
+    descriptionEdit->selectAll();
+    form->addRow("Description:", descriptionEdit);
+
+    auto *warningLabel = new QLabel(&dialog);
+    warningLabel->setWordWrap(true);
+    warningLabel->setStyleSheet("color: #8a1f11;");
+    warningLabel->hide();
+    form->addRow(QString(), warningLabel);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    auto *okButton = buttons->button(QDialogButtonBox::Ok);
+    layout->addWidget(buttons);
+
+    const auto updateOkButton = [&]() {
+        QString descriptionError;
+        const bool descriptionOk =
+            Project::descriptionIsSupported(
+                descriptionEdit->text().trimmed(),
+                &descriptionError);
+        warningLabel->setVisible(!descriptionOk);
+        warningLabel->setText(descriptionError);
+        okButton->setEnabled(descriptionOk);
+    };
+
+    connect(descriptionEdit, &QLineEdit::textChanged,
+            &dialog, updateOkButton);
+    connect(buttons, &QDialogButtonBox::accepted,
+            &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected,
+            &dialog, &QDialog::reject);
+    updateOkButton();
+
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString errorMessage;
+    if (!m_project.setDescription(
+            descriptionEdit->text(),
+            &errorMessage)) {
+        QMessageBox::warning(
+            this,
+            "Edit project description",
+            errorMessage.isEmpty()
+                ? QStringLiteral("The project description could not be saved.")
+                : errorMessage);
+        return;
+    }
+
+    updateProjectHeader();
+    if (m_projectFileSystemModel)
+        m_projectFileSystemModel->refreshDirectory(m_project.rootPath());
+    statusBar()->showMessage("Project description updated", 3000);
+}
+
 void MainWindow::createProjectReport()
 {
     if (!m_project.isValid())
@@ -4713,6 +4825,7 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     QAction *copyStyleAction = nullptr;
     QAction *pasteStyleAction = nullptr;
     QAction *validateCollectionAction = nullptr;
+    QAction *unregisterDescriptorAction = nullptr;
     if (info.isDir()) {
         menu.addSeparator();
         registerAction = menu.addAction("Register collection...");
@@ -4737,6 +4850,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             info.fileName(), Qt::CaseInsensitive);
     Collection selectedCollection;
     bool hasRegisteredCollection = false;
+    Collection unregisterTargetCollection;
+    bool hasUnregisterTargetCollection = false;
     const QVector<Collection> collections =
         Project::discoverCollections(m_project.rootPath());
     const int selectedCollectionIndex = collectionIndexByDirectory(
@@ -4744,9 +4859,34 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
     if (selectedCollectionIndex >= 0) {
         selectedCollection = collections.at(selectedCollectionIndex);
         hasRegisteredCollection = true;
+        unregisterTargetCollection = selectedCollection;
+        hasUnregisterTargetCollection = true;
     }
+
+    const bool isCollectionDescriptor =
+        info.isFile()
+        && info.fileName().compare(
+            "collection.yaml", Qt::CaseInsensitive) == 0;
+    if (!hasUnregisterTargetCollection && isCollectionDescriptor) {
+        const int descriptorCollectionIndex = collectionIndexByDirectory(
+            m_project.rootPath(),
+            collections,
+            info.absoluteDir().absolutePath());
+        if (descriptorCollectionIndex >= 0) {
+            unregisterTargetCollection =
+                collections.at(descriptorCollectionIndex);
+            hasUnregisterTargetCollection = true;
+        }
+    }
+
     if (registerAction)
         registerAction->setEnabled(!isReserved && !hasRegisteredCollection);
+    if (deleteAction && hasUnregisterTargetCollection) {
+        deleteAction->setEnabled(false);
+        deleteAction->setToolTip(
+            "Use Unregister collection... before deleting collection "
+            "folders or collection.yaml.");
+    }
     const bool supportsStyle = info.isDir() && hasRegisteredCollection
         && selectedCollection.collectionClass != "other";
     const QString selectedStyleKind =
@@ -4791,6 +4931,12 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
     QAction *validateImageAction = nullptr;
     if (info.isFile()) {
+        if (isCollectionDescriptor && hasUnregisterTargetCollection) {
+            menu.addSeparator();
+            unregisterDescriptorAction =
+                menu.addAction("Unregister collection...");
+        }
+
         const QString extension = info.suffix().toLower();
         const bool rawFile =
             QStringList{
@@ -4857,6 +5003,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
             return;
 
         const QString parentPath = info.absoluteDir().absolutePath();
+        const ProjectExplorerViewState viewState =
+            projectExplorerViewState();
         const bool removed = info.isDir()
             ? QDir(info.absoluteFilePath()).removeRecursively()
             : QFile::remove(info.absoluteFilePath());
@@ -4883,6 +5031,9 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
         if (m_previewDock)
             m_previewDock->clear();
         m_projectFileSystemModel->refreshDirectory(parentPath);
+        QTimer::singleShot(0, this, [this, viewState]() {
+            restoreProjectExplorerViewState(viewState);
+        });
         updateProjectActions();
     });
 
@@ -4906,6 +5057,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     if (dialog.exec() != QDialog::Accepted)
                         return;
 
+                    const ProjectExplorerViewState viewState =
+                        projectExplorerViewState();
                     QString errorMessage;
                     if (!Project::updateCollectionMetadata(
                             m_project.rootPath(),
@@ -4923,6 +5076,9 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
                     m_projectFileSystemModel->refreshDirectory(
                         selectedCollection.dirPath);
+                    QTimer::singleShot(0, this, [this, viewState]() {
+                        restoreProjectExplorerViewState(viewState);
+                    });
                     statusBar()->showMessage(
                         QStringLiteral("Updated collection: %1")
                             .arg(selectedCollection.dirName),
@@ -5064,58 +5220,69 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                         8000);
                 });
     }
+    const auto runUnregisterCollection =
+        [this, unregisterTargetCollection,
+         hasUnregisterTargetCollection]() {
+            if (!hasUnregisterTargetCollection)
+                return;
+
+            const UnregisterImpact impact = analyzeUnregisterImpact(
+                m_project.rootPath(),
+                unregisterTargetCollection,
+                Project::discoverCollections(m_project.rootPath()));
+            const UnregisterDecision decision =
+                confirmUnregisterCollection(
+                    this, unregisterTargetCollection, impact);
+            if (!decision.accepted)
+                return;
+
+            QString errorMessage;
+            int updatedDependencies = 0;
+            if (!applyUnregisterDependencyCleanup(
+                    m_project.rootPath(),
+                    impact,
+                    decision,
+                    &updatedDependencies,
+                    &errorMessage)) {
+                QMessageBox::warning(
+                    this, "Unregister collection", errorMessage);
+                return;
+            }
+
+            if (!Project::unregisterCollection(
+                    m_project.rootPath(),
+                    unregisterTargetCollection.dirPath,
+                    &errorMessage)) {
+                QMessageBox::warning(
+                    this, "Unregister collection", errorMessage);
+                return;
+            }
+
+            if (m_previewDock)
+                m_previewDock->clear();
+            m_projectFileSystemModel->refreshDirectory(
+                unregisterTargetCollection.dirPath);
+            updateProjectActions();
+            const QString message = updatedDependencies > 0
+                ? QStringLiteral(
+                      "Unregistered collection: %1; updated %2 dependent collection file(s)")
+                      .arg(unregisterTargetCollection.dirName)
+                      .arg(updatedDependencies)
+                : QStringLiteral("Unregistered collection: %1")
+                      .arg(unregisterTargetCollection.dirName);
+            statusBar()->showMessage(message, 5000);
+        };
     if (unregisterCollectionAction) {
-        connect(unregisterCollectionAction, &QAction::triggered,
-                this, [this, selectedCollection, hasRegisteredCollection]() {
-                    if (!hasRegisteredCollection)
-                        return;
-
-                    const UnregisterImpact impact = analyzeUnregisterImpact(
-                        m_project.rootPath(),
-                        selectedCollection,
-                        Project::discoverCollections(m_project.rootPath()));
-                    const UnregisterDecision decision =
-                        confirmUnregisterCollection(
-                            this, selectedCollection, impact);
-                    if (!decision.accepted)
-                        return;
-
-                    QString errorMessage;
-                    int updatedDependencies = 0;
-                    if (!applyUnregisterDependencyCleanup(
-                            m_project.rootPath(),
-                            impact,
-                            decision,
-                            &updatedDependencies,
-                            &errorMessage)) {
-                        QMessageBox::warning(
-                            this, "Unregister collection", errorMessage);
-                        return;
-                    }
-
-                    if (!Project::unregisterCollection(
-                            m_project.rootPath(),
-                            selectedCollection.dirPath,
-                            &errorMessage)) {
-                        QMessageBox::warning(
-                            this, "Unregister collection", errorMessage);
-                        return;
-                    }
-
-                    if (m_previewDock)
-                        m_previewDock->clear();
-                    m_projectFileSystemModel->refreshDirectory(
-                        selectedCollection.dirPath);
-                    updateProjectActions();
-                    const QString message = updatedDependencies > 0
-                        ? QStringLiteral(
-                              "Unregistered collection: %1; updated %2 dependent collection file(s)")
-                              .arg(selectedCollection.dirName)
-                              .arg(updatedDependencies)
-                        : QStringLiteral("Unregistered collection: %1")
-                              .arg(selectedCollection.dirName);
-                    statusBar()->showMessage(message, 5000);
-                });
+        connect(unregisterCollectionAction,
+                &QAction::triggered,
+                this,
+                runUnregisterCollection);
+    }
+    if (unregisterDescriptorAction) {
+        connect(unregisterDescriptorAction,
+                &QAction::triggered,
+                this,
+                runUnregisterCollection);
     }
     if (createPointsAction) {
         connect(createPointsAction, &QAction::triggered,
@@ -5272,7 +5439,12 @@ void MainWindow::createProjectFolder()
         return;
     }
 
+    const ProjectExplorerViewState viewState =
+        projectExplorerViewState();
     m_projectFileSystemModel->refreshDirectory(m_project.rootPath());
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -5447,7 +5619,7 @@ bool MainWindow::copyDroppedFiles(
 
 void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
 {
-    if (!m_previewDock || !m_project.isValid())
+    if (!m_previewDock || !m_previewDock->isVisible() || !m_project.isValid())
         return;
 
     const QString filePath = projectPathFromIndex(index);
@@ -5465,10 +5637,10 @@ void MainWindow::onProjectTreeItemClicked(const QModelIndex &index)
     const QStringList imgExts = {"tif", "tiff", "png", "jpg", "jpeg", "bmp"};
 
     if (textExts.contains(suffix)) {
-        QFile file(filePath);
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            const QString text = QString::fromUtf8(file.readAll());
-            if (suffix == "md")
+        bool truncated = false;
+        const QString text = readPreviewTextFile(filePath, &truncated);
+        if (!text.isEmpty() || fi.size() == 0) {
+            if (suffix == "md" && !truncated)
                 m_previewDock->showMarkdown(text);
             else
                 m_previewDock->showText(text);
@@ -5679,6 +5851,7 @@ void MainWindow::setHistogramLayer(Layer *layer)
 {
     disconnect(m_histogramStyleConnection);
     disconnect(m_histogramDataConnection);
+    disconnect(m_histogramMaskEditConnection);
 
     auto *imageLayer = qobject_cast<ImageLayer*>(layer);
     if (m_histogramDock)
@@ -5695,6 +5868,12 @@ void MainWindow::setHistogramLayer(Layer *layer)
                 });
     m_histogramDataConnection =
         connect(imageLayer, &Layer::dataChanged, this,
+                [this, imageLayer]() {
+                    if (m_histogramDock)
+                        m_histogramDock->setLayer(imageLayer);
+                });
+    m_histogramMaskEditConnection =
+        connect(imageLayer, &ImageLayer::binaryMaskEditModeChanged, this,
                 [this, imageLayer]() {
                     if (m_histogramDock)
                         m_histogramDock->setLayer(imageLayer);
@@ -6142,6 +6321,17 @@ void MainWindow::openAttributeTable(PointLayer *layer)
 {
     if (!layer)
         return;
+
+    if (layer->usesAggregateRendering()) {
+        QMessageBox::information(
+            this,
+            "Open table",
+            "This point layer is shown in fast preview mode because it has "
+            "many points.\n\n"
+            "The attribute table, labels, and point editing are disabled to "
+            "keep pan and zoom responsive.");
+        return;
+    }
 
     if (auto existing = m_attributeTables.value(layer)) {
         existing->showNormal();
@@ -7734,6 +7924,115 @@ void MainWindow::expandProjectExplorerGroups()
     }
 }
 
+MainWindow::ProjectExplorerViewState MainWindow::projectExplorerViewState()
+    const
+{
+    ProjectExplorerViewState state;
+    if (!m_project.isValid()
+        || !ui->projectTree
+        || !m_projectFileSystemModel
+        || !m_projectSortProxy) {
+        return state;
+    }
+
+    const QModelIndex topIndex =
+        ui->projectTree->indexAt(QPoint(0, 0)).siblingAtColumn(0);
+    if (topIndex.isValid()) {
+        if (topIndex.data(ProjectExplorerGroupRole).toBool()) {
+            state.topGroupId =
+                topIndex.data(ProjectExplorerGroupIdRole).toString();
+        } else {
+            state.topPath = projectPathFromIndex(topIndex);
+        }
+    }
+
+    QVector<QModelIndex> stack;
+    const QModelIndex root = ui->projectTree->rootIndex();
+    if (root.isValid())
+        stack.append(root);
+
+    while (!stack.isEmpty()) {
+        const QModelIndex parent = stack.takeLast();
+        const int rows = m_projectSortProxy->rowCount(parent);
+        for (int row = rows - 1; row >= 0; --row) {
+            const QModelIndex index = m_projectSortProxy->index(row, 0, parent);
+            if (!index.isValid())
+                continue;
+
+            if (index.data(ProjectExplorerGroupRole).toBool()) {
+                if (ui->projectTree->isExpanded(index))
+                    stack.append(index);
+                continue;
+            }
+
+            const QModelIndex sourceIndex = projectSourceIndex(index);
+            if (!sourceIndex.isValid())
+                continue;
+
+            const QFileInfo info =
+                m_projectFileSystemModel->fileInfo(sourceIndex);
+            if (!info.isDir())
+                continue;
+
+            if (ui->projectTree->isExpanded(index)) {
+                state.expandedPaths.append(
+                    QDir::cleanPath(info.absoluteFilePath()));
+                stack.append(index);
+            }
+        }
+    }
+
+    state.expandedPaths.removeDuplicates();
+    return state;
+}
+
+void MainWindow::restoreProjectExplorerViewState(
+    const ProjectExplorerViewState &state)
+{
+    if (!m_project.isValid()
+        || !ui->projectTree
+        || !m_projectFileSystemModel
+        || !m_projectSortProxy) {
+        return;
+    }
+
+    expandProjectExplorerGroups();
+
+    for (const QString &path : state.expandedPaths) {
+        const QFileInfo info(path);
+        if (!info.isDir())
+            continue;
+
+        const QModelIndex sourceIndex =
+            m_projectFileSystemModel->index(info.absoluteFilePath());
+        const QModelIndex proxyIndex = projectProxyIndex(sourceIndex);
+        if (proxyIndex.isValid())
+            ui->projectTree->setExpanded(proxyIndex, true);
+    }
+
+    QModelIndex anchor;
+    if (!state.topPath.isEmpty()) {
+        const QModelIndex sourceIndex =
+            m_projectFileSystemModel->index(state.topPath);
+        anchor = projectProxyIndex(sourceIndex);
+    } else if (!state.topGroupId.isEmpty()) {
+        const QModelIndex root = ui->projectTree->rootIndex();
+        const int rows = m_projectSortProxy->rowCount(root);
+        for (int row = 0; row < rows; ++row) {
+            const QModelIndex index =
+                m_projectSortProxy->index(row, 0, root);
+            if (index.data(ProjectExplorerGroupIdRole).toString()
+                == state.topGroupId) {
+                anchor = index;
+                break;
+            }
+        }
+    }
+
+    if (anchor.isValid())
+        ui->projectTree->scrollTo(anchor, QAbstractItemView::PositionAtTop);
+}
+
 void MainWindow::rememberProjectExplorerGroupExpansion(
     const QModelIndex &index,
     bool expanded)
@@ -7788,6 +8087,7 @@ void MainWindow::updateProjectActions()
     const bool hasProject = m_project.isValid();
     ui->actionSaveProjectAs->setEnabled(hasProject);
     ui->actionSaveProjectAsCleanCopy->setEnabled(hasProject);
+    ui->actionEditProjectDescription->setEnabled(hasProject);
     ui->actionProjectReport->setEnabled(hasProject);
     ui->actionCloseProject->setEnabled(hasProject);
     ImageViewer *viewer = currentImageViewer();
@@ -8670,6 +8970,7 @@ void MainWindow::createPointGrid()
     }
 
     struct GridCandidate {
+        int id = -1;
         Collection pointCollection;
         MaskCandidate mask;
     };
@@ -8679,7 +8980,11 @@ void MainWindow::createPointGrid()
         const QVector<MaskCandidate> masks = compatibleMaskCandidates(
             m_project.rootPath(), pointCollection, collections);
         for (const MaskCandidate &mask : masks)
-            gridCandidates.append(GridCandidate{pointCollection, mask});
+            gridCandidates.append(GridCandidate{
+                static_cast<int>(gridCandidates.size()),
+                pointCollection,
+                mask
+            });
     }
 
     if (gridCandidates.isEmpty()) {
@@ -8721,262 +9026,208 @@ void MainWindow::createPointGrid()
     const Collection selectedCollection = collectionForPath(selectedProjectPath());
     const QString selectedPath = selectedProjectPath();
 
-    QVector<MaskCandidate> maskOptions;
-    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-        bool alreadyListed = false;
-        for (const MaskCandidate &mask : std::as_const(maskOptions)) {
-            if (sameFile(mask.path, candidate.mask.path)) {
-                alreadyListed = true;
-                break;
-            }
-        }
-        if (!alreadyListed)
-            maskOptions.append(candidate.mask);
-    }
-
-    int preferredMaskIndex = -1;
+    int preferredCandidateId = -1;
     if (selectedCollection.collectionClass == "segmentation_collection") {
         const QFileInfo selectedInfo(selectedPath);
-        for (int i = 0; i < maskOptions.size(); ++i) {
-            const MaskCandidate &mask = maskOptions.at(i);
-            if (selectedInfo.isFile() && sameFile(mask.path, selectedPath)) {
-                preferredMaskIndex = i;
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (selectedInfo.isFile()
+                && sameFile(candidate.mask.path, selectedPath)) {
+                preferredCandidateId = candidate.id;
                 break;
             }
-            if (preferredMaskIndex < 0
-                && sameCollection(mask.collection, selectedCollection)) {
-                preferredMaskIndex = i;
-            }
-        }
-    }
-    if (preferredMaskIndex < 0
-        && selectedCollection.collectionClass == "point_collection") {
-        for (int i = 0; i < maskOptions.size(); ++i) {
-            for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
-                if (sameFile(candidate.mask.path, maskOptions.at(i).path)
-                    && sameCollection(candidate.pointCollection,
-                                      selectedCollection)) {
-                    preferredMaskIndex = i;
-                    break;
-                }
-            }
-            if (preferredMaskIndex >= 0)
-                break;
-        }
-    }
-    if (preferredMaskIndex < 0)
-        preferredMaskIndex = 0;
-
-    QDialog dialog(this);
-    dialog.setWindowTitle("Create grid");
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *form = new QFormLayout;
-    auto *maskCombo = new QComboBox(&dialog);
-    auto *pointCombo = new QComboBox(&dialog);
-    auto *strideSpin = new QSpinBox(&dialog);
-    strideSpin->setRange(1, 10000);
-    strideSpin->setValue(1);
-
-    for (int i = 0; i < maskOptions.size(); ++i)
-        maskCombo->addItem(maskOptions.at(i).label, i);
-
-    auto populatePointCombo = [&]() {
-        pointCombo->clear();
-        const int maskIndex = maskCombo->currentData().toInt();
-        if (maskIndex < 0 || maskIndex >= maskOptions.size())
-            return;
-
-        const MaskCandidate &selectedMask = maskOptions.at(maskIndex);
-        int preferredPointIndex = -1;
-        for (int i = 0; i < gridCandidates.size(); ++i) {
-            const GridCandidate &candidate = gridCandidates.at(i);
-            if (!sameFile(candidate.mask.path, selectedMask.path))
-                continue;
-
-            bool alreadyListed = false;
-            for (int row = 0; row < pointCombo->count(); ++row) {
-                const int existingIndex = pointCombo->itemData(row).toInt();
-                if (existingIndex >= 0
-                    && existingIndex < gridCandidates.size()
-                    && sameCollection(
-                        gridCandidates.at(existingIndex).pointCollection,
-                        candidate.pointCollection)) {
-                    alreadyListed = true;
-                    break;
-                }
-            }
-            if (alreadyListed)
-                continue;
-
-            pointCombo->addItem(candidate.pointCollection.dirName, i);
-            if (preferredPointIndex < 0
-                && selectedCollection.collectionClass == "point_collection"
-                && sameCollection(candidate.pointCollection,
+            if (preferredCandidateId < 0
+                && sameCollection(candidate.mask.collection,
                                   selectedCollection)) {
-                preferredPointIndex = pointCombo->count() - 1;
+                preferredCandidateId = candidate.id;
             }
         }
-        pointCombo->setCurrentIndex(qMax(0, preferredPointIndex));
-    };
+    }
+    if (preferredCandidateId < 0
+        && selectedCollection.collectionClass == "point_collection") {
+        for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+            if (sameCollection(candidate.pointCollection,
+                               selectedCollection)) {
+                preferredCandidateId = candidate.id;
+                break;
+            }
+        }
+    }
+    if (preferredCandidateId < 0 && !gridCandidates.isEmpty())
+        preferredCandidateId = gridCandidates.first().id;
 
-    connect(maskCombo,
-            static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
-            &dialog,
-            [populatePointCombo](int) {
-                populatePointCombo();
-            });
+    QVector<PointGridCreationDialog::Candidate> dialogCandidates;
+    dialogCandidates.reserve(gridCandidates.size());
+    for (const GridCandidate &candidate : std::as_const(gridCandidates)) {
+        dialogCandidates.append(PointGridCreationDialog::Candidate{
+            candidate.id,
+            candidate.mask.label,
+            candidate.mask.path,
+            candidate.pointCollection.dirName,
+            candidate.pointCollection.dirPath
+        });
+    }
 
-    maskCombo->setCurrentIndex(preferredMaskIndex);
-    populatePointCombo();
-
-    form->addRow("Mask:", maskCombo);
-    form->addRow("Point collection:", pointCombo);
-    form->addRow("Stride:", strideSpin);
-    layout->addLayout(form);
-    auto *buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
-        &dialog);
-    connect(buttons, &QDialogButtonBox::accepted,
-            &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected,
-            &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-
+    PointGridCreationDialog dialog(
+        dialogCandidates,
+        preferredCandidateId,
+        this);
     if (dialog.exec() != QDialog::Accepted)
         return;
 
-    const int candidateIndex = pointCombo->currentData().toInt();
-    if (candidateIndex < 0 || candidateIndex >= gridCandidates.size())
+    const QVector<PointGridCreationDialog::Task> tasks = dialog.tasks();
+    if (tasks.isEmpty())
         return;
 
-    const int selectedMaskIndex = maskCombo->currentData().toInt();
-    if (selectedMaskIndex < 0 || selectedMaskIndex >= maskOptions.size())
-        return;
-
-    const GridCandidate selectedCandidate = gridCandidates.at(candidateIndex);
-    const Collection selectedPointCollection =
-        selectedCandidate.pointCollection;
-    const MaskCandidate maskCandidate = selectedCandidate.mask;
-    const int stride = strideSpin->value();
-    if (stride < 1)
-        return;
-
-    if (!sameFile(maskCandidate.path, maskOptions.at(selectedMaskIndex).path)) {
-        QMessageBox::warning(
-            this, "Create grid",
-            "The selected mask and point collection are no longer compatible.");
-        return;
-    }
-
-    QString readError;
-    const RasterData mask = TiffReader::load(maskCandidate.path, &readError);
-    if (mask.isNull()) {
-        QMessageBox::warning(
-            this, "Create grid",
-            QStringLiteral("Could not read mask TIFF:\n%1")
-                .arg(readError));
-        return;
-    }
-
-    QString maskError;
-    if (!validateBinaryMask(mask, &maskError)) {
-        QMessageBox::warning(this, "Create grid", maskError);
-        return;
-    }
-
-    const quint8 *maskValues = mask.bandPointer<quint8>(0);
-    QVector<QPoint> points;
-    for (int row = 0; row < mask.height(); row += stride) {
-        for (int col = 0; col < mask.width(); col += stride) {
-            const int value =
-                maskValues[static_cast<qsizetype>(row) * mask.width() + col];
-            if (value != 0)
-                points.append(QPoint(col, row));
+    const auto candidateById = [&gridCandidates](int id) -> const GridCandidate* {
+        for (const GridCandidate &candidate : gridCandidates) {
+            if (candidate.id == id)
+                return &candidate;
         }
+        return nullptr;
+    };
+
+    struct GridOutput {
+        GridCandidate candidate;
+        int stride = 1;
+        QString savePath;
+        QVector<QPoint> points;
+    };
+
+    QVector<GridOutput> outputs;
+    outputs.reserve(tasks.size());
+    QSet<QString> outputPathKeys;
+    QStringList existingFiles;
+    for (const PointGridCreationDialog::Task &task : tasks) {
+        const GridCandidate *candidate = candidateById(task.candidateId);
+        if (!candidate || task.stride < 1)
+            return;
+
+        const QString savePath = QDir(candidate->pointCollection.dirPath)
+            .filePath(QFileInfo(candidate->mask.path).completeBaseName()
+                      + ".csv");
+        const QString savePathKey =
+            normalizedAbsolutePathForComparison(savePath);
+        if (outputPathKeys.contains(savePathKey)) {
+            QMessageBox::warning(
+                this,
+                "Create grid",
+                QStringLiteral(
+                    "Two selected rows would write the same output file:\n%1")
+                    .arg(QDir::toNativeSeparators(savePath)));
+            return;
+        }
+        outputPathKeys.insert(savePathKey);
+
+        if (QFileInfo::exists(savePath)) {
+            existingFiles.append(
+                QStringLiteral("- %1/%2")
+                    .arg(candidate->pointCollection.dirName,
+                         QFileInfo(savePath).fileName()));
+        }
+
+        outputs.append(GridOutput{*candidate, task.stride, savePath, {}});
     }
 
-    const bool largeGrid = points.size() > 100000;
+    if (!existingFiles.isEmpty()) {
+        QStringList visibleFiles = existingFiles;
+        if (visibleFiles.size() > 10) {
+            visibleFiles = visibleFiles.mid(0, 10);
+            visibleFiles.append(QStringLiteral("- ..."));
+        }
+        const auto answer = QMessageBox::question(
+            this,
+            "Create grid",
+            QStringLiteral("Replace existing grid CSV file(s)?\n\n%1")
+                .arg(visibleFiles.join('\n')),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    qint64 totalPoints = 0;
+    for (GridOutput &output : outputs) {
+        QString readError;
+        const RasterData mask =
+            TiffReader::load(output.candidate.mask.path, &readError);
+        if (mask.isNull()) {
+            QMessageBox::warning(
+                this,
+                "Create grid",
+                QStringLiteral("Could not read mask TIFF:\n%1")
+                    .arg(readError));
+            return;
+        }
+
+        QString maskError;
+        if (!validateBinaryMask(mask, &maskError)) {
+            QMessageBox::warning(this, "Create grid", maskError);
+            return;
+        }
+
+        const quint8 *maskValues = mask.bandPointer<quint8>(0);
+        for (int row = 0; row < mask.height(); row += output.stride) {
+            for (int col = 0; col < mask.width(); col += output.stride) {
+                const int value =
+                    maskValues[static_cast<qsizetype>(row)
+                               * mask.width() + col];
+                if (value != 0)
+                    output.points.append(QPoint(col, row));
+            }
+        }
+        totalPoints += output.points.size();
+    }
+
+    const bool largeGrid = totalPoints > 100000;
     if (largeGrid) {
+        const QString message = outputs.size() == 1
+            ? QStringLiteral("This will create %1 points. Continue?")
+                  .arg(totalPoints)
+            : QStringLiteral(
+                  "This will create %1 grid CSV files with %2 total points. Continue?")
+                  .arg(outputs.size())
+                  .arg(totalPoints);
         const auto answer = QMessageBox::question(
             this,
             "Create grid",
-            QStringLiteral("This will create %1 points. Continue?")
-                .arg(points.size()),
+            message,
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
         if (answer != QMessageBox::Yes)
             return;
     }
-
-    const QString defaultName =
-        QFileInfo(maskCandidate.path).completeBaseName() + ".csv";
-    QFileDialog saveDialog(this, "Create grid CSV");
-    saveDialog.setAcceptMode(QFileDialog::AcceptSave);
-    saveDialog.setNameFilter("CSV files (*.csv)");
-    saveDialog.setDefaultSuffix("csv");
-    saveDialog.setOption(QFileDialog::DontConfirmOverwrite, true);
-    saveDialog.setDirectory(selectedPointCollection.dirPath);
-    saveDialog.selectFile(defaultName);
-    if (saveDialog.exec() != QDialog::Accepted)
-        return;
-    QString savePath = saveDialog.selectedFiles().value(0);
-    if (savePath.isEmpty())
-        return;
-    if (!savePath.endsWith(".csv", Qt::CaseInsensitive))
-        savePath += ".csv";
-
-    const QString saveDirectory =
-        QDir::cleanPath(QFileInfo(savePath).absoluteDir().absolutePath());
-    const QString pointCollectionDirectory =
-        QDir::cleanPath(QFileInfo(selectedPointCollection.dirPath).absoluteFilePath());
-#ifdef Q_OS_WIN
-    const Qt::CaseSensitivity pathSensitivity = Qt::CaseInsensitive;
-#else
-    const Qt::CaseSensitivity pathSensitivity = Qt::CaseSensitive;
-#endif
-    if (saveDirectory.compare(pointCollectionDirectory, pathSensitivity) != 0) {
-        QMessageBox::warning(
-            this,
-            "Create grid",
-            QStringLiteral(
-                "Grid CSV files must be saved inside the selected point collection:\n%1")
-                .arg(QDir::toNativeSeparators(pointCollectionDirectory)));
-        return;
-    }
-
-    if (QFileInfo::exists(savePath)) {
-        const auto answer = QMessageBox::question(
-            this,
-            "Create grid",
-            QStringLiteral("Replace existing file \"%1\"?")
-                .arg(QFileInfo(savePath).fileName()),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No);
-        if (answer != QMessageBox::Yes)
-            return;
-    }
-
-    PointCollection collection =
-        PointCollection::createEmpty({"row", "col"});
-    for (const QPoint &point : std::as_const(points))
-        collection.addPoint(point.y() + 0.5, point.x() + 0.5);
 
     QString saveError;
-    if (!collection.save(savePath, &saveError)) {
-        QMessageBox::warning(this, "Create grid", saveError);
-        return;
+    QSet<QString> refreshedDirectories;
+    for (const GridOutput &output : std::as_const(outputs)) {
+        PointCollection collection =
+            PointCollection::createEmpty({"row", "col"});
+        for (const QPoint &point : output.points)
+            collection.addPoint(point.y() + 0.5, point.x() + 0.5);
+
+        if (!collection.save(output.savePath, &saveError)) {
+            QMessageBox::warning(this, "Create grid", saveError);
+            return;
+        }
+        refreshedDirectories.insert(QFileInfo(output.savePath).absolutePath());
     }
 
     statusBar()->showMessage(
-        QStringLiteral("Created grid points file: %1 (%2 points)")
-            .arg(QFileInfo(savePath).fileName())
-            .arg(points.size()),
+        outputs.size() == 1
+            ? QStringLiteral("Created grid points file: %1 (%2 points)")
+                  .arg(QFileInfo(outputs.first().savePath).fileName())
+                  .arg(outputs.first().points.size())
+            : QStringLiteral("Created %1 grid point CSV files (%2 total points)")
+                  .arg(outputs.size())
+                  .arg(totalPoints),
         5000);
-    m_projectFileSystemModel->refreshDirectory(
-        QFileInfo(savePath).absolutePath());
+    if (m_projectFileSystemModel) {
+        for (const QString &directory : std::as_const(refreshedDirectories))
+            m_projectFileSystemModel->refreshDirectory(directory);
+    }
 
     ImageViewer *viewer = currentImageViewer();
-    if (viewer && viewer->layerManager()) {
+    if (outputs.size() == 1 && viewer && viewer->layerManager()) {
         const auto reply = QMessageBox::question(
             this,
             "Add layer",
@@ -8984,8 +9235,10 @@ void MainWindow::createPointGrid()
             QMessageBox::Yes | QMessageBox::No,
             largeGrid ? QMessageBox::No : QMessageBox::Yes);
         if (reply == QMessageBox::Yes) {
-            if (PointLayer *layer = createStyledPointLayer(savePath, viewer))
+            if (PointLayer *layer = createStyledPointLayer(
+                    outputs.first().savePath, viewer)) {
                 viewer->layerManager()->addLayer(layer);
+            }
         }
     }
 }

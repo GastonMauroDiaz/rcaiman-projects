@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QStringList>
 #include <QTextStream>
 
 namespace {
@@ -75,6 +76,26 @@ QString yamlValueAfterColon(const QString &line)
         value = unescapeYamlQuotedString(value);
     }
     return value;
+}
+
+QStringList parseCsvLine(const QString &line)
+{
+    QStringList result;
+    bool inQuotes = false;
+    QString current;
+    for (int i = 0; i < line.size(); ++i) {
+        const QChar character = line.at(i);
+        if (character == QLatin1Char('"')) {
+            inQuotes = !inQuotes;
+        } else if (character == QLatin1Char(',') && !inQuotes) {
+            result.append(current.trimmed());
+            current.clear();
+        } else {
+            current.append(character);
+        }
+    }
+    result.append(current.trimmed());
+    return result;
 }
 
 QColor explorerColorForCollectionClass(const QString &collectionClass)
@@ -129,6 +150,8 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
         return m_fileMarks.contains(projectRelativePath(info));
     if (role == ProjectFileImageDimensionsRole)
         return imageDimensions(info);
+    if (role == ProjectFilePointCountRole)
+        return pointCount(info);
 
     if (!info.isDir())
         return QFileSystemModel::data(index, role);
@@ -247,6 +270,7 @@ void ProjectFileSystemModel::refreshDirectory(const QString &path)
                          {Qt::DisplayRole, ProjectFileMarkedRole,
                           ProjectFileDirectlyMarkedRole,
                           ProjectFileImageDimensionsRole,
+                          ProjectFilePointCountRole,
                           Qt::ForegroundRole, Qt::ToolTipRole});
 }
 
@@ -287,6 +311,12 @@ bool ProjectFileSystemModel::isTiffFile(const QFileInfo &info) const
         || suffix.compare("tiff", Qt::CaseInsensitive) == 0;
 }
 
+bool ProjectFileSystemModel::isCsvFile(const QFileInfo &info) const
+{
+    return info.isFile()
+        && info.suffix().compare("csv", Qt::CaseInsensitive) == 0;
+}
+
 QString ProjectFileSystemModel::imageDimensions(
     const QFileInfo &info) const
 {
@@ -307,7 +337,7 @@ QString ProjectFileSystemModel::imageDimensions(
     const TiffImageInfo tiffInfo =
         TiffReader::imageInfo(info.absoluteFilePath());
     if (tiffInfo.isValid()) {
-        text = QStringLiteral("%1 x %2")
+        text = QStringLiteral("%1 x %2 pixels")
             .arg(tiffInfo.width)
             .arg(tiffInfo.height);
     }
@@ -315,6 +345,67 @@ QString ProjectFileSystemModel::imageDimensions(
     m_imageDimensionsCache.insert(
         key,
         ImageDimensionsCacheEntry{fileSize, lastModified, text});
+    return text;
+}
+
+QString ProjectFileSystemModel::pointCount(const QFileInfo &info) const
+{
+    if (!isCsvFile(info))
+        return {};
+
+    const QString key = cachePath(info);
+    const qint64 fileSize = info.size();
+    const qint64 lastModified = info.lastModified().toMSecsSinceEpoch();
+    const auto cached = m_pointCountCache.constFind(key);
+    if (cached != m_pointCountCache.constEnd()
+        && cached->fileSize == fileSize
+        && cached->lastModified == lastModified) {
+        return cached->text;
+    }
+
+    QString text;
+    QFile file(info.absoluteFilePath());
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream stream(&file);
+        const QString header = stream.readLine();
+        const QStringList columns = parseCsvLine(header);
+        const bool validHeader = columns.size() >= 2
+            && columns.at(0).compare("row", Qt::CaseInsensitive) == 0
+            && columns.at(1).compare("col", Qt::CaseInsensitive) == 0;
+        bool validRows = validHeader;
+        int count = 0;
+        while (validRows && !stream.atEnd()) {
+            const QString line = stream.readLine();
+            if (line.trimmed().isEmpty())
+                continue;
+
+            const QStringList values = parseCsvLine(line);
+            if (values.size() < 2) {
+                validRows = false;
+                break;
+            }
+
+            bool rowOk = false;
+            bool colOk = false;
+            values.at(0).toDouble(&rowOk);
+            values.at(1).toDouble(&colOk);
+            if (!rowOk || !colOk) {
+                validRows = false;
+                break;
+            }
+            ++count;
+        }
+
+        if (validRows) {
+            text = QStringLiteral("%1 point%2")
+                .arg(count)
+                .arg(count == 1 ? "" : "s");
+        }
+    }
+
+    m_pointCountCache.insert(
+        key,
+        PointCountCacheEntry{fileSize, lastModified, text});
     return text;
 }
 
@@ -398,6 +489,7 @@ void ProjectFileSystemModel::clearDirectoryCache(const QString &path) const
     m_collectionAliasCache.remove(key);
     m_directFileCountCache.remove(key);
     m_imageDimensionsCache.remove(key);
+    m_pointCountCache.remove(key);
 
     const QString prefix = key + QLatin1Char('|');
     const QStringList relevantKeys = m_relevantFileCountCache.keys();
@@ -414,6 +506,7 @@ void ProjectFileSystemModel::clearAllDirectoryCaches() const
     m_directFileCountCache.clear();
     m_relevantFileCountCache.clear();
     m_imageDimensionsCache.clear();
+    m_pointCountCache.clear();
 }
 
 QString ProjectFileSystemModel::appendAlias(

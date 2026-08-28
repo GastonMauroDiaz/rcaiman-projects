@@ -88,6 +88,7 @@ private slots:
     void saveProjectAs();
     void saveProjectAsCleanCopy();
     void cleanProject();
+    void editProjectDescription();
     void createProjectReport();
     void importLegacyHspProject();
     void importLegacyJpegs();
@@ -128,6 +129,13 @@ private slots:
     void createProjectFromExample();
 
 private:
+    struct ProjectExplorerViewState
+    {
+        QStringList expandedPaths;
+        QString topPath;
+        QString topGroupId;
+    };
+
     void openImageAtPath(const QString &filePath);
     bool loadImageIntoViewer(ImageViewer *viewer, const QString &filePath,
                              bool showWarning = true,
@@ -195,6 +203,9 @@ private:
     void resetProjectExplorerToFileSystemRoot();
     void refreshProjectExplorerRootIndex();
     void expandProjectExplorerGroups();
+    ProjectExplorerViewState projectExplorerViewState() const;
+    void restoreProjectExplorerViewState(
+        const ProjectExplorerViewState &state);
     void rememberProjectExplorerGroupExpansion(
         const QModelIndex &index,
         bool expanded);
@@ -244,6 +255,7 @@ private:
     QHash<PointLayer*, QPointer<PointAttributeTableWindow>> m_attributeTables;
     QMetaObject::Connection m_histogramStyleConnection;
     QMetaObject::Connection m_histogramDataConnection;
+    QMetaObject::Connection m_histogramMaskEditConnection;
     QByteArray m_defaultWindowState;
     bool m_resetLayoutPending = false;
     QHash<QString, int> m_pendingReloadAttempts;

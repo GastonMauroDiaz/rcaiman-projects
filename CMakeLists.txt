@@ -63,6 +63,7 @@ qt_add_executable(rcaiman_projects
     imagelayerpropertieswidget.h imagelayerpropertieswidget.cpp
     pointcollection.h pointcollection.cpp
     pointcsvcreationdialog.h pointcsvcreationdialog.cpp
+    pointgridcreationdialog.h pointgridcreationdialog.cpp
     pointitem.h pointitem.cpp
     pointlayer.h pointlayer.cpp
     pointlayerpropertieswidget.h pointlayerpropertieswidget.cpp

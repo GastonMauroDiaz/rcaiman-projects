@@ -106,6 +106,7 @@ private:
                       double displayMin,
                       double displayMax);
     void trimCache();
+    bool histogramPaused() const;
     void setComputing(bool computing);
     void updateRenderRanges();
     QString summaryText() const;
@@ -123,6 +124,7 @@ private:
     double m_displayMin = 0.0;
     double m_displayMax = 1.0;
     bool m_computing = false;
+    bool m_paused = false;
     bool m_rebuildQueued = false;
 };
 

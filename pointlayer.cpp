@@ -490,6 +490,7 @@ void PointLayer::applyStyleToPointItem(int index)
     QPen pen(color);
 
     pointItem->setSymbol(m_style.symbol);
+    pointItem->setSelectionHalo(selected, m_style.color);
     pointItem->setRect(QRectF(offset.x(), offset.y(), size, size));
     pointItem->setPen(pen);
     pointItem->setBrush(m_style.symbol == PointSymbol::Circle ? QBrush(color) : QBrush(Qt::NoBrush));

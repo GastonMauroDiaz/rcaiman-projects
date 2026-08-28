@@ -84,9 +84,13 @@ public:
     void setRgbBands(int redBand, int greenBand, int blueBand);
     void refreshRenderedImageNow();
 
+signals:
+    void binaryMaskEditModeChanged(bool enabled);
+
 private:
     void setStyleInternal(const ImageLayerStyle &style, bool deferRender);
     void scheduleRenderRefresh();
+    void scheduleThrottledRenderRefresh();
     void applyStyleToItem();
     void refreshRenderedImage();
     bool ensureBinaryMaskBackup(QString *errorMessage = nullptr);
@@ -100,6 +104,7 @@ private:
     QTimer *m_renderRefreshTimer = nullptr;
     bool m_renderRefreshPending = false;
     bool m_binaryMaskEditMode = false;
+    bool m_binaryMaskDirty = false;
     QString m_binaryMaskBackupPath;
 };
 

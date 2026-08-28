@@ -128,10 +128,11 @@ void PointLayerPropertiesWidget::updateFromLayer()
         if (fastPreview) {
             m_fastPreviewLabel->setText(
                 QStringLiteral(
-                    "Fast preview mode: the CSV is complete, but dense "
-                    "points are drawn as a lightweight preview. Interactive "
-                    "editing and box selection are disabled to keep pan and "
-                    "zoom responsive. Limit used: %1 points.")
+                    "Fast preview: this CSV has %1 points. The file is "
+                    "complete, but the viewer draws a regular subset to stay "
+                    "responsive. Editing, box selection, labels, and the "
+                    "attribute table are disabled. Limit used: %2 points.")
+                    .arg(m_layer->collection().recordCount())
                     .arg(m_layer->fastPreviewLimit()));
         }
     }
@@ -144,7 +145,18 @@ void PointLayerPropertiesWidget::updateFromLayer()
         const int labelIndex = m_labelCombo->findData(style.labelField);
         m_labelCombo->setCurrentIndex(labelIndex >= 0 ? labelIndex : 0);
         m_labelSizeSpin->setValue(style.labelSize);
-        m_labelSizeSpin->setEnabled(m_labelCombo->currentIndex() > 0);
+        const bool fastPreview = m_layer->usesAggregateRendering();
+        m_labelCombo->setEnabled(!fastPreview);
+        m_labelSizeSpin->setEnabled(
+            !fastPreview && m_labelCombo->currentIndex() > 0);
+        m_labelCombo->setToolTip(
+            fastPreview
+                ? QStringLiteral("Labels are disabled in fast preview mode.")
+                : QString());
+        m_labelSizeSpin->setToolTip(
+            fastPreview
+                ? QStringLiteral("Labels are disabled in fast preview mode.")
+                : QString());
     }
 
     updateColorButton();

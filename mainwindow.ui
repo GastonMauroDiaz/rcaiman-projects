@@ -34,6 +34,7 @@
     <addaction name="actionSaveProjectAs"/>
     <addaction name="actionSaveProjectAsCleanCopy"/>
     <addaction name="actionCleanProject"/>
+    <addaction name="actionEditProjectDescription"/>
     <addaction name="actionProjectReport"/>
     <addaction name="actionCloseProject"/>
     <addaction name="separator"/>
@@ -286,6 +287,14 @@
    </property>
    <property name="text">
     <string>Clean...</string>
+   </property>
+  </action>
+  <action name="actionEditProjectDescription">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Edit description...</string>
    </property>
   </action>
   <action name="actionCloseProject">

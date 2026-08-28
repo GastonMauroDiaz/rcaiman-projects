@@ -44,6 +44,7 @@ public:
 
     void setMovable(bool movable);
     void setSymbol(PointSymbol symbol);
+    void setSelectionHalo(bool enabled, const QColor &color = QColor());
     void setLabel(const QString &text, double pointSize);
 
 signals:
@@ -62,6 +63,8 @@ protected:
 private:
     int m_pointIndex;
     PointSymbol m_symbol = PointSymbol::Circle;
+    bool m_selectionHaloEnabled = false;
+    QColor m_selectionHaloColor;
     PointLabelItem *m_labelItem = nullptr;
     bool m_dragging = false;
     QPointF m_dragStartPos;
