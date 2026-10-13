@@ -49,6 +49,7 @@ set(CMAKE_AUTORCC ON)
 qt_add_executable(rcaiman_projects
     WIN32 MACOSX_BUNDLE
     main.cpp
+    apptheme.h apptheme.cpp
     apppreferences.h apppreferences.cpp
     mainwindow.cpp
     mainwindow.h
@@ -195,6 +196,13 @@ if(WIN32)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(apptheme_tests
+        apptheme_tests.cpp
+        apptheme.h apptheme.cpp
+    )
+    target_link_libraries(apptheme_tests PRIVATE Qt::Widgets)
+    add_test(NAME apptheme_tests COMMAND apptheme_tests)
+
     add_executable(metadataregistry_tests
         metadataregistry_tests.cpp
         metadataregistry.h metadataregistry.cpp
@@ -270,6 +278,10 @@ if(BUILD_TESTING)
         list(APPEND POINT_TESTS pointcollection_r_roundtrip_tests)
     endif()
     if(WIN32)
+        set_tests_properties(apptheme_tests PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin"
+        )
         set_tests_properties(metadataregistry_tests PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin;PATH=path_list_prepend:C:/msys64/mingw64/bin"

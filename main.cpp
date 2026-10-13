@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "mainwindow.h"
+#include "apptheme.h"
 
 #include <QApplication>
 #include <QLocale>
@@ -30,6 +31,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("rcaiman");
     QCoreApplication::setApplicationName("rcaiman_projects");
     QApplication a(argc, argv);
+    AppTheme::applyLight(a);
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
