@@ -50,6 +50,7 @@ public:
     bool isMarkedOrInherited(const QFileInfo &info) const;
     bool hasMarkedDescendant(const QFileInfo &info) const;
     void refreshDirectory(const QString &path);
+    void refreshDirectoryCount(const QString &path);
     QString collectionClassForDirectory(const QString &directoryPath) const;
 
 private:
@@ -80,6 +81,8 @@ private:
     QString appendAlias(const QString &displayText,
                         const QString &directoryPath) const;
     bool reservedDirectoryShowsEmptyLabel(const QString &name) const;
+    bool collectionHasContent(const QFileInfo &info,
+                              const QString &collectionClass) const;
     int directFileCount(const QFileInfo &info) const;
     int relevantFileCount(const QFileInfo &info,
                           const QString &collectionClass) const;

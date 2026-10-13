@@ -33,6 +33,8 @@
 #include <QSet>
 #include <QTextStream>
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <utility>
 
@@ -58,6 +60,22 @@ QString yamlString(const QString &value)
     escaped.replace('\r', "\\r");
     escaped.replace('\t', "\\t");
     return QStringLiteral("\"%1\"").arg(escaped);
+}
+
+QString yamlStringList(const QStringList &values)
+{
+    QStringList encoded;
+    encoded.reserve(values.size());
+    for (const QString &value : values)
+        encoded.append(yamlString(value));
+    return QStringLiteral("[%1]").arg(encoded.join(", "));
+}
+
+QString yamlScalar(const YAML::Node &node)
+{
+    if (!node || !node.IsScalar())
+        return {};
+    return QString::fromUtf8(node.as<std::string>().c_str());
 }
 
 QString unescapeYamlQuotedString(const QString &value)
@@ -448,8 +466,9 @@ bool Project::collectionAliasIsSupported(const QString &alias,
 bool Project::updateCollectionMetadata(const QString &projectRootPath,
                                        const QString &dirPath,
                                        const QString &alias,
-                                       const QString &parent,
-                                       const QString &related,
+                                       const QString &previousLevel,
+                                       const QString &imageFrame,
+                                       const QStringList &builtFrom,
                                        const QString &registry,
                                        const QString &script,
                                        QString *errorMessage)
@@ -481,18 +500,41 @@ bool Project::updateCollectionMetadata(const QString &projectRootPath,
     input.close();
 
     bool sawClass = false;
+    bool sawSchemaVersion = false;
     bool wroteMetadata = false;
     QStringList outputLines;
-    outputLines.reserve(lines.size() + 5);
+    outputLines.reserve(lines.size() + 7);
     const QStringList editedKeys = {
-        "alias:", "parent:", "related:", "registry:", "script:"
+        "alias:", "parent:", "related:", "previous_level:",
+        "image_frame:", "built_from:", "registry:", "script:"
     };
+    bool skipBuiltFromBlock = false;
+    int builtFromIndent = -1;
     for (const QString &line : std::as_const(lines)) {
         const QString trimmedLine = line.trimmed();
+        const int indentation = line.size() - line.trimmed().size();
+        if (skipBuiltFromBlock) {
+            if (trimmedLine.isEmpty() || indentation > builtFromIndent)
+                continue;
+            skipBuiltFromBlock = false;
+        }
+
+        if (indentation == 0
+            && trimmedLine.startsWith("schema_version:")) {
+            outputLines.append(QStringLiteral("schema_version: 2"));
+            sawSchemaVersion = true;
+            continue;
+        }
+
         bool skipLine = false;
         for (const QString &key : editedKeys) {
-            if (trimmedLine.startsWith(key)) {
+            if (indentation == 0 && trimmedLine.startsWith(key)) {
                 skipLine = true;
+                if (key == "built_from:"
+                    && valueAfterColon(trimmedLine).isEmpty()) {
+                    skipBuiltFromBlock = true;
+                    builtFromIndent = indentation;
+                }
                 break;
             }
         }
@@ -500,27 +542,42 @@ bool Project::updateCollectionMetadata(const QString &projectRootPath,
             continue;
 
         outputLines.append(line);
-        if (!wroteMetadata && trimmedLine.startsWith("class:")) {
+        if (!wroteMetadata && indentation == 0
+            && trimmedLine.startsWith("class:")) {
             sawClass = true;
             if (!cleanAlias.isEmpty()) {
                 outputLines.append(QStringLiteral("alias: %1").arg(
                     yamlString(cleanAlias)));
             }
-            if (!parent.isEmpty()) {
-                outputLines.append(QStringLiteral("parent: %1").arg(
-                    portableReference(projectRootPath, parent)));
+            if (!previousLevel.isEmpty()) {
+                outputLines.append(QStringLiteral("previous_level: %1").arg(
+                    yamlString(portableReference(
+                        projectRootPath, previousLevel))));
             }
-            if (!related.isEmpty()) {
-                outputLines.append(QStringLiteral("related: %1").arg(
-                    portableReference(projectRootPath, related)));
+            if (!imageFrame.isEmpty()) {
+                outputLines.append(QStringLiteral("image_frame: %1").arg(
+                    yamlString(portableReference(
+                        projectRootPath, imageFrame))));
+            }
+            if (!builtFrom.isEmpty()) {
+                QStringList portableSources;
+                portableSources.reserve(builtFrom.size());
+                for (const QString &source : builtFrom) {
+                    portableSources.append(portableReference(
+                        projectRootPath, source));
+                }
+                outputLines.append(QStringLiteral("built_from: %1").arg(
+                    yamlStringList(portableSources)));
             }
             if (!registry.isEmpty()) {
                 outputLines.append(QStringLiteral("registry: %1").arg(
-                    portableReference(projectRootPath, registry)));
+                    yamlString(portableReference(
+                        projectRootPath, registry))));
             }
             if (!script.isEmpty()) {
                 outputLines.append(QStringLiteral("script: %1").arg(
-                    portableReference(projectRootPath, script)));
+                    yamlString(portableReference(
+                        projectRootPath, script))));
             }
             wroteMetadata = true;
         }
@@ -531,6 +588,8 @@ bool Project::updateCollectionMetadata(const QString &projectRootPath,
             *errorMessage = "collection.yaml does not contain a class field.";
         return false;
     }
+    if (!sawSchemaVersion)
+        outputLines.prepend(QStringLiteral("schema_version: 2"));
 
     QSaveFile output(filePath);
     if (!output.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -602,8 +661,9 @@ bool Project::unregisterCollection(const QString &projectRootPath,
 bool Project::registerCollection(const QString &projectRootPath,
                                  const QString &dirPath,
                                  const QString &collectionClass,
-                                 const QString &parent,
-                                 const QString &related,
+                                 const QString &previousLevel,
+                                 const QString &imageFrame,
+                                 const QStringList &builtFrom,
                                  const QString &registry,
                                  const QString &script,
                                  const QString &alias,
@@ -637,22 +697,35 @@ bool Project::registerCollection(const QString &projectRootPath,
     }
 
     QTextStream stream(&file);
-    stream << "schema_version: 1\n";
+    stream << "schema_version: 2\n";
     stream << "class: " << collectionClass << "\n";
     if (!cleanAlias.isEmpty())
         stream << "alias: " << yamlString(cleanAlias) << "\n";
-    if (!parent.isEmpty())
-        stream << "parent: "
-               << portableReference(projectRootPath, parent) << "\n";
-    if (!related.isEmpty())
-        stream << "related: "
-               << portableReference(projectRootPath, related) << "\n";
+    if (!previousLevel.isEmpty())
+        stream << "previous_level: "
+               << yamlString(portableReference(
+                      projectRootPath, previousLevel)) << "\n";
+    if (!imageFrame.isEmpty())
+        stream << "image_frame: "
+               << yamlString(portableReference(
+                      projectRootPath, imageFrame)) << "\n";
+    if (!builtFrom.isEmpty()) {
+        QStringList portableSources;
+        portableSources.reserve(builtFrom.size());
+        for (const QString &source : builtFrom) {
+            portableSources.append(portableReference(
+                projectRootPath, source));
+        }
+        stream << "built_from: " << yamlStringList(portableSources) << "\n";
+    }
     if (!registry.isEmpty())
         stream << "registry: "
-               << portableReference(projectRootPath, registry) << "\n";
+               << yamlString(portableReference(
+                      projectRootPath, registry)) << "\n";
     if (!script.isEmpty())
         stream << "script: "
-               << portableReference(projectRootPath, script) << "\n";
+               << yamlString(portableReference(
+                      projectRootPath, script)) << "\n";
 
     return true;
 }
@@ -671,30 +744,52 @@ QVector<Collection> Project::discoverCollections(const QString &rootPath)
         if (!fi.exists())
             continue;
 
-        // Parse minimal YAML to extract class, registry, script
-        QFile file(yamlPath);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-            continue;
-
         Collection col;
         col.dirPath = QFileInfo(yamlPath).absolutePath();
         col.dirName = entry;
 
-        QTextStream stream(&file);
-        while (!stream.atEnd()) {
-            const QString line = stream.readLine();
-            if (line.startsWith("class:"))
-                col.collectionClass = valueAfterColon(line);
-            else if (line.startsWith("alias:"))
-                col.alias = yamlValueAfterColon(line);
-            else if (line.startsWith("parent:"))
-                col.parent = valueAfterColon(line);
-            else if (line.startsWith("related:"))
-                col.related = valueAfterColon(line);
-            else if (line.startsWith("registry:"))
-                col.registry = valueAfterColon(line);
-            else if (line.startsWith("script:"))
-                col.script = valueAfterColon(line);
+        // Keep unreadable or malformed descriptors discoverable so Check
+        // collections can explain the problem instead of hiding the folder.
+        QFile file(yamlPath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            col.parseError = "collection.yaml could not be read.";
+            result.append(col);
+            continue;
+        }
+
+        const QByteArray yamlBytes = file.readAll();
+        try {
+            const YAML::Node descriptor = YAML::Load(yamlBytes.constData());
+            if (descriptor["schema_version"])
+                col.schemaVersion = descriptor["schema_version"].as<int>();
+            col.collectionClass = yamlScalar(descriptor["class"]);
+            col.alias = yamlScalar(descriptor["alias"]);
+            col.previousLevel = yamlScalar(descriptor["previous_level"]);
+            col.imageFrame = yamlScalar(descriptor["image_frame"]);
+            col.registry = yamlScalar(descriptor["registry"]);
+            col.script = yamlScalar(descriptor["script"]);
+
+            const YAML::Node builtFrom = descriptor["built_from"];
+            if (builtFrom) {
+                if (!builtFrom.IsSequence()) {
+                    col.parseError = "built_from must be a YAML list.";
+                } else {
+                    for (const YAML::Node &source : builtFrom) {
+                        if (!source.IsScalar()) {
+                            col.parseError =
+                                "Every built_from entry must be a collection reference.";
+                            break;
+                        }
+                        col.builtFrom.append(yamlScalar(source));
+                    }
+                }
+            }
+            for (const QString &legacyField : {"parent", "related"}) {
+                if (descriptor[legacyField.toStdString()])
+                    col.unsupportedFields.append(legacyField);
+            }
+        } catch (const YAML::Exception &exception) {
+            col.parseError = QString::fromUtf8(exception.what());
         }
 
         result.append(col);
@@ -1075,8 +1170,8 @@ bool Project::writeReport(QString *errorMessage) const
     if (collections.isEmpty()) {
         stream << "No registered collections.\n";
     } else {
-        stream << "| Folder | Class | Relevant files | Parent | Related |\n";
-        stream << "| --- | --- | ---: | --- | --- |\n";
+        stream << "| Folder | Class | Relevant files | Previous level | Image frame | Built from |\n";
+        stream << "| --- | --- | ---: | --- | --- | --- |\n";
         for (const Collection &collection : collections) {
             QStringList filters = {"*"};
             if (collection.collectionClass == "point_collection")
@@ -1093,9 +1188,15 @@ bool Project::writeReport(QString *errorMessage) const
             stream << "| " << collectionName << " | "
                    << collection.collectionClass << " | "
                    << fileCount << " | "
-                   << (collection.parent.isEmpty() ? "-" : collection.parent)
+                   << (collection.previousLevel.isEmpty()
+                           ? "-" : markdownEscaped(collection.previousLevel))
                    << " | "
-                   << (collection.related.isEmpty() ? "-" : collection.related)
+                   << (collection.imageFrame.isEmpty()
+                           ? "-" : markdownEscaped(collection.imageFrame))
+                   << " | "
+                   << (collection.builtFrom.isEmpty()
+                           ? "-" : markdownEscaped(
+                                 collection.builtFrom.join(", ")))
                    << " |\n";
         }
     }
@@ -1135,8 +1236,8 @@ bool Project::writeReport(QString *errorMessage) const
                 stream << "_No leading comment header._\n\n";
             }
 
-            stream << "| Collection | Class | Parent | Related | Registry |\n";
-            stream << "| --- | --- | --- | --- | --- |\n";
+            stream << "| Collection | Class | Previous level | Image frame | Built from | Registry |\n";
+            stream << "| --- | --- | --- | --- | --- | --- |\n";
             QVector<Collection> scriptCollections = it.value();
             std::sort(
                 scriptCollections.begin(), scriptCollections.end(),
@@ -1147,11 +1248,17 @@ bool Project::writeReport(QString *errorMessage) const
             for (const Collection &collection : scriptCollections) {
                 stream << "| `" << collection.dirName << "` | "
                        << collection.collectionClass << " | "
-                       << (collection.parent.isEmpty()
-                               ? "-" : markdownEscaped(collection.parent))
+                       << (collection.previousLevel.isEmpty()
+                               ? "-" : markdownEscaped(
+                                     collection.previousLevel))
                        << " | "
-                       << (collection.related.isEmpty()
-                               ? "-" : markdownEscaped(collection.related))
+                       << (collection.imageFrame.isEmpty()
+                               ? "-" : markdownEscaped(
+                                     collection.imageFrame))
+                       << " | "
+                       << (collection.builtFrom.isEmpty()
+                               ? "-" : markdownEscaped(
+                                     collection.builtFrom.join(", ")))
                        << " | "
                        << (collection.registry.isEmpty()
                                ? "-" : QStringLiteral("`%1`").arg(
@@ -1457,6 +1564,16 @@ ProjectContentCleanPlan Project::buildContentCleanPlan() const
                    || collection.collectionClass == "segmentation_collection") {
             files = matchingRelativeFiles(
                 m_rootPath, collection.dirPath, imageFilters, false);
+            if (collection.collectionClass == "preprocessed_image_collection") {
+                const QFileInfo importDocumentation(
+                    QDir(collection.dirPath).filePath(
+                        "legacy_jpeg_import.md"));
+                if (importDocumentation.isFile()) {
+                    files.append(QDir::fromNativeSeparators(
+                        QDir(m_rootPath).relativeFilePath(
+                            importDocumentation.absoluteFilePath())));
+                }
+            }
         } else {
             continue;
         }

@@ -63,7 +63,7 @@ public:
 
     bool saveCsv(QString *errorMessage = nullptr);
 
-    void addPoint(double row, double col);
+    void addPoint(double x, double yDown);
 
     // Selection
     int selectedPointIndex() const { return m_primarySelectedPointIndex; }

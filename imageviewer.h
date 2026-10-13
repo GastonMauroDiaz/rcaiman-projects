@@ -26,6 +26,7 @@
 #include <QDropEvent>
 #include <QGraphicsView>
 #include <QKeyEvent>
+#include <QList>
 #include <QMutex>
 #include <QMouseEvent>
 #include <QPointF>
@@ -54,6 +55,16 @@ struct PixelInfo {
     QVector<QVariant> bandValues;
 };
 
+struct CursorCoordinateInfo {
+    bool valid = false;
+    double x = 0.0;
+    double y = 0.0;
+    double yDown = 0.0;
+    bool yAvailable = false;
+    int row = -1;
+    int col = -1;
+};
+
 class ImageViewer : public QGraphicsView
 {
     Q_OBJECT
@@ -73,6 +84,7 @@ public:
     bool zoomModeEnabled() const;
     double zoomPercent() const;
     void setZoomPercent(double percent);
+    void setActivePanelIndicator(bool active);
 
     void setPointEditEnabled(bool enabled);
     bool pointEditEnabled() const { return m_pointEditEnabled; }
@@ -87,11 +99,17 @@ public:
 
     LayerManager *layerManager() const { return m_layerManager; }
     ImageLayer *imageLayer() const { return m_imageLayer; }
+    QList<ImageLayer*> imageLayers() const;
+    ImageLayer *coordinateReferenceImage() const;
+    void setCoordinateReferenceImage(ImageLayer *layer);
     QString primarySourcePath() const { return m_primarySourcePath; }
-    void setPrimarySourcePath(const QString &path) { m_primarySourcePath = path; }
+    void setPrimarySourcePath(const QString &path);
 
 signals:
     void pixelInfoChanged(const PixelInfo &info);
+    void cursorCoordinateInfoChanged(const CursorCoordinateInfo &info);
+    void coordinateReferenceImagesChanged();
+    void coordinateReferenceImageChanged();
     void closeRequested();
     void reloadRequested();
     void activatedByClick();
@@ -137,6 +155,11 @@ private:
     bool handleTemporaryZoomKeyEvent(QEvent *event);
     bool handleZoomShortcutKeyEvent(QEvent *event);
     bool handleMaskBrushSizeKeyEvent(QKeyEvent *event);
+    void setSpacePanActive(bool active);
+    void setSplitSpacePanActive(bool active);
+    void setTemporaryZoomActive(bool active);
+    void setSplitTemporaryZoomActive(bool active);
+    void clearTemporaryInteractionState();
     void setPointItemsInteractionBlocked(bool blocked);
     void applyDragZoom(const QPoint &pos);
     bool paintMaskAtViewportPos(const QPoint &pos, bool erase);
@@ -145,6 +168,7 @@ private:
     void finishMaskStroke();
     void syncTransformToSiblings();
     void emitZoomPercentChanged();
+    void emitCursorCoordinateInfo(const QPoint &viewportPos);
     PointLayer *boxSelectionPointLayer() const;
     void beginPointBoxSelection(const QPoint &pos);
     void updatePointBoxSelection(const QPoint &pos);
@@ -166,14 +190,18 @@ private:
     bool m_hasLastMaskPaintScenePos = false;
     bool m_hasMaskLineAnchorScenePos = false;
     bool m_maskBrushPreviewVisible = false;
+    bool m_cursorInside = false;
+    bool m_coordinateReferenceInitialized = false;
     int m_maskBrushSize = 9;
     int m_maskBrushRepeatDirection = 0;
     int m_maskBrushRepeatCount = 0;
     PixelInfo m_lastPixelInfo;
     QPoint m_lastMousePos;
     QGraphicsScene *m_scene = nullptr;
+    QWidget *m_activePanelIndicatorOverlay = nullptr;
     LayerManager *m_layerManager = nullptr;
     ImageLayer *m_imageLayer = nullptr;
+    QPointer<ImageLayer> m_coordinateReferenceImage;
     QString m_primarySourcePath;
     QPointer<PointLayer> m_editingPointLayer;
     QPointer<ImageLayer> m_editingMaskLayer;

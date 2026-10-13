@@ -40,6 +40,7 @@
 #include "rawreader.h"
 #include "collectiondialog.h"
 #include "collectioneditdialog.h"
+#include "collectioncontract.h"
 #include "collectiongraphdialog.h"
 #include "collectionautoload.h"
 #include "collectionstyledialog.h"
@@ -121,6 +122,7 @@
 #include <QTextBrowser>
 #include <QTimer>
 #include <QToolButton>
+#include <QToolBar>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QDateTime>
@@ -344,22 +346,23 @@ QString readPreviewTextFile(const QString &filePath, bool *truncated)
 
 struct UnregisterImpact
 {
-    QVector<Collection> criticalParents;
-    QVector<Collection> optionalParents;
-    QVector<Collection> relatedLinks;
+    QString targetCollectionPath;
+    QVector<Collection> imageFrameLinks;
+    QVector<Collection> previousLevelLinks;
+    QVector<Collection> builtFromLinks;
     QVector<Collection> registryFields;
     QVector<Collection> scriptFields;
     QStringList scriptMentions;
 
-    bool hasCriticalParents() const
+    bool hasStructuralRelations() const
     {
-        return !criticalParents.isEmpty();
+        return !imageFrameLinks.isEmpty()
+            || !previousLevelLinks.isEmpty();
     }
 
     bool hasCleanableNonCriticalReferences() const
     {
-        return !optionalParents.isEmpty()
-            || !relatedLinks.isEmpty()
+        return !builtFromLinks.isEmpty()
             || !registryFields.isEmpty()
             || !scriptFields.isEmpty();
     }
@@ -369,7 +372,7 @@ struct UnregisterDecision
 {
     bool accepted = false;
     bool cleanNonCriticalReferences = false;
-    bool clearRequiredParents = true;
+    bool clearStructuralRelations = false;
 };
 
 UnregisterImpact analyzeUnregisterImpact(
@@ -378,6 +381,7 @@ UnregisterImpact analyzeUnregisterImpact(
     const QVector<Collection> &collections)
 {
     UnregisterImpact impact;
+    impact.targetCollectionPath = targetCollection.dirPath;
 
     for (const Collection &collection : collections) {
         if (normalizedAbsolutePathForComparison(collection.dirPath)
@@ -386,17 +390,21 @@ UnregisterImpact analyzeUnregisterImpact(
         }
 
         if (referenceEqualsDirectory(
-                projectRoot, collection.parent, targetCollection.dirPath)) {
-            if (collection.collectionClass == "point_collection"
-                || collection.collectionClass == "segmentation_collection") {
-                impact.criticalParents.append(collection);
-            } else {
-                impact.optionalParents.append(collection);
-            }
+                projectRoot, collection.imageFrame,
+                targetCollection.dirPath)) {
+            impact.imageFrameLinks.append(collection);
         }
         if (referenceEqualsDirectory(
-                projectRoot, collection.related, targetCollection.dirPath)) {
-            impact.relatedLinks.append(collection);
+                projectRoot, collection.previousLevel,
+                targetCollection.dirPath)) {
+            impact.previousLevelLinks.append(collection);
+        }
+        for (const QString &source : collection.builtFrom) {
+            if (referenceEqualsDirectory(
+                    projectRoot, source, targetCollection.dirPath)) {
+                impact.builtFromLinks.append(collection);
+                break;
+            }
         }
         if (referenceIsInsideDirectory(
                 projectRoot, collection.registry, targetCollection.dirPath)) {
@@ -417,16 +425,16 @@ QString unregisterImpactReport(const UnregisterImpact &impact)
     QStringList lines;
     appendImpactSection(
         &lines,
-        "Collections that use this folder as a required parent:",
-        collectionImpactLabels(impact.criticalParents));
+        "Collections that use this folder as their image frame:",
+        collectionImpactLabels(impact.imageFrameLinks));
     appendImpactSection(
         &lines,
-        "Collections that use this folder as an optional parent:",
-        collectionImpactLabels(impact.optionalParents));
+        "Preprocessed collections that declare this as their previous level:",
+        collectionImpactLabels(impact.previousLevelLinks));
     appendImpactSection(
         &lines,
-        "Collections that use this folder as related:",
-        collectionImpactLabels(impact.relatedLinks));
+        "Collections built from this folder:",
+        collectionImpactLabels(impact.builtFromLinks));
     appendImpactSection(
         &lines,
         "Collections with registry files inside this folder:",
@@ -485,39 +493,41 @@ UnregisterDecision confirmUnregisterCollection(
             &dialog);
         cleanNonCritical->setChecked(true);
         cleanNonCritical->setToolTip(
-            "Clears optional parent, related, registry, and script fields "
-            "that point to this folder. Scripts themselves are not edited.");
+            "Removes this folder from built-from lists and clears registry "
+            "or script fields that point inside it. Scripts themselves are "
+            "not edited.");
         layout->addWidget(cleanNonCritical);
     }
 
-    QRadioButton *clearRequired = nullptr;
-    QRadioButton *keepRequired = nullptr;
-    if (impact.hasCriticalParents()) {
-        auto *criticalGroup = new QGroupBox("Required parent links", &dialog);
+    QRadioButton *clearStructural = nullptr;
+    QRadioButton *keepStructural = nullptr;
+    if (impact.hasStructuralRelations()) {
+        auto *criticalGroup = new QGroupBox(
+            "Image-frame and preprocessing-level relations", &dialog);
         auto *criticalLayout = new QVBoxLayout(criticalGroup);
         auto *criticalText = new QLabel(
-            "Some point or segmentation collections require a valid parent. "
-            "After unregistering, they will need attention. Use Edit "
-            "collection... to assign a new valid parent.",
+            "These structural relations need attention after unregistering. "
+            "Keeping them makes the break explicit in Check collections; "
+            "clearing a previous-level relation promotes that collection to L0.",
             criticalGroup);
         criticalText->setWordWrap(true);
         criticalLayout->addWidget(criticalText);
 
-        clearRequired = new QRadioButton(
-            "Clear required parent fields",
+        keepStructural = new QRadioButton(
+            "Keep structural relation paths",
             criticalGroup);
-        clearRequired->setToolTip(
-            "The dependent collections become explicitly orphaned until "
-            "you assign a new parent.");
-        keepRequired = new QRadioButton(
-            "Keep existing parent paths",
+        keepStructural->setToolTip(
+            "Check collections will report the unresolved image-frame or "
+            "previous-level references.");
+        clearStructural = new QRadioButton(
+            "Clear structural relations",
             criticalGroup);
-        keepRequired->setToolTip(
-            "The dependent collections keep pointing to this folder, but it "
-            "will no longer be a registered collection.");
-        clearRequired->setChecked(true);
-        criticalLayout->addWidget(clearRequired);
-        criticalLayout->addWidget(keepRequired);
+        clearStructural->setToolTip(
+            "Image-frame fields become empty. Previous-level collections "
+            "become L0 and must be reviewed.");
+        keepStructural->setChecked(true);
+        criticalLayout->addWidget(keepStructural);
+        criticalLayout->addWidget(clearStructural);
         layout->addWidget(criticalGroup);
     }
 
@@ -547,15 +557,15 @@ UnregisterDecision confirmUnregisterCollection(
     decision.accepted = true;
     decision.cleanNonCriticalReferences =
         cleanNonCritical && cleanNonCritical->isChecked();
-    decision.clearRequiredParents =
-        !clearRequired || clearRequired->isChecked();
+    decision.clearStructuralRelations =
+        clearStructural && clearStructural->isChecked();
     return decision;
 }
 
 void queueCollectionMetadataUpdate(QVector<Collection> *updates,
                                    const Collection &collection,
-                                   bool clearParent,
-                                   bool clearRelated,
+                                   bool clearPreviousLevel,
+                                   bool clearImageFrame,
                                    bool clearRegistry,
                                    bool clearScript)
 {
@@ -579,10 +589,10 @@ void queueCollectionMetadataUpdate(QVector<Collection> *updates,
     }
 
     Collection &updated = (*updates)[index];
-    if (clearParent)
-        updated.parent.clear();
-    if (clearRelated)
-        updated.related.clear();
+    if (clearPreviousLevel)
+        updated.previousLevel.clear();
+    if (clearImageFrame)
+        updated.imageFrame.clear();
     if (clearRegistry)
         updated.registry.clear();
     if (clearScript)
@@ -600,21 +610,31 @@ bool applyUnregisterDependencyCleanup(
         *updatedCollections = 0;
 
     QVector<Collection> updates;
-    if (decision.clearRequiredParents) {
-        for (const Collection &collection : impact.criticalParents) {
+    if (decision.clearStructuralRelations) {
+        for (const Collection &collection : impact.previousLevelLinks) {
             queueCollectionMetadataUpdate(
                 &updates, collection, true, false, false, false);
+        }
+        for (const Collection &collection : impact.imageFrameLinks) {
+            queueCollectionMetadataUpdate(
+                &updates, collection, false, true, false, false);
         }
     }
 
     if (decision.cleanNonCriticalReferences) {
-        for (const Collection &collection : impact.optionalParents) {
+        for (const Collection &collection : impact.builtFromLinks) {
+            Collection updated = collection;
+            updated.builtFrom.erase(
+                std::remove_if(
+                    updated.builtFrom.begin(), updated.builtFrom.end(),
+                    [&projectRoot, &impact](const QString &source) {
+                        return referenceEqualsDirectory(
+                            projectRoot, source,
+                            impact.targetCollectionPath);
+                    }),
+                updated.builtFrom.end());
             queueCollectionMetadataUpdate(
-                &updates, collection, true, false, false, false);
-        }
-        for (const Collection &collection : impact.relatedLinks) {
-            queueCollectionMetadataUpdate(
-                &updates, collection, false, true, false, false);
+                &updates, updated, false, false, false, false);
         }
         for (const Collection &collection : impact.registryFields) {
             queueCollectionMetadataUpdate(
@@ -632,8 +652,9 @@ bool applyUnregisterDependencyCleanup(
                 projectRoot,
                 collection.dirPath,
                 collection.alias,
-                collection.parent,
-                collection.related,
+                collection.previousLevel,
+                collection.imageFrame,
+                collection.builtFrom,
                 collection.registry,
                 collection.script,
                 errorMessage)) {
@@ -715,283 +736,24 @@ int collectionIndexByDirectory(const QString &projectRoot,
     return -1;
 }
 
-void addCollectionCheckIssue(QVector<CollectionCheckIssue> *issues,
-                             const Collection &collection,
-                             const QString &message)
-{
-    if (!issues)
-        return;
-    issues->append({collectionDisplayLabel(collection), message});
-}
-
-bool collectionClassIsKnown(const QString &collectionClass)
-{
-    return QStringList{
-        "preprocessed_image_collection",
-        "processed_image_collection",
-        "point_collection",
-        "segmentation_collection",
-        "other"
-    }.contains(collectionClass, Qt::CaseInsensitive);
-}
-
-QStringList compatibleParentClassesForCheck(const QString &collectionClass)
-{
-    if (collectionClass == "processed_image_collection"
-        || collectionClass == "point_collection"
-        || collectionClass == "segmentation_collection") {
-        return {"preprocessed_image_collection", "processed_image_collection"};
-    }
-    return {};
-}
-
-QStringList compatibleRelatedClassesForCheck(const QString &collectionClass)
-{
-    if (collectionClass == "point_collection")
-        return {"segmentation_collection"};
-    return {};
-}
-
-void checkCollectionReferenceToCollection(
-    const QString &projectRoot,
-    const QVector<Collection> &collections,
-    const Collection &collection,
-    const QString &fieldName,
-    const QString &reference,
-    const QStringList &allowedClasses,
-    bool required,
-    CollectionCheckResult *result)
-{
-    if (!result)
-        return;
-
-    if (reference.trimmed().isEmpty()) {
-        if (required) {
-            addCollectionCheckIssue(
-                &result->errors,
-                collection,
-                QStringLiteral("%1 is required but empty.").arg(fieldName));
-        }
-        return;
-    }
-
-    const QString resolvedPath =
-        Project::resolveReference(projectRoot, reference);
-    const int referencedIndex =
-        collectionIndexByPath(collections, resolvedPath);
-    if (referencedIndex < 0) {
-        const QFileInfo resolvedInfo(resolvedPath);
-        const QString message = resolvedInfo.exists()
-            ? QStringLiteral(
-                  "%1 points to \"%2\", but that folder is not registered "
-                  "as a collection.")
-                  .arg(fieldName, QDir::toNativeSeparators(resolvedPath))
-            : QStringLiteral(
-                  "%1 points to missing folder \"%2\".")
-                  .arg(fieldName, QDir::toNativeSeparators(resolvedPath));
-        if (required) {
-            addCollectionCheckIssue(&result->errors, collection, message);
-        } else {
-            addCollectionCheckIssue(&result->warnings, collection, message);
-        }
-        return;
-    }
-
-    const Collection &referenced = collections.at(referencedIndex);
-    if (normalizedAbsolutePathForComparison(referenced.dirPath)
-        == normalizedAbsolutePathForComparison(collection.dirPath)) {
-        addCollectionCheckIssue(
-            required ? &result->errors : &result->warnings,
-            collection,
-            QStringLiteral("%1 points to the collection itself.").arg(
-                fieldName));
-        return;
-    }
-
-    if (!allowedClasses.contains(
-            referenced.collectionClass, Qt::CaseInsensitive)) {
-        const QString message = QStringLiteral(
-            "%1 points to %2, but expected %3.")
-            .arg(fieldName,
-                 collectionDisplayLabel(referenced),
-                 allowedClasses.join(", "));
-        if (required) {
-            addCollectionCheckIssue(&result->errors, collection, message);
-        } else {
-            addCollectionCheckIssue(&result->warnings, collection, message);
-        }
-    }
-}
-
-void checkCollectionReferenceToFile(
-    const QString &projectRoot,
-    const Collection &collection,
-    const QString &fieldName,
-    const QString &reference,
-    CollectionCheckResult *result)
-{
-    if (!result || reference.trimmed().isEmpty())
-        return;
-
-    const QString resolvedPath =
-        Project::resolveReference(projectRoot, reference);
-    const QFileInfo info(resolvedPath);
-    if (!info.exists()) {
-        addCollectionCheckIssue(
-            &result->warnings,
-            collection,
-            QStringLiteral("%1 points to missing file \"%2\".")
-                .arg(fieldName, QDir::toNativeSeparators(resolvedPath)));
-        return;
-    }
-    if (!info.isFile()) {
-        addCollectionCheckIssue(
-            &result->warnings,
-            collection,
-            QStringLiteral("%1 points to \"%2\", but it is not a file.")
-                .arg(fieldName, QDir::toNativeSeparators(resolvedPath)));
-    }
-}
-
 CollectionCheckResult checkRegisteredCollections(
     const QString &projectRoot,
     const QVector<Collection> &collections)
 {
     CollectionCheckResult result;
-    result.checkedCollections = collections.size();
-
-    for (const Collection &collection : collections) {
-        const QFileInfo collectionDir(collection.dirPath);
-        const QFileInfo yamlFile(
-            QDir(collection.dirPath).filePath("collection.yaml"));
-
-        if (!collectionDir.exists() || !collectionDir.isDir()) {
-            addCollectionCheckIssue(
-                &result.errors,
-                collection,
-                "Collection folder does not exist.");
-            continue;
-        }
-        if (!yamlFile.exists() || !yamlFile.isFile()) {
-            addCollectionCheckIssue(
-                &result.errors,
-                collection,
-                "collection.yaml is missing.");
-        }
-
-        if (collection.collectionClass.trimmed().isEmpty()) {
-            addCollectionCheckIssue(
-                &result.errors,
-                collection,
-                "collection.yaml does not declare a class.");
-            continue;
-        }
-        if (!collectionClassIsKnown(collection.collectionClass)) {
-            addCollectionCheckIssue(
-                &result.errors,
-                collection,
-                QStringLiteral("Unknown collection class \"%1\".")
-                    .arg(collection.collectionClass));
-            continue;
-        }
-
-        QString aliasError;
-        if (!Project::collectionAliasIsSupported(
-                collection.alias, &aliasError)) {
-            addCollectionCheckIssue(
-                &result.warnings,
-                collection,
-                QStringLiteral("Alias is not supported: %1").arg(aliasError));
-        }
-
-        const bool parentRequired =
-            collection.collectionClass == "point_collection"
-            || collection.collectionClass == "segmentation_collection";
-        const QStringList parentClasses =
-            compatibleParentClassesForCheck(collection.collectionClass);
-        if (!parentClasses.isEmpty() || parentRequired) {
-            checkCollectionReferenceToCollection(
-                projectRoot,
-                collections,
-                collection,
-                "Parent",
-                collection.parent,
-                parentClasses,
-                parentRequired,
-                &result);
-        } else if (!collection.parent.trimmed().isEmpty()) {
-            addCollectionCheckIssue(
-                &result.warnings,
-                collection,
-                "Parent is set, but this collection class does not use it.");
-        }
-
-        const QStringList relatedClasses =
-            compatibleRelatedClassesForCheck(collection.collectionClass);
-        if (!relatedClasses.isEmpty()) {
-            checkCollectionReferenceToCollection(
-                projectRoot,
-                collections,
-                collection,
-                "Related",
-                collection.related,
-                relatedClasses,
-                false,
-                &result);
-        } else if (!collection.related.trimmed().isEmpty()) {
-            addCollectionCheckIssue(
-                &result.warnings,
-                collection,
-                "Related is set, but this collection class does not use it.");
-        }
-
-        if (collection.collectionClass == "preprocessed_image_collection"
-            || collection.collectionClass == "other") {
-            checkCollectionReferenceToFile(
-                projectRoot,
-                collection,
-                "Registry",
-                collection.registry,
-                &result);
-        } else if (!collection.registry.trimmed().isEmpty()) {
-            addCollectionCheckIssue(
-                &result.warnings,
-                collection,
-                "Registry is set, but this collection class does not use it.");
-        }
-
-        checkCollectionReferenceToFile(
-            projectRoot, collection, "Script", collection.script, &result);
+    const CollectionContractAnalysis analysis =
+        CollectionContract::analyze(projectRoot, collections);
+    result.checkedCollections = analysis.checkedCollections;
+    for (const CollectionContractIssue &issue : analysis.issues) {
+        CollectionCheckIssue checkIssue{
+            issue.collectionLabel,
+            issue.message
+        };
+        if (issue.severity == CollectionContractSeverity::Error)
+            result.errors.append(checkIssue);
+        else
+            result.warnings.append(checkIssue);
     }
-
-    std::sort(result.errors.begin(), result.errors.end(),
-              [](const CollectionCheckIssue &left,
-                 const CollectionCheckIssue &right) {
-                  const int collectionCompare = QString::compare(
-                      left.collectionLabel,
-                      right.collectionLabel,
-                      Qt::CaseInsensitive);
-                  if (collectionCompare != 0)
-                      return collectionCompare < 0;
-                  return QString::compare(
-                      left.message,
-                      right.message,
-                      Qt::CaseInsensitive) < 0;
-              });
-    std::sort(result.warnings.begin(), result.warnings.end(),
-              [](const CollectionCheckIssue &left,
-                 const CollectionCheckIssue &right) {
-                  const int collectionCompare = QString::compare(
-                      left.collectionLabel,
-                      right.collectionLabel,
-                      Qt::CaseInsensitive);
-                  if (collectionCompare != 0)
-                      return collectionCompare < 0;
-                  return QString::compare(
-                      left.message,
-                      right.message,
-                      Qt::CaseInsensitive) < 0;
-              });
 
     return result;
 }
@@ -1069,12 +831,19 @@ bool collectionReferenceTouchesDirectory(const QString &projectRoot,
 {
     QStringList touched;
     if (referenceIsInsideDirectory(
-            projectRoot, collection.parent, directoryPath)) {
-        touched.append("parent");
+            projectRoot, collection.previousLevel, directoryPath)) {
+        touched.append("previous_level");
     }
     if (referenceIsInsideDirectory(
-            projectRoot, collection.related, directoryPath)) {
-        touched.append("related");
+            projectRoot, collection.imageFrame, directoryPath)) {
+        touched.append("image_frame");
+    }
+    for (const QString &source : collection.builtFrom) {
+        if (referenceIsInsideDirectory(
+                projectRoot, source, directoryPath)) {
+            touched.append("built_from");
+            break;
+        }
     }
     if (referenceIsInsideDirectory(
             projectRoot, collection.registry, directoryPath)) {
@@ -1363,12 +1132,19 @@ bool updateCollectionReferencesAfterRename(
             collection.dirName = newName;
         }
 
-        const QString parent = remapReferenceInsideDirectory(
-            projectRoot, collection.parent, oldDirectoryPath,
+        const QString previousLevel = remapReferenceInsideDirectory(
+            projectRoot, collection.previousLevel, oldDirectoryPath,
             newDirectoryPath);
-        const QString related = remapReferenceInsideDirectory(
-            projectRoot, collection.related, oldDirectoryPath,
+        const QString imageFrame = remapReferenceInsideDirectory(
+            projectRoot, collection.imageFrame, oldDirectoryPath,
             newDirectoryPath);
+        QStringList builtFrom;
+        builtFrom.reserve(collection.builtFrom.size());
+        for (const QString &source : collection.builtFrom) {
+            builtFrom.append(remapReferenceInsideDirectory(
+                projectRoot, source, oldDirectoryPath,
+                newDirectoryPath));
+        }
         const QString registry = remapReferenceInsideDirectory(
             projectRoot, collection.registry, oldDirectoryPath,
             newDirectoryPath);
@@ -1376,8 +1152,9 @@ bool updateCollectionReferencesAfterRename(
             projectRoot, collection.script, oldDirectoryPath,
             newDirectoryPath);
 
-        if (parent == collection.parent
-            && related == collection.related
+        if (previousLevel == collection.previousLevel
+            && imageFrame == collection.imageFrame
+            && builtFrom == collection.builtFrom
             && registry == collection.registry
             && script == collection.script) {
             continue;
@@ -1387,8 +1164,9 @@ bool updateCollectionReferencesAfterRename(
                 projectRoot,
                 collection.dirPath,
                 collection.alias,
-                parent,
-                related,
+                previousLevel,
+                imageFrame,
+                builtFrom,
                 registry,
                 script,
                 errorMessage)) {
@@ -1481,29 +1259,18 @@ QVector<MaskCandidate> compatibleMaskCandidates(
     const QString &baseName = {})
 {
     QVector<MaskCandidate> candidates;
-    const QString pointParent =
-        normalizedProjectReference(projectRoot, pointCollection.parent);
-    const QString pointRelated =
-        normalizedProjectReference(projectRoot, pointCollection.related);
-    if (pointParent.isEmpty() && pointRelated.isEmpty())
+    const QString pointFrame =
+        normalizedProjectReference(projectRoot, pointCollection.imageFrame);
+    if (pointFrame.isEmpty())
         return candidates;
 
     for (const Collection &collection : collections) {
         if (collection.collectionClass != "segmentation_collection")
             continue;
 
-        const QString maskParent =
-            normalizedProjectReference(projectRoot, collection.parent);
-        const QString maskCollectionPath =
-            normalizedAbsolutePathForComparison(collection.dirPath);
-        const bool relatedMatch =
-            !pointRelated.isEmpty()
-            && pointRelated == maskCollectionPath;
-        const bool parentMatch =
-            !pointParent.isEmpty()
-            && !maskParent.isEmpty()
-            && maskParent == pointParent;
-        if (!relatedMatch && !parentMatch)
+        const QString maskFrame =
+            normalizedProjectReference(projectRoot, collection.imageFrame);
+        if (maskFrame.isEmpty() || maskFrame != pointFrame)
             continue;
 
         QVector<QString> files;
@@ -2698,7 +2465,7 @@ void drawProjectExplorerRowGuide(QPainter *painter,
 void drawProjectFileDetail(QPainter *painter,
                            const QRect &rowRect,
                            const QString &text,
-                           bool selected)
+                           const QColor &textColor)
 {
     if (text.isEmpty())
         return;
@@ -2715,7 +2482,7 @@ void drawProjectFileDetail(QPainter *painter,
     if (font.pointSize() > 0)
         font.setPointSize(qMax(1, font.pointSize() - 1));
     painter->setFont(font);
-    painter->setPen(selected ? QColor("#ffffff") : QColor("#6b7280"));
+    painter->setPen(textColor);
     painter->drawText(textRect,
                       Qt::AlignRight | Qt::AlignVCenter,
                       text);
@@ -2750,12 +2517,14 @@ public:
             : imageDimensions;
         const bool showDetail = !detail.isEmpty()
             && option.rect.width() >= ProjectFileDetailMinimumRowWidth;
+        const bool selected =
+            option.state.testFlag(QStyle::State_Selected);
 
         QStyleOptionViewItem contentOption = option;
         contentOption.rect.setRight(
             option.rect.right() - ProjectFileMarkAreaWidth
             - (showDetail ? ProjectFileDetailAreaWidth : 0));
-        if (option.state.testFlag(QStyle::State_Selected)) {
+        if (selected) {
             painter->fillRect(option.rect, option.palette.highlight());
         }
         QStyledItemDelegate::paint(painter, contentOption, index);
@@ -2764,12 +2533,14 @@ public:
                 painter,
                 option.rect,
                 detail,
-                option.state.testFlag(QStyle::State_Selected));
+                selected
+                    ? option.palette.highlightedText().color()
+                    : QColor("#6b7280"));
         }
         drawProjectExplorerRowGuide(
             painter,
             option.rect,
-            option.state.testFlag(QStyle::State_Selected));
+            selected);
         drawProjectFileMark(
             painter,
             option.rect,
@@ -2797,9 +2568,9 @@ QString pointCsvContractMessage(const QString &errorMessage)
         "This file is not a valid point CSV for rcaiman-projects.\n\n"
         "Point CSV contract:\n"
         "- The file must be a .csv file.\n"
-        "- The first two columns must be row,col.\n"
-        "- Quoted headers such as \"row\",\"col\" are accepted.\n"
-        "- row and col values must be numeric.\n"
+        "- The first two columns must be x,y_down.\n"
+        "- Quoted headers such as \"x\",\"y_down\" are accepted.\n"
+        "- x and y_down values must be numeric.\n"
         "- Extra columns are allowed and are loaded as attributes.\n"
         "- Empty CSV files are allowed if they contain a valid header.\n\n"
         "Parser error:\n%1").arg(errorMessage);
@@ -3073,11 +2844,94 @@ MainWindow::MainWindow(QWidget *parent)
     , m_projectFileSystemModel(new ProjectFileSystemModel(this))
     , m_projectSortProxy(new ProjectExplorerSortProxyModel(this))
     , m_artifactWatcher(new QFileSystemWatcher(this))
+    , m_projectExplorerCountWatcher(new QFileSystemWatcher(this))
+    , m_projectExplorerCountRefreshTimer(new QTimer(this))
 {
     ui->setupUi(this);
     statusBar()->setFixedHeight(30);
+
+    auto *statusRightPanel = new QWidget(statusBar());
+    auto *statusRightLayout = new QHBoxLayout(statusRightPanel);
+    statusRightLayout->setContentsMargins(0, 0, 0, 0);
+    statusRightLayout->setSpacing(8);
+
+    auto *activitySeparator = new QFrame(statusRightPanel);
+    activitySeparator->setFrameShape(QFrame::VLine);
+    activitySeparator->setFrameShadow(QFrame::Sunken);
+
+    auto *activitySlot = new QWidget(statusRightPanel);
+    activitySlot->setFixedWidth(220);
+    auto *activityLayout = new QHBoxLayout(activitySlot);
+    activityLayout->setContentsMargins(0, 2, 0, 2);
+    m_statusProgressBar = new QProgressBar(activitySlot);
+    m_statusProgressBar->setTextVisible(false);
+    m_statusProgressBar->hide();
+    activityLayout->addWidget(m_statusProgressBar);
+
+    auto *statusSeparator = new QFrame(statusRightPanel);
+    statusSeparator->setFrameShape(QFrame::VLine);
+    statusSeparator->setFrameShadow(QFrame::Sunken);
+
+    auto *referenceSlot = new QWidget(statusRightPanel);
+    referenceSlot->setFixedWidth(320);
+    auto *referenceLayout = new QHBoxLayout(referenceSlot);
+    referenceLayout->setContentsMargins(0, 0, 0, 0);
+    referenceLayout->setSpacing(4);
+    m_coordinateReferenceLabel = new QLabel("Reference image:", referenceSlot);
+    m_coordinateReferenceCombo = new QComboBox(referenceSlot);
+    m_coordinateReferenceCombo->setSizeAdjustPolicy(
+        QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_coordinateReferenceCombo->setMinimumContentsLength(16);
+    m_coordinateReferenceCombo->setToolTip(
+        QStringLiteral(
+            "Image height used to convert y_down into y. The reference "
+            "belongs to this viewer."));
+    m_coordinateReferenceLabel->hide();
+    m_coordinateReferenceCombo->hide();
+    referenceLayout->addWidget(m_coordinateReferenceLabel);
+    referenceLayout->addWidget(m_coordinateReferenceCombo, 1);
+
+    auto *coordinateSeparator = new QFrame(statusRightPanel);
+    coordinateSeparator->setFrameShape(QFrame::VLine);
+    coordinateSeparator->setFrameShadow(QFrame::Sunken);
+
+    m_coordinateStatusLabel = new QLabel(statusRightPanel);
+    m_coordinateStatusLabel->setFixedWidth(420);
+    m_coordinateStatusLabel->setAlignment(
+        Qt::AlignLeft | Qt::AlignVCenter);
+    m_coordinateStatusLabel->setToolTip(
+        QStringLiteral(
+            "Continuous coordinates: x increases rightward; y increases "
+            "upward; y_down increases downward. Row and col are 1-based "
+            "cell indices."));
+    statusRightLayout->addWidget(activitySeparator);
+    statusRightLayout->addWidget(activitySlot);
+    statusRightLayout->addWidget(statusSeparator);
+    statusRightLayout->addWidget(referenceSlot);
+    statusRightLayout->addWidget(coordinateSeparator);
+    statusRightLayout->addWidget(m_coordinateStatusLabel);
+    statusBar()->addPermanentWidget(statusRightPanel);
+    connect(m_coordinateReferenceCombo,
+            QOverload<int>::of(&QComboBox::activated),
+            this,
+            [this](int index) {
+                ImageViewer *viewer = currentImageViewer();
+                if (!viewer)
+                    return;
+
+                ImageLayer *reference = nullptr;
+                if (index > 0
+                    && index - 1 < m_coordinateReferenceImages.size()) {
+                    reference = m_coordinateReferenceImages.at(index - 1);
+                }
+                viewer->setCoordinateReferenceImage(reference);
+            });
     setWindowIcon(QIcon(":/branding/rcaiman-icon.png"));
     qApp->setWindowIcon(windowIcon());
+    ui->projectToolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    auto *projectToolBarSpacer = new QWidget(this);
+    projectToolBarSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    ui->projectToolBar->addWidget(projectToolBarSpacer);
     ui->actionPan->setToolTip(ShortcutText::panTooltip());
     ui->actionZoom->setToolTip(ShortcutText::zoomTooltip());
     ui->actionEditPoints->setToolTip(ShortcutText::editPointsTooltip());
@@ -3086,6 +2940,16 @@ MainWindow::MainWindow(QWidget *parent)
             this, [this](const QString &path) {
                 scheduleArtifactReload(path);
             });
+    connect(m_projectExplorerCountWatcher,
+            &QFileSystemWatcher::directoryChanged,
+            this,
+            &MainWindow::scheduleProjectExplorerCountRefresh);
+    m_projectExplorerCountRefreshTimer->setSingleShot(true);
+    m_projectExplorerCountRefreshTimer->setInterval(400);
+    connect(m_projectExplorerCountRefreshTimer,
+            &QTimer::timeout,
+            this,
+            &MainWindow::flushProjectExplorerCountRefreshes);
 
     m_projectFileSystemModel->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     m_projectSortProxy->setSourceModel(m_projectFileSystemModel);
@@ -3213,12 +3077,17 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::checkCollections);
     connect(m_starredOnlyCheck, &QCheckBox::toggled,
             this, [this](bool checked) {
+                const ProjectExplorerViewState viewState =
+                    projectExplorerViewState();
                 auto *proxy = static_cast<ProjectExplorerSortProxyModel*>(
                     m_projectSortProxy);
                 proxy->setStarredOnly(checked);
                 refreshProjectExplorerRootIndex();
-                updateProjectExplorerStarredEmptyMessage();
                 saveProjectExplorerState();
+                QTimer::singleShot(0, this, [this, viewState]() {
+                    restoreProjectExplorerViewState(viewState);
+                    updateProjectExplorerStarredEmptyMessage();
+                });
                 if (checked && m_projectFileMarks.isEmpty()) {
                     statusBar()->showMessage(
                         "No starred files or folders",
@@ -3532,6 +3401,25 @@ MainWindow::MainWindow(QWidget *parent)
             &QAction::toggled,
             this,
             &MainWindow::onSyncSplitZoomToggled);
+
+    m_syncZoomCheck = new QCheckBox("Sync zoom", ui->toolBar);
+    m_syncZoomCheck->setChecked(ui->actionSyncSplitZoom->isChecked());
+    const QList<QAction*> interactionActions = ui->toolBar->actions();
+    const int syncActionIndex =
+        interactionActions.indexOf(ui->actionSyncSplitViews);
+    QAction *syncZoomInsertBefore =
+        syncActionIndex >= 0
+            && syncActionIndex + 1 < interactionActions.size()
+        ? interactionActions.at(syncActionIndex + 1)
+        : nullptr;
+    if (syncZoomInsertBefore) {
+        ui->toolBar->insertWidget(syncZoomInsertBefore, m_syncZoomCheck);
+    } else {
+        ui->toolBar->addWidget(m_syncZoomCheck);
+    }
+    connect(m_syncZoomCheck, &QCheckBox::toggled,
+            ui->actionSyncSplitZoom, &QAction::setChecked);
+    updateSyncControls(nullptr);
 
     connect(ui->actionResetWindowLayout,
             &QAction::triggered,
@@ -4222,7 +4110,7 @@ void MainWindow::cleanProject()
     if (selectedFiles <= 0)
         return;
 
-    const auto answer = QMessageBox::question(
+    const auto answer = QMessageBox::warning(
         this,
         "Clean Project",
         QStringLiteral(
@@ -4237,6 +4125,8 @@ void MainWindow::cleanProject()
     if (answer != QMessageBox::Yes)
         return;
 
+    const ProjectExplorerViewState viewState =
+        projectExplorerViewState();
     QString errorMessage;
     if (!m_project.applyContentCleanPlan(selectedPlan, &errorMessage)) {
         QMessageBox::warning(
@@ -4249,6 +4139,9 @@ void MainWindow::cleanProject()
     }
 
     updateProjectExplorer();
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
     updateProjectActions();
     statusBar()->showMessage(
         QStringLiteral("Cleaned %1 file(s) from %2 folder(s)")
@@ -4335,7 +4228,7 @@ void MainWindow::createProjectReport()
 
     const QString reportPath = m_project.reportFilePath();
     if (QFileInfo::exists(reportPath)) {
-        const auto answer = QMessageBox::question(
+        const auto answer = QMessageBox::warning(
             this, "Project Report",
             "Replace the existing project report?",
             QMessageBox::Yes | QMessageBox::No,
@@ -4454,17 +4347,12 @@ void MainWindow::extractRawData()
             extractionJobs.append({rawPath, tiffPath});
     }
 
-    auto *progress = new QProgressBar(statusBar());
-    progress->setMinimum(0);
-    progress->setMaximum(qMax(1, extractionJobs.size() + 1));
-    progress->setValue(0);
-    progress->setTextVisible(true);
-    progress->setMinimumWidth(180);
-    progress->setFormat("Preparing...");
-    statusBar()->addPermanentWidget(progress);
-    auto finishProgress = [this, progress]() {
-        statusBar()->removeWidget(progress);
-        progress->deleteLater();
+    beginStatusProgress(
+        QStringLiteral("Preparing raw extraction..."),
+        qMax(1, extractionJobs.size() + 1));
+    m_statusProgressBar->setFormat("Preparing...");
+    auto finishProgress = [this]() {
+        endStatusProgress();
         updateProjectActions();
     };
 
@@ -4476,8 +4364,8 @@ void MainWindow::extractRawData()
         const QFileInfo fi(job.rawPath);
         ++processedCount;
 
-        progress->setValue(processedCount - 1);
-        progress->setFormat(
+        m_statusProgressBar->setValue(processedCount - 1);
+        m_statusProgressBar->setFormat(
             QStringLiteral("RAW %1/%2")
                 .arg(processedCount)
                 .arg(extractionJobs.size()));
@@ -4495,12 +4383,12 @@ void MainWindow::extractRawData()
         else
             ++failCount;
 
-        progress->setValue(processedCount);
+        m_statusProgressBar->setValue(processedCount);
         QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
 
-    progress->setValue(extractionJobs.size());
-    progress->setFormat("Metadata");
+    m_statusProgressBar->setValue(extractionJobs.size());
+    m_statusProgressBar->setFormat("Metadata");
     statusBar()->showMessage(
         "Writing acquisition metadata sidecars...", 0);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -4509,7 +4397,7 @@ void MainWindow::extractRawData()
     QString metadataError;
     const bool metadataWritten = AcquisitionMetadata::regenerate(
         m_project.rootPath(), &metadataSummary, &metadataError);
-    progress->setValue(progress->maximum());
+    m_statusProgressBar->setValue(m_statusProgressBar->maximum());
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
     finishProgress();
@@ -4606,12 +4494,14 @@ void MainWindow::importLegacyJpegs()
     const QStringList conflicts =
         LegacyJpegImporter::conflictingOutputs(options);
     if (!conflicts.isEmpty()) {
-        const auto reply = QMessageBox::question(
+        const auto reply = QMessageBox::warning(
             this,
             "Import legacy JPEGs",
             QStringLiteral(
-                "%1 output file(s) already exist in the destination collection.\n\n"
-                "Replace existing TIFF/TSV files?")
+                "%1 generated file(s) already exist.\n\n"
+                "TIFF files are stored in the destination collection; "
+                "TSV sidecars are stored beside the source JPEG files.\n\n"
+                "Replace the existing files?")
                 .arg(conflicts.size()),
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
@@ -4620,6 +4510,8 @@ void MainWindow::importLegacyJpegs()
         options.replaceExisting = true;
     }
 
+    const ProjectExplorerViewState viewState =
+        projectExplorerViewState();
     statusBar()->showMessage("Importing legacy JPEGs as TIFF...", 0);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
@@ -4628,6 +4520,7 @@ void MainWindow::importLegacyJpegs()
     const bool imported =
         LegacyJpegImporter::importProject(options, &report, &errorMessage);
 
+    m_projectFileSystemModel->refreshDirectory(source.dirPath);
     m_projectFileSystemModel->refreshDirectory(destination.dirPath);
     updateProjectActions();
     statusBar()->showMessage(
@@ -4666,6 +4559,10 @@ void MainWindow::importLegacyJpegs()
         QMessageBox::information(
             this, "Import legacy JPEGs", details.join("\n"));
     }
+
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
 }
 
 void MainWindow::registerCollection()
@@ -4693,9 +4590,11 @@ void MainWindow::registerCollection()
 
     const QString yamlPath = QDir(dirPath).filePath("collection.yaml");
     if (QFileInfo::exists(yamlPath)) {
-        const auto reply = QMessageBox::question(
+        const auto reply = QMessageBox::warning(
             this, "Register collection",
-            "Collection configuration for this folder already exists. Overwrite it?");
+            "Collection configuration for this folder already exists. Overwrite it?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
         if (reply != QMessageBox::Yes)
             return;
     }
@@ -4704,14 +4603,16 @@ void MainWindow::registerCollection()
     if (Project::registerCollection(m_project.rootPath(),
                                      dirPath,
                                      dialog.collectionClass(),
-                                     dialog.parent(),
-                                     dialog.related(),
+                                     dialog.previousLevel(),
+                                     dialog.imageFrame(),
+                                     dialog.builtFrom(),
                                      dialog.registry(),
                                      dialog.script(),
                                      dialog.alias(),
                                      &errorMsg))
     {
         m_projectFileSystemModel->refreshDirectory(dirPath);
+        refreshProjectExplorerCountWatchers();
         statusBar()->showMessage(
             QStringLiteral("Collection registered: %1").arg(QDir(dirPath).dirName()), 5000);
     } else {
@@ -4763,7 +4664,146 @@ void MainWindow::showCollectionGraph()
     m_collectionGraphDialog =
         new CollectionGraphDialog(m_project.rootPath(), this);
     m_collectionGraphDialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(m_collectionGraphDialog,
+            &CollectionGraphDialog::checkCollectionsRequested,
+            this, &MainWindow::checkCollections);
+    connect(m_collectionGraphDialog,
+            &CollectionGraphDialog::editCollectionRequested,
+            this, [this](const QString &collectionDirectory) {
+                editCollectionAtPath(collectionDirectory);
+            });
+    connect(m_collectionGraphDialog,
+            &CollectionGraphDialog::unregisterCollectionRequested,
+            this, [this](const QString &collectionDirectory) {
+                unregisterCollectionAtPath(collectionDirectory);
+            });
     m_collectionGraphDialog->show();
+}
+
+bool MainWindow::editCollectionAtPath(
+    const QString &collectionDirectory)
+{
+    if (!m_project.isValid())
+        return false;
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    const int collectionIndex = collectionIndexByPath(
+        collections, collectionDirectory);
+    if (collectionIndex < 0) {
+        QMessageBox::information(
+            this, "Edit collection",
+            "This collection is no longer registered.");
+        return false;
+    }
+
+    const Collection collection = collections.at(collectionIndex);
+    CollectionEditDialog dialog(
+        m_project.rootPath(), collection, collections, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    const ProjectExplorerViewState viewState =
+        projectExplorerViewState();
+    QString errorMessage;
+    if (!Project::updateCollectionMetadata(
+            m_project.rootPath(),
+            collection.dirPath,
+            dialog.alias(),
+            dialog.previousLevelReference(),
+            dialog.imageFrameReference(),
+            dialog.builtFromReferences(),
+            dialog.registry(),
+            dialog.script(),
+            &errorMessage)) {
+        QMessageBox::warning(
+            this, "Edit collection", errorMessage);
+        return false;
+    }
+
+    m_projectFileSystemModel->refreshDirectory(collection.dirPath);
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
+
+    const QPointer<CollectionGraphDialog> graphDialog =
+        m_collectionGraphDialog;
+    QTimer::singleShot(0, this, [graphDialog]() {
+        if (graphDialog)
+            graphDialog->refreshGraph();
+    });
+
+    statusBar()->showMessage(
+        QStringLiteral("Updated collection: %1")
+            .arg(collection.dirName),
+        3000);
+    return true;
+}
+
+bool MainWindow::unregisterCollectionAtPath(
+    const QString &collectionDirectory)
+{
+    if (!m_project.isValid())
+        return false;
+
+    const QVector<Collection> collections =
+        Project::discoverCollections(m_project.rootPath());
+    const int collectionIndex = collectionIndexByPath(
+        collections, collectionDirectory);
+    if (collectionIndex < 0) {
+        QMessageBox::information(
+            this, "Unregister collection",
+            "This collection is no longer registered.");
+        return false;
+    }
+
+    const Collection collection = collections.at(collectionIndex);
+    const UnregisterImpact impact = analyzeUnregisterImpact(
+        m_project.rootPath(), collection, collections);
+    const UnregisterDecision decision =
+        confirmUnregisterCollection(this, collection, impact);
+    if (!decision.accepted)
+        return false;
+
+    QString errorMessage;
+    int updatedDependencies = 0;
+    if (!applyUnregisterDependencyCleanup(
+            m_project.rootPath(), impact, decision,
+            &updatedDependencies, &errorMessage)) {
+        QMessageBox::warning(
+            this, "Unregister collection", errorMessage);
+        return false;
+    }
+
+    if (!Project::unregisterCollection(
+            m_project.rootPath(), collection.dirPath, &errorMessage)) {
+        QMessageBox::warning(
+            this, "Unregister collection", errorMessage);
+        return false;
+    }
+
+    if (m_previewDock)
+        m_previewDock->clear();
+    m_projectFileSystemModel->refreshDirectory(collection.dirPath);
+    refreshProjectExplorerCountWatchers();
+    updateProjectActions();
+
+    const QPointer<CollectionGraphDialog> graphDialog =
+        m_collectionGraphDialog;
+    QTimer::singleShot(0, this, [graphDialog]() {
+        if (graphDialog)
+            graphDialog->refreshGraph();
+    });
+
+    const QString message = updatedDependencies > 0
+        ? QStringLiteral(
+              "Unregistered collection: %1; updated %2 dependent collection file(s)")
+              .arg(collection.dirName)
+              .arg(updatedDependencies)
+        : QStringLiteral("Unregistered collection: %1")
+              .arg(collection.dirName);
+    statusBar()->showMessage(message, 5000);
+    return true;
 }
 
 void MainWindow::onProjectTreeDoubleClicked(const QModelIndex &index)
@@ -5046,43 +5086,7 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                 this, [this, selectedCollection, hasRegisteredCollection]() {
                     if (!hasRegisteredCollection)
                         return;
-
-                    const QVector<Collection> collections =
-                        Project::discoverCollections(m_project.rootPath());
-                    CollectionEditDialog dialog(
-                        m_project.rootPath(),
-                        selectedCollection,
-                        collections,
-                        this);
-                    if (dialog.exec() != QDialog::Accepted)
-                        return;
-
-                    const ProjectExplorerViewState viewState =
-                        projectExplorerViewState();
-                    QString errorMessage;
-                    if (!Project::updateCollectionMetadata(
-                            m_project.rootPath(),
-                            selectedCollection.dirPath,
-                            dialog.alias(),
-                            dialog.parentReference(),
-                            dialog.relatedReference(),
-                            dialog.registry(),
-                            dialog.script(),
-                            &errorMessage)) {
-                        QMessageBox::warning(
-                            this, "Edit collection", errorMessage);
-                        return;
-                    }
-
-                    m_projectFileSystemModel->refreshDirectory(
-                        selectedCollection.dirPath);
-                    QTimer::singleShot(0, this, [this, viewState]() {
-                        restoreProjectExplorerViewState(viewState);
-                    });
-                    statusBar()->showMessage(
-                        QStringLiteral("Updated collection: %1")
-                            .arg(selectedCollection.dirName),
-                        3000);
+                    editCollectionAtPath(selectedCollection.dirPath);
                 });
     }
     if (renameCollectionAction) {
@@ -5225,52 +5229,8 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
          hasUnregisterTargetCollection]() {
             if (!hasUnregisterTargetCollection)
                 return;
-
-            const UnregisterImpact impact = analyzeUnregisterImpact(
-                m_project.rootPath(),
-                unregisterTargetCollection,
-                Project::discoverCollections(m_project.rootPath()));
-            const UnregisterDecision decision =
-                confirmUnregisterCollection(
-                    this, unregisterTargetCollection, impact);
-            if (!decision.accepted)
-                return;
-
-            QString errorMessage;
-            int updatedDependencies = 0;
-            if (!applyUnregisterDependencyCleanup(
-                    m_project.rootPath(),
-                    impact,
-                    decision,
-                    &updatedDependencies,
-                    &errorMessage)) {
-                QMessageBox::warning(
-                    this, "Unregister collection", errorMessage);
-                return;
-            }
-
-            if (!Project::unregisterCollection(
-                    m_project.rootPath(),
-                    unregisterTargetCollection.dirPath,
-                    &errorMessage)) {
-                QMessageBox::warning(
-                    this, "Unregister collection", errorMessage);
-                return;
-            }
-
-            if (m_previewDock)
-                m_previewDock->clear();
-            m_projectFileSystemModel->refreshDirectory(
+            unregisterCollectionAtPath(
                 unregisterTargetCollection.dirPath);
-            updateProjectActions();
-            const QString message = updatedDependencies > 0
-                ? QStringLiteral(
-                      "Unregistered collection: %1; updated %2 dependent collection file(s)")
-                      .arg(unregisterTargetCollection.dirName)
-                      .arg(updatedDependencies)
-                : QStringLiteral("Unregistered collection: %1")
-                      .arg(unregisterTargetCollection.dirName);
-            statusBar()->showMessage(message, 5000);
         };
     if (unregisterCollectionAction) {
         connect(unregisterCollectionAction,
@@ -5301,10 +5261,16 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                 this, [this, selectedCollection, supportsStyle]() {
                     if (!supportsStyle)
                         return;
+                    const ProjectExplorerViewState viewState =
+                        projectExplorerViewState();
                     CollectionStyleDialog dialog(selectedCollection, this);
-                    if (dialog.exec() == QDialog::Accepted)
+                    if (dialog.exec() == QDialog::Accepted) {
                         m_projectFileSystemModel->refreshDirectory(
                             selectedCollection.dirPath);
+                        QTimer::singleShot(0, this, [this, viewState]() {
+                            restoreProjectExplorerViewState(viewState);
+                        });
+                    }
                 });
     }
     if (copyStyleAction) {
@@ -5550,6 +5516,7 @@ bool MainWindow::copyDroppedFiles(
     if (!destination.exists())
         return false;
 
+    const ProjectExplorerViewState viewState = projectExplorerViewState();
     int copied = 0;
     for (const QUrl &url : urls) {
         const QFileInfo source(url.toLocalFile());
@@ -5564,7 +5531,7 @@ bool MainWindow::copyDroppedFiles(
         }
 
         if (QFileInfo::exists(targetPath)) {
-            const auto answer = QMessageBox::question(
+            const auto answer = QMessageBox::warning(
                 this, "Replace file",
                 QStringLiteral("\"%1\" already exists. Replace it?")
                     .arg(source.fileName()),
@@ -5610,6 +5577,9 @@ bool MainWindow::copyDroppedFiles(
 
     if (copied > 0) {
         m_projectFileSystemModel->refreshDirectory(destinationDirectory);
+        QTimer::singleShot(0, this, [this, viewState]() {
+            restoreProjectExplorerViewState(viewState);
+        });
         updateProjectActions();
         statusBar()->showMessage(
             QStringLiteral("%1 file(s) added").arg(copied), 4000);
@@ -5998,12 +5968,12 @@ void MainWindow::onPointSelectionChanged()
         ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(index + 1)));
         ++row;
 
-        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Row"));
-        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.row)));
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("X"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.x)));
         ++row;
 
-        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Col"));
-        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.col)));
+        ui->propertiesTable->setItem(row, 0, new QTableWidgetItem("Y down"));
+        ui->propertiesTable->setItem(row, 1, new QTableWidgetItem(QString::number(rec.yDown)));
         ++row;
 
         const QStringList colNames = col.columnNames();
@@ -6227,6 +6197,11 @@ void MainWindow::onWorkspaceTabChanged(int index)
 
 void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
 {
+    updateActiveViewerIndicators();
+    updateSyncControls(viewer);
+    updateCoordinateStatus(CursorCoordinateInfo{});
+    updateCoordinateReferenceControl(viewer);
+
     if (!viewer) {
         {
             const QSignalBlocker panBlocker(ui->actionPan);
@@ -6241,8 +6216,6 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
             m_zoomPercentSpin->setEnabled(false);
             m_zoomPercentSpin->setValue(100.0);
         }
-        ui->actionSyncSplitViews->setEnabled(false);
-        ui->actionSyncSplitZoom->setEnabled(false);
         ui->actionEditPoints->setChecked(false);
         ui->actionEditPoints->setEnabled(false);
         ui->actionCancelEdit->setEnabled(false);
@@ -6267,12 +6240,6 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
         m_zoomPercentSpin->setEnabled(true);
         m_zoomPercentSpin->setValue(viewer->zoomPercent());
     }
-
-    // Enable sync only if the viewer is inside a QSplitter with siblings
-    auto *splitter = qobject_cast<QSplitter*>(viewer->parentWidget());
-    const bool hasSplitSiblings = splitter && splitter->count() > 1;
-    ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
-    ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
 
     LayerManager *mgr = viewer->layerManager();
     Layer *active = mgr ? mgr->activeLayer() : nullptr;
@@ -6577,6 +6544,21 @@ void MainWindow::configureViewer(ImageViewer *viewer)
 
     connect(viewer, &ImageViewer::pixelInfoChanged,
             this, &MainWindow::updatePropertiesTable);
+    connect(viewer, &ImageViewer::cursorCoordinateInfoChanged,
+            this, [this, viewer](const CursorCoordinateInfo &info) {
+                if (viewer == currentImageViewer())
+                    updateCoordinateStatus(info);
+            });
+    connect(viewer, &ImageViewer::coordinateReferenceImagesChanged,
+            this, [this, viewer]() {
+                if (viewer == currentImageViewer())
+                    updateCoordinateReferenceControl(viewer);
+            });
+    connect(viewer, &ImageViewer::coordinateReferenceImageChanged,
+            this, [this, viewer]() {
+                if (viewer == currentImageViewer())
+                    updateCoordinateReferenceControl(viewer);
+            });
     connect(viewer, &ImageViewer::zoomPercentChanged,
             this, [this, viewer](double percent) {
                 if (viewer != currentImageViewer() || !m_zoomPercentSpin)
@@ -6666,6 +6648,9 @@ void MainWindow::configureViewer(ImageViewer *viewer)
             onActiveViewerChanged(remainingViewer);
             if (remainingViewer)
                 remainingViewer->setFocus();
+        } else {
+            updateActiveViewerIndicators();
+            updateSyncControls(m_activeViewer);
         }
     });
     connect(viewer, &ImageViewer::reloadRequested,
@@ -6676,6 +6661,93 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                 reloadViewerLayers(v);
             });
     refreshReloadableArtifactWatchers();
+}
+
+void MainWindow::updateActiveViewerIndicators()
+{
+    if (!ui || !ui->workspaceTabs)
+        return;
+
+    const int currentTabIndex = ui->workspaceTabs->currentIndex();
+    for (int tabIndex = 0;
+         tabIndex < ui->workspaceTabs->count();
+         ++tabIndex) {
+        auto *splitter = qobject_cast<QSplitter*>(
+            ui->workspaceTabs->widget(tabIndex));
+        if (!splitter)
+            continue;
+
+        const bool showIndicator =
+            tabIndex == currentTabIndex && splitter->count() > 1;
+        for (int panelIndex = 0;
+             panelIndex < splitter->count();
+             ++panelIndex) {
+            auto *viewer = qobject_cast<ImageViewer*>(
+                splitter->widget(panelIndex));
+            if (viewer) {
+                viewer->setActivePanelIndicator(
+                    showIndicator && viewer == m_activeViewer);
+            }
+        }
+    }
+}
+
+void MainWindow::updateSyncControls(ImageViewer *viewer)
+{
+    auto *splitter = viewer
+        ? qobject_cast<QSplitter*>(viewer->parentWidget())
+        : nullptr;
+    const bool hasSplitSiblings = splitter && splitter->count() > 1;
+    const bool syncEnabled = ui->actionSyncSplitViews->isChecked();
+    const bool syncZoom = ui->actionSyncSplitZoom->isChecked();
+
+    ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
+    ui->actionSyncSplitZoom->setEnabled(
+        hasSplitSiblings && syncEnabled);
+
+    if (m_syncZoomCheck) {
+        const QSignalBlocker blocker(m_syncZoomCheck);
+        m_syncZoomCheck->setChecked(syncZoom);
+        m_syncZoomCheck->setEnabled(
+            hasSplitSiblings && syncEnabled);
+    }
+
+    QString syncToolTip;
+    if (!hasSplitSiblings) {
+        syncToolTip = QStringLiteral(
+            "Split the current viewer to synchronize panels.");
+    } else if (!syncEnabled) {
+        syncToolTip = syncZoom
+            ? QStringLiteral(
+                  "Synchronization is off. Enable it to synchronize pan and zoom between split viewers.")
+            : QStringLiteral(
+                  "Synchronization is off. Enable it to synchronize pan between split viewers.");
+    } else if (syncZoom) {
+        syncToolTip = QStringLiteral(
+            "Pan and zoom are synchronized between split viewers.");
+    } else {
+        syncToolTip = QStringLiteral(
+            "Pan is synchronized between split viewers.");
+    }
+    ui->actionSyncSplitViews->setToolTip(syncToolTip);
+
+    QString zoomToolTip;
+    if (!hasSplitSiblings) {
+        zoomToolTip = QStringLiteral(
+            "Available when the current viewer is split.");
+    } else if (!syncEnabled) {
+        zoomToolTip = QStringLiteral(
+            "Enable split-view synchronization before including zoom.");
+    } else if (syncZoom) {
+        zoomToolTip = QStringLiteral(
+            "Zoom is synchronized together with pan.");
+    } else {
+        zoomToolTip = QStringLiteral(
+            "Also synchronize zoom between split viewers.");
+    }
+    ui->actionSyncSplitZoom->setToolTip(zoomToolTip);
+    if (m_syncZoomCheck)
+        m_syncZoomCheck->setToolTip(zoomToolTip);
 }
 
 QModelIndex MainWindow::projectSourceIndex(const QModelIndex &index) const
@@ -6842,6 +6914,96 @@ void MainWindow::refreshReloadableArtifactWatchers()
     }
 }
 
+void MainWindow::refreshProjectExplorerCountWatchers()
+{
+    if (!m_projectExplorerCountWatcher)
+        return;
+
+    QHash<QString, QString> desiredPaths;
+    if (m_project.isValid()) {
+        const QFileInfo rootInfo(m_project.rootPath());
+        if (rootInfo.isDir()) {
+            desiredPaths.insert(
+                normalizedArtifactPath(rootInfo.absoluteFilePath()),
+                rootInfo.absoluteFilePath());
+
+            const QFileInfoList directories = QDir(rootInfo.absoluteFilePath())
+                .entryInfoList(QDir::Dirs
+                                   | QDir::NoDotAndDotDot
+                                   | QDir::Hidden
+                                   | QDir::System,
+                               QDir::Name | QDir::IgnoreCase);
+            for (const QFileInfo &directory : directories) {
+                desiredPaths.insert(
+                    normalizedArtifactPath(directory.absoluteFilePath()),
+                    directory.absoluteFilePath());
+            }
+        }
+    }
+
+    const QStringList watched =
+        m_projectExplorerCountWatcher->directories();
+    QStringList removePaths;
+    for (const QString &path : watched) {
+        if (!desiredPaths.contains(normalizedArtifactPath(path)))
+            removePaths.append(path);
+    }
+    if (!removePaths.isEmpty())
+        m_projectExplorerCountWatcher->removePaths(removePaths);
+
+    QSet<QString> watchedKeys;
+    for (const QString &path : m_projectExplorerCountWatcher->directories())
+        watchedKeys.insert(normalizedArtifactPath(path));
+
+    QStringList addPaths;
+    for (auto it = desiredPaths.cbegin(); it != desiredPaths.cend(); ++it) {
+        if (!it.key().isEmpty() && !watchedKeys.contains(it.key()))
+            addPaths.append(it.value());
+    }
+    if (!addPaths.isEmpty())
+        m_projectExplorerCountWatcher->addPaths(addPaths);
+}
+
+void MainWindow::scheduleProjectExplorerCountRefresh(const QString &path)
+{
+    if (!m_project.isValid() || path.isEmpty())
+        return;
+
+    m_pendingProjectExplorerCountRefreshes.insert(
+        QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    if (m_projectExplorerCountRefreshTimer)
+        m_projectExplorerCountRefreshTimer->start();
+}
+
+void MainWindow::flushProjectExplorerCountRefreshes()
+{
+    if (!m_project.isValid() || !m_projectFileSystemModel) {
+        m_pendingProjectExplorerCountRefreshes.clear();
+        refreshProjectExplorerCountWatchers();
+        return;
+    }
+
+    const QStringList paths =
+        m_pendingProjectExplorerCountRefreshes.values();
+    m_pendingProjectExplorerCountRefreshes.clear();
+
+    bool rootChanged = false;
+    for (const QString &path : paths) {
+        if (samePath(path, m_project.rootPath())) {
+            rootChanged = true;
+            continue;
+        }
+
+        const QFileInfo info(path);
+        if (info.isDir())
+            m_projectFileSystemModel->refreshDirectoryCount(
+                info.absoluteFilePath());
+    }
+
+    if (rootChanged)
+        refreshProjectExplorerCountWatchers();
+}
+
 void MainWindow::scheduleArtifactReload(const QString &path, int delayMs)
 {
     const QString key = normalizedArtifactPath(path);
@@ -6948,29 +7110,21 @@ void MainWindow::loadProject(const Project &project)
 
     struct ProjectLoadFeedback {
         MainWindow *window = nullptr;
-        QProgressBar *progress = nullptr;
         bool finished = false;
 
         ProjectLoadFeedback(MainWindow *mainWindow, const QString &projectName)
             : window(mainWindow)
-            , progress(new QProgressBar(mainWindow->statusBar()))
         {
             QApplication::setOverrideCursor(Qt::WaitCursor);
-            progress->setMinimum(0);
-            progress->setMaximum(0);
-            progress->setTextVisible(false);
-            progress->setMinimumWidth(160);
-            window->statusBar()->addPermanentWidget(progress);
+            window->beginStatusProgress(
+                QStringLiteral("Opening project: %1...").arg(projectName));
             setStage(QStringLiteral("Opening project: %1...")
                          .arg(projectName));
         }
 
         ~ProjectLoadFeedback()
         {
-            if (progress) {
-                window->statusBar()->removeWidget(progress);
-                progress->deleteLater();
-            }
+            window->endStatusProgress();
             QApplication::restoreOverrideCursor();
             if (!finished)
                 window->statusBar()->showMessage(
@@ -7038,6 +7192,15 @@ void MainWindow::closeCurrentProject()
     m_scheduledArtifactReloads.clear();
     if (m_artifactWatcher)
         m_artifactWatcher->removePaths(m_artifactWatcher->files());
+    m_pendingProjectExplorerCountRefreshes.clear();
+    if (m_projectExplorerCountRefreshTimer)
+        m_projectExplorerCountRefreshTimer->stop();
+    if (m_projectExplorerCountWatcher) {
+        const QStringList watchedDirectories =
+            m_projectExplorerCountWatcher->directories();
+        if (!watchedDirectories.isEmpty())
+            m_projectExplorerCountWatcher->removePaths(watchedDirectories);
+    }
 
     if (m_currentPointLayer) {
         disconnect(m_pointLayerConnection);
@@ -7073,8 +7236,7 @@ void MainWindow::closeCurrentProject()
         m_zoomPercentSpin->setEnabled(false);
         m_zoomPercentSpin->setValue(100.0);
     }
-    ui->actionSyncSplitViews->setEnabled(false);
-    ui->actionSyncSplitZoom->setEnabled(false);
+    updateSyncControls(nullptr);
     ui->actionEditPoints->setEnabled(false);
     ui->actionCancelEdit->setEnabled(false);
     ui->actionEditMask->setEnabled(false);
@@ -7117,12 +7279,8 @@ void MainWindow::closeCurrentProject()
 
 void MainWindow::beginStatusProgress(const QString &message, int maximum)
 {
-    if (!m_statusProgressBar) {
-        m_statusProgressBar = new QProgressBar(statusBar());
-        m_statusProgressBar->setMinimumWidth(160);
-        m_statusProgressBar->setMaximumWidth(220);
-        statusBar()->addPermanentWidget(m_statusProgressBar);
-    }
+    if (!m_statusProgressBar)
+        return;
 
     m_statusProgressBar->setMinimum(0);
     m_statusProgressBar->setMaximum(maximum > 0 ? maximum : 0);
@@ -7132,6 +7290,7 @@ void MainWindow::beginStatusProgress(const QString &message, int maximum)
         m_statusProgressBar->setFormat(QStringLiteral("%v/%m"));
     else
         m_statusProgressBar->setFormat(QString());
+    m_statusProgressBar->show();
     statusBar()->showMessage(message, 0);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
@@ -7153,9 +7312,8 @@ void MainWindow::endStatusProgress(const QString &message, int timeoutMs)
     if (!m_statusProgressBar)
         return;
 
-    statusBar()->removeWidget(m_statusProgressBar);
-    m_statusProgressBar->deleteLater();
-    m_statusProgressBar = nullptr;
+    m_statusProgressBar->hide();
+    m_statusProgressBar->reset();
     if (!message.isEmpty())
         statusBar()->showMessage(message, timeoutMs);
 }
@@ -7520,6 +7678,13 @@ void MainWindow::saveProjectSession()
             panel["source"] = source;
             panel["transform"] = transformValues;
             panel["center"] = QJsonArray{center.x(), center.y()};
+            if (ImageLayer *reference =
+                    viewer->coordinateReferenceImage()) {
+                panel["coordinate_reference"] =
+                    projectRelativePath(reference->sourcePath());
+            } else {
+                panel["coordinate_reference"] = QJsonValue::Null;
+            }
 
             QJsonArray layers;
             LayerManager *manager = viewer->layerManager();
@@ -7574,7 +7739,7 @@ void MainWindow::saveProjectSession()
     }
 
     QJsonObject session;
-    session["schema_version"] = 2;
+    session["schema_version"] = 3;
     session["current_tab"] = ui->workspaceTabs->currentIndex();
     session["sync_split_views"] = ImageViewer::syncEnabled();
     session["sync_split_zoom"] = ImageViewer::syncZoomEnabled();
@@ -7613,7 +7778,7 @@ void MainWindow::restoreProjectSession()
     const QJsonObject session = document.object();
     const int schemaVersion =
         session.value("schema_version").toInt();
-    if (schemaVersion < 1 || schemaVersion > 2)
+    if (schemaVersion < 1 || schemaVersion > 3)
         return;
 
     const QJsonArray tabs = session.value("tabs").toArray();
@@ -7716,6 +7881,23 @@ void MainWindow::restoreProjectSession()
 
             viewer->fitLoadedImage();
             viewer->setPrimarySourcePath(absolutePath);
+            if (panelObject.contains("coordinate_reference")) {
+                ImageLayer *savedReference = nullptr;
+                const QJsonValue referenceValue =
+                    panelObject.value("coordinate_reference");
+                if (referenceValue.isString()) {
+                    const QString referencePath = projectAbsolutePath(
+                        referenceValue.toString());
+                    for (ImageLayer *image : viewer->imageLayers()) {
+                        if (image
+                            && samePath(image->sourcePath(), referencePath)) {
+                            savedReference = image;
+                            break;
+                        }
+                    }
+                }
+                viewer->setCoordinateReferenceImage(savedReference);
+            }
             configureViewer(viewer);
             splitter->addWidget(viewer);
 
@@ -7825,6 +8007,7 @@ void MainWindow::updateProjectExplorer()
         m_projectFileMarks.clear();
         m_projectFileSystemModel->setFileMarks(m_projectFileMarks);
         resetProjectExplorerToFileSystemRoot();
+        refreshProjectExplorerCountWatchers();
         updateProjectExplorerStarredEmptyMessage();
         return;
     }
@@ -7835,6 +8018,7 @@ void MainWindow::updateProjectExplorer()
     m_projectFileSystemModel->setRootPath(m_project.rootPath());
     refreshProjectExplorerRootIndex();
     ui->projectTree->setColumnWidth(0, 220);
+    refreshProjectExplorerCountWatchers();
     updateProjectExplorerStarredEmptyMessage();
 }
 
@@ -8012,9 +8196,24 @@ void MainWindow::restoreProjectExplorerViewState(
 
     QModelIndex anchor;
     if (!state.topPath.isEmpty()) {
-        const QModelIndex sourceIndex =
-            m_projectFileSystemModel->index(state.topPath);
-        anchor = projectProxyIndex(sourceIndex);
+        QString anchorPath = state.topPath;
+        while (!anchorPath.isEmpty()
+               && pathBelongsToProject(
+                   m_project.rootPath(), anchorPath)) {
+            const QModelIndex sourceIndex =
+                m_projectFileSystemModel->index(anchorPath);
+            anchor = projectProxyIndex(sourceIndex);
+            if (anchor.isValid()
+                || samePath(anchorPath, m_project.rootPath())) {
+                break;
+            }
+
+            const QString parentPath =
+                QFileInfo(anchorPath).absoluteDir().absolutePath();
+            if (samePath(parentPath, anchorPath))
+                break;
+            anchorPath = parentPath;
+        }
     } else if (!state.topGroupId.isEmpty()) {
         const QModelIndex root = ui->projectTree->rootIndex();
         const int rows = m_projectSortProxy->rowCount(root);
@@ -8093,12 +8292,7 @@ void MainWindow::updateProjectActions()
     ImageViewer *viewer = currentImageViewer();
     ui->actionPan->setEnabled(viewer != nullptr);
     ui->actionZoom->setEnabled(viewer != nullptr);
-    auto *splitter = viewer
-        ? qobject_cast<QSplitter*>(viewer->parentWidget())
-        : nullptr;
-    const bool hasSplitSiblings = splitter && splitter->count() > 1;
-    ui->actionSyncSplitViews->setEnabled(hasSplitSiblings);
-    ui->actionSyncSplitZoom->setEnabled(hasSplitSiblings);
+    updateSyncControls(viewer);
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionImportLegacyJpegs->setEnabled(hasProject);
     ui->actionRegisterCollection->setEnabled(hasProject);
@@ -8267,7 +8461,7 @@ void MainWindow::buildMetadataRules()
             artifacts.append(QFileInfo(draftPath).fileName());
         if (QFileInfo::exists(snippetPath))
             artifacts.append(QFileInfo(snippetPath).fileName());
-        if (QMessageBox::question(
+        if (QMessageBox::warning(
                 this, "Replace Metadata Rules Draft",
                 QString("This will overwrite:\n- %1\n\nContinue?")
                     .arg(artifacts.join("\n- ")),
@@ -8654,6 +8848,82 @@ ImageViewer *MainWindow::currentImageViewer() const
     return qobject_cast<ImageViewer*>(splitter->widget(0));
 }
 
+void MainWindow::updateCoordinateStatus(const CursorCoordinateInfo &info)
+{
+    if (!m_coordinateStatusLabel)
+        return;
+
+    if (!info.valid) {
+        m_coordinateStatusLabel->clear();
+        return;
+    }
+
+    const QString yText = info.yAvailable
+        ? QString::number(info.y, 'f', 2)
+        : QStringLiteral("-");
+    const QString rowText = info.row > 0
+        ? QString::number(info.row)
+        : QStringLiteral("-");
+    const QString colText = info.col > 0
+        ? QString::number(info.col)
+        : QStringLiteral("-");
+    m_coordinateStatusLabel->setText(
+        QStringLiteral("x: %1   y: %2   y_down: %3   row: %4   col: %5")
+            .arg(info.x, 0, 'f', 2)
+            .arg(yText)
+            .arg(info.yDown, 0, 'f', 2)
+            .arg(rowText)
+            .arg(colText));
+}
+
+void MainWindow::updateCoordinateReferenceControl(ImageViewer *viewer)
+{
+    if (!m_coordinateReferenceLabel || !m_coordinateReferenceCombo)
+        return;
+
+    const QSignalBlocker blocker(m_coordinateReferenceCombo);
+    m_coordinateReferenceImages.clear();
+    m_coordinateReferenceCombo->clear();
+
+    if (!viewer) {
+        m_coordinateReferenceLabel->hide();
+        m_coordinateReferenceCombo->hide();
+        return;
+    }
+
+    m_coordinateReferenceLabel->show();
+    m_coordinateReferenceCombo->show();
+    m_coordinateReferenceCombo->addItem("No reference image");
+
+    const QList<ImageLayer*> images = viewer->imageLayers();
+    ImageLayer *selectedReference = viewer->coordinateReferenceImage();
+    int selectedIndex = 0;
+    for (ImageLayer *image : images) {
+        if (!image)
+            continue;
+
+        const RasterData &data = image->rasterData();
+        const QString itemText =
+            QStringLiteral("%1 (%2 x %3 px)")
+                .arg(image->name())
+                .arg(data.width())
+                .arg(data.height());
+        m_coordinateReferenceImages.append(image);
+        m_coordinateReferenceCombo->addItem(itemText);
+        const int comboIndex = m_coordinateReferenceCombo->count() - 1;
+        m_coordinateReferenceCombo->setItemData(
+            comboIndex,
+            QStringLiteral("%1\n%2")
+                .arg(itemText, image->sourcePath()),
+            Qt::ToolTipRole);
+        if (image == selectedReference)
+            selectedIndex = comboIndex;
+    }
+
+    m_coordinateReferenceCombo->setCurrentIndex(selectedIndex);
+    m_coordinateReferenceCombo->setEnabled(!images.isEmpty());
+}
+
 void MainWindow::updatePropertiesTable(const PixelInfo &info)
 {
     if (!ui->propertiesTable)
@@ -8665,10 +8935,11 @@ void MainWindow::updatePropertiesTable(const PixelInfo &info)
 
     ui->propertiesTable->setRowCount(2 + info.bandCount);
 
+    // Keep PixelInfo zero-based for raster access; display 1-based cell indices.
     ui->propertiesTable->setItem(0, 0, new QTableWidgetItem("Row"));
-    ui->propertiesTable->setItem(0, 1, new QTableWidgetItem(QString::number(info.row)));
+    ui->propertiesTable->setItem(0, 1, new QTableWidgetItem(QString::number(info.row + 1)));
     ui->propertiesTable->setItem(1, 0, new QTableWidgetItem("Column"));
-    ui->propertiesTable->setItem(1, 1, new QTableWidgetItem(QString::number(info.col)));
+    ui->propertiesTable->setItem(1, 1, new QTableWidgetItem(QString::number(info.col + 1)));
 
     for (int b = 0; b < info.bandCount; ++b) {
         ui->propertiesTable->setItem(2 + b, 0,
@@ -8687,11 +8958,13 @@ void MainWindow::updatePropertiesForPointLayer(PointLayer *layer)
 void MainWindow::onSyncSplitViewsToggled(bool checked)
 {
     ImageViewer::setSyncEnabled(checked);
+    updateSyncControls(currentImageViewer());
 }
 
 void MainWindow::onSyncSplitZoomToggled(bool checked)
 {
     ImageViewer::setSyncZoomEnabled(checked);
+    updateSyncControls(currentImageViewer());
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -8865,15 +9138,15 @@ void MainWindow::createPointsCsv()
         usedBaseNames.insert(file.completeBaseName().toCaseFolded());
 
     QStringList availableBaseNames;
-    const QString parentPath = Project::resolveReference(
-        m_project.rootPath(), selectedCollection.parent);
-    if (QDir(parentPath).exists()) {
-        const QFileInfoList parentImages = QDir(parentPath).entryInfoList(
+    const QString framePath = Project::resolveReference(
+        m_project.rootPath(), selectedCollection.imageFrame);
+    if (QDir(framePath).exists()) {
+        const QFileInfoList frameImages = QDir(framePath).entryInfoList(
             {"*.tif", "*.tiff", "*.TIF", "*.TIFF",
              "*.png", "*.PNG", "*.jpg", "*.jpeg", "*.JPG", "*.JPEG",
              "*.bmp", "*.BMP"},
             QDir::Files | QDir::NoSymLinks, QDir::Name);
-        for (const QFileInfo &image : parentImages) {
+        for (const QFileInfo &image : frameImages) {
             const QString baseName = image.completeBaseName();
             if (!usedBaseNames.contains(baseName.toCaseFolded())
                 && !availableBaseNames.contains(
@@ -8911,7 +9184,8 @@ void MainWindow::createPointsCsv()
         savePaths.append(savePath);
     }
 
-    const PointCollection collection = PointCollection::createEmpty({"row", "col"});
+    const PointCollection collection =
+        PointCollection::createEmpty({"x", "y_down"});
     QString errorMsg;
     for (const QString &savePath : std::as_const(savePaths)) {
         if (!collection.save(savePath, &errorMsg)) {
@@ -8927,7 +9201,11 @@ void MainWindow::createPointsCsv()
             : QStringLiteral("Created %1 point CSV files")
                   .arg(savePaths.size()),
         5000);
+    const ProjectExplorerViewState viewState = projectExplorerViewState();
     m_projectFileSystemModel->refreshDirectory(selectedDir);
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
 
     // If an image viewer is active, offer to add the new layer
     ImageViewer *viewer = currentImageViewer();
@@ -8955,7 +9233,7 @@ void MainWindow::createPointGrid()
     for (const Collection &collection : collections) {
         if (collection.collectionClass == "point_collection"
             && !normalizedProjectReference(
-                    m_project.rootPath(), collection.parent).isEmpty()) {
+                    m_project.rootPath(), collection.imageFrame).isEmpty()) {
             pointCollections.append(collection);
         }
     }
@@ -8963,7 +9241,7 @@ void MainWindow::createPointGrid()
     if (pointCollections.isEmpty()) {
         QMessageBox::information(
             this, "Create grid",
-            "No point collection with a valid parent is registered in this project.\n\n"
+            "No point collection with a valid image frame is registered in this project.\n\n"
             "A point collection is a folder registered as a point collection.\n\n"
             "To register a folder as a point collection, use Project > Register collection...");
         return;
@@ -8992,7 +9270,7 @@ void MainWindow::createPointGrid()
             this, "Create grid",
             "No compatible mask was found.\n\n"
             "A compatible mask must be a TIFF in a segmentation collection linked "
-            "to the same parent image collection as the point collection.");
+            "to the same image frame as the point collection.");
         return;
     }
 
@@ -9103,8 +9381,7 @@ void MainWindow::createPointGrid()
             return;
 
         const QString savePath = QDir(candidate->pointCollection.dirPath)
-            .filePath(QFileInfo(candidate->mask.path).completeBaseName()
-                      + ".csv");
+            .filePath(task.outputFileName);
         const QString savePathKey =
             normalizedAbsolutePathForComparison(savePath);
         if (outputPathKeys.contains(savePathKey)) {
@@ -9134,7 +9411,7 @@ void MainWindow::createPointGrid()
             visibleFiles = visibleFiles.mid(0, 10);
             visibleFiles.append(QStringLiteral("- ..."));
         }
-        const auto answer = QMessageBox::question(
+        const auto answer = QMessageBox::warning(
             this,
             "Create grid",
             QStringLiteral("Replace existing grid CSV file(s)?\n\n%1")
@@ -9199,17 +9476,28 @@ void MainWindow::createPointGrid()
 
     QString saveError;
     QSet<QString> refreshedDirectories;
+    QSet<QString> openOutputPaths;
+    for (const GridOutput &output : std::as_const(outputs)) {
+        if (!reloadableLayersForPath(output.savePath).isEmpty()) {
+            openOutputPaths.insert(
+                normalizedArtifactPath(output.savePath));
+        }
+    }
     for (const GridOutput &output : std::as_const(outputs)) {
         PointCollection collection =
-            PointCollection::createEmpty({"row", "col"});
+            PointCollection::createEmpty({"x", "y_down"});
         for (const QPoint &point : output.points)
-            collection.addPoint(point.y() + 0.5, point.x() + 0.5);
+            collection.addPoint(point.x() + 0.5, point.y() + 0.5);
 
         if (!collection.save(output.savePath, &saveError)) {
             QMessageBox::warning(this, "Create grid", saveError);
             return;
         }
         refreshedDirectories.insert(QFileInfo(output.savePath).absolutePath());
+        if (openOutputPaths.contains(
+                normalizedArtifactPath(output.savePath))) {
+            scheduleArtifactReload(output.savePath, 0);
+        }
     }
 
     statusBar()->showMessage(
@@ -9227,7 +9515,13 @@ void MainWindow::createPointGrid()
     }
 
     ImageViewer *viewer = currentImageViewer();
-    if (outputs.size() == 1 && viewer && viewer->layerManager()) {
+    const bool singleOutputAlreadyOpen = outputs.size() == 1
+        && openOutputPaths.contains(
+            normalizedArtifactPath(outputs.first().savePath));
+    if (outputs.size() == 1
+        && !singleOutputAlreadyOpen
+        && viewer
+        && viewer->layerManager()) {
         const auto reply = QMessageBox::question(
             this,
             "Add layer",
@@ -9303,12 +9597,10 @@ void MainWindow::selectPointsByMask()
     }
 
     if (normalizedProjectReference(
-            m_project.rootPath(), pointCollection.parent).isEmpty()
-        && normalizedProjectReference(
-            m_project.rootPath(), pointCollection.related).isEmpty()) {
+            m_project.rootPath(), pointCollection.imageFrame).isEmpty()) {
         QMessageBox::information(
             this, "Select by mask",
-            "The point collection does not have a valid parent image collection or related segmentation collection.");
+            "The point collection does not have a valid image frame.");
         return;
     }
 
@@ -9319,22 +9611,27 @@ void MainWindow::selectPointsByMask()
     QVector<MaskCandidate> candidates = compatibleMaskCandidates(
         m_project.rootPath(),
         pointCollection,
-        collections,
-        pointBaseName);
+        collections);
 
     if (candidates.isEmpty()) {
         QMessageBox::information(
             this, "Select by mask",
             QStringLiteral(
                 "No compatible mask was found for %1.\n\n"
-                "A compatible mask must be a TIFF with the same basename in a "
-                "related segmentation collection or in a segmentation collection "
-                "linked to the same parent image collection as the point collection.")
+                "A compatible mask must be a TIFF in a segmentation collection "
+                "linked to the same image frame as the point collection.")
                 .arg(QFileInfo(pointLayer->sourcePath()).fileName()));
         return;
     }
 
     int selectedCandidate = 0;
+    for (int index = 0; index < candidates.size(); ++index) {
+        if (QFileInfo(candidates.at(index).path).completeBaseName().compare(
+                pointBaseName, Qt::CaseInsensitive) == 0) {
+            selectedCandidate = index;
+            break;
+        }
+    }
     if (candidates.size() > 1) {
         QStringList labels;
         labels.reserve(candidates.size());
@@ -9347,7 +9644,7 @@ void MainWindow::selectPointsByMask()
             "Select by mask",
             "Mask:",
             labels,
-            0,
+            selectedCandidate,
             false,
             &ok);
         if (!ok)
@@ -9401,8 +9698,8 @@ void MainWindow::selectPointsByMask()
     const QVector<PointRecord> &points = pointLayer->collection().points();
     for (int index = 0; index < points.size(); ++index) {
         const PointRecord &point = points.at(index);
-        const int row = static_cast<int>(std::llround(point.row));
-        const int col = static_cast<int>(std::llround(point.col));
+        const int row = static_cast<int>(std::floor(point.yDown));
+        const int col = static_cast<int>(std::floor(point.x));
         if (row < 0 || row >= mask.height()
             || col < 0 || col >= mask.width()) {
             continue;
@@ -9541,12 +9838,12 @@ void MainWindow::createMaskTiffInCollection(
     }
 
     const QString selectedDir = selectedCollection.dirPath;
-    const QString parentPath = Project::resolveReference(
-        m_project.rootPath(), selectedCollection.parent);
-    QDir parentDir(parentPath);
-    if (!parentDir.exists()) {
+    const QString framePath = Project::resolveReference(
+        m_project.rootPath(), selectedCollection.imageFrame);
+    QDir frameDir(framePath);
+    if (!frameDir.exists()) {
         QMessageBox::warning(this, "Create mask",
-                             "The selected segmentation collection does not have a valid parent folder.");
+                             "The selected segmentation collection does not have a valid image frame.");
         return;
     }
 
@@ -9557,16 +9854,20 @@ void MainWindow::createMaskTiffInCollection(
         usedBaseNames.insert(file.completeBaseName().toCaseFolded());
 
     QMap<QString, QString> parentTiffsByBaseName;
-    QStringList ambiguousParentBaseNames;
-    const QFileInfoList parentImages = parentDir.entryInfoList(
+    const QFileInfoList frameImages = frameDir.entryInfoList(
         {"*.tif", "*.tiff", "*.TIF", "*.TIFF"},
         QDir::Files | QDir::NoSymLinks, QDir::Name);
-    for (const QFileInfo &image : parentImages) {
+    if (frameImages.isEmpty()) {
+        QMessageBox::warning(
+            this, "Create mask",
+            "The image-frame collection does not contain a TIFF image "
+            "from which mask dimensions can be obtained.");
+        return;
+    }
+    for (const QFileInfo &image : frameImages) {
         const QString baseName = image.completeBaseName();
         const QString foldedBaseName = baseName.toCaseFolded();
         if (parentTiffsByBaseName.contains(foldedBaseName)) {
-            if (!ambiguousParentBaseNames.contains(baseName, Qt::CaseInsensitive))
-                ambiguousParentBaseNames.append(baseName);
             parentTiffsByBaseName[foldedBaseName] = QString();
         } else {
             parentTiffsByBaseName.insert(foldedBaseName, image.absoluteFilePath());
@@ -9574,7 +9875,7 @@ void MainWindow::createMaskTiffInCollection(
     }
 
     QStringList availableBaseNames;
-    for (const QFileInfo &image : parentImages) {
+    for (const QFileInfo &image : frameImages) {
         const QString baseName = image.completeBaseName();
         const QString foldedBaseName = baseName.toCaseFolded();
         if (!usedBaseNames.contains(foldedBaseName)
@@ -9587,8 +9888,9 @@ void MainWindow::createMaskTiffInCollection(
     PointCsvCreationDialog::Options maskDialogOptions;
     maskDialogOptions.windowTitle = QStringLiteral("Create mask TIFF");
     maskDialogOptions.description =
-        QStringLiteral("Select image basenames from the parent collection. "
-                       "Empty binary mask TIFF files will be created in the selected segmentation collection.");
+        QStringLiteral("Select image basenames from the image-frame collection. "
+                       "Empty binary mask TIFF files will be created in the selected segmentation collection. "
+                       "Custom names use the declared image frame for mask dimensions.");
     maskDialogOptions.customWindowTitle = QStringLiteral("Custom mask TIFF");
     maskDialogOptions.customPrompt = QStringLiteral("TIFF basename:");
     maskDialogOptions.summarySingular =
@@ -9599,7 +9901,7 @@ void MainWindow::createMaskTiffInCollection(
         QStringLiteral("tif"),
         QStringLiteral("tiff")
     };
-    maskDialogOptions.allowCustomName = false;
+    maskDialogOptions.allowCustomName = true;
 
     const QString foldedCollectionBaseName =
         selectedCollection.dirName.toCaseFolded();
@@ -9623,6 +9925,8 @@ void MainWindow::createMaskTiffInCollection(
     QStringList parentImagePaths;
     savePaths.reserve(selectedBaseNames.size());
     parentImagePaths.reserve(selectedBaseNames.size());
+    const QString frameReferenceImagePath =
+        frameImages.first().absoluteFilePath();
 
     for (const QString &baseName : selectedBaseNames) {
         const QString savePath = QDir(selectedDir).filePath(baseName + ".tif");
@@ -9636,27 +9940,10 @@ void MainWindow::createMaskTiffInCollection(
         }
 
         const QString foldedBaseName = baseName.toCaseFolded();
-        const QString parentImagePath =
+        QString parentImagePath =
             parentTiffsByBaseName.value(foldedBaseName);
-        if (parentImagePath.isEmpty()) {
-            const bool ambiguous = std::any_of(
-                ambiguousParentBaseNames.cbegin(),
-                ambiguousParentBaseNames.cend(),
-                [&baseName](const QString &ambiguousBaseName) {
-                    return ambiguousBaseName.compare(baseName,
-                                            Qt::CaseInsensitive) == 0;
-                });
-            QMessageBox::warning(
-                this, "Create mask",
-                ambiguous
-                    ? QStringLiteral("The parent collection contains multiple TIFF files named \"%1\". "
-                                     "Use a unique basename before creating a mask.")
-                          .arg(baseName)
-                    : QStringLiteral("No parent TIFF named \"%1\" was found. "
-                                     "The mask name must match a TIFF in the parent collection.")
-                          .arg(baseName));
-            return;
-        }
+        if (parentImagePath.isEmpty())
+            parentImagePath = frameReferenceImagePath;
 
         savePaths.append(savePath);
         parentImagePaths.append(parentImagePath);
@@ -9690,7 +9977,11 @@ void MainWindow::createMaskTiffInCollection(
             : QStringLiteral("Created %1 mask TIFF files")
                   .arg(savePaths.size()),
         5000);
+    const ProjectExplorerViewState viewState = projectExplorerViewState();
     m_projectFileSystemModel->refreshDirectory(selectedDir);
+    QTimer::singleShot(0, this, [this, viewState]() {
+        restoreProjectExplorerViewState(viewState);
+    });
 
     ImageViewer *viewer = currentImageViewer();
     if (savePaths.size() == 1 && viewer && viewer->layerManager()) {

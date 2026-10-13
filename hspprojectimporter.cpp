@@ -234,7 +234,7 @@ QVector<QVector<double>> parseSkyPoints(const QString &path,
                                      .arg(token, path));
             continue;
         }
-        rows.append({row, col, type});
+        rows.append({col, row, type});
     }
 
     if (rows.size() != expectedCount && warnings) {
@@ -281,7 +281,7 @@ QVector<QVector<double>> parseSunMark(const QString &path,
                                  .arg(token, path));
         return rows;
     }
-    rows.append({row, col});
+    rows.append({col, row});
     return rows;
 }
 
@@ -756,7 +756,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
         QString registrationError;
         if (!Project::registerCollection(
                 project.rootPath(), preprocessedDir,
-                "preprocessed_image_collection", {}, {}, {}, {},
+                "preprocessed_image_collection", {}, {}, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
@@ -775,21 +775,21 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
 
         if (!Project::registerCollection(
                 project.rootPath(), skyDir,
-                "point_collection", preprocessedDir, {}, {}, {},
+                "point_collection", {}, preprocessedDir, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
         if (!Project::registerCollection(
                 project.rootPath(), sunDir,
-                "point_collection", preprocessedDir, {}, {}, {},
+                "point_collection", {}, preprocessedDir, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
         }
         if (!Project::registerCollection(
                 project.rootPath(), maskDir,
-                "segmentation_collection", preprocessedDir, {}, {}, {},
+                "segmentation_collection", {}, preprocessedDir, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
@@ -800,7 +800,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
 
         if (!Project::registerCollection(
                 project.rootPath(), markedAreaDir,
-                "segmentation_collection", preprocessedDir, {}, {}, {},
+                "segmentation_collection", {}, preprocessedDir, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
@@ -811,7 +811,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
 
         if (!Project::registerCollection(
                 project.rootPath(), optSkyCoefDir,
-                "other", {}, {}, {}, {},
+                "other", {}, {}, {}, {}, {},
                 {},
                 &registrationError)) {
             return failAndRemove(registrationError);
@@ -862,7 +862,8 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
             const QString csvPath =
                 QDir(skyPointDirs.value(entry.groupToken))
                     .filePath(entry.baseName + ".csv");
-            if (writePointCsv(csvPath, rows, {"row", "col", "type"}, &csvError)) {
+            if (writePointCsv(
+                    csvPath, rows, {"x", "y_down", "type"}, &csvError)) {
                 ++out.skyPointFilesWritten;
             } else {
                 out.warnings.append(csvError);
@@ -879,7 +880,8 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
             const QString csvPath =
                 QDir(sunMarkDirs.value(entry.groupToken))
                     .filePath(entry.baseName + ".csv");
-            if (writePointCsv(csvPath, rows, {"row", "col"}, &csvError)) {
+            if (writePointCsv(
+                    csvPath, rows, {"x", "y_down"}, &csvError)) {
                 ++out.sunMarkFilesWritten;
             } else {
                 out.warnings.append(csvError);
@@ -959,7 +961,7 @@ Project HspProjectImporter::importProject(const HspImportOptions &options,
 
     QString registrationError;
     if (!Project::registerCollection(
-            project.rootPath(), fieldNotesDir, "other", {}, {}, {}, {},
+            project.rootPath(), fieldNotesDir, "other", {}, {}, {}, {}, {},
             {},
             &registrationError)) {
         return failAndRemove(registrationError);

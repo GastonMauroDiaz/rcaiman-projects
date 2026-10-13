@@ -2,112 +2,59 @@
 //
 // Copyright (C) 2026 GASTON MAURO DIAZ
 //
-// This file is part of rcaiman-projects.
-//
-// rcaiman-projects is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// rcaiman-projects is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
-//
 // Part of the rcaiman suite.
 
 #include "collectiongraphdialog.h"
+#include "collectionappearance.h"
 
 #include <QBrush>
+#include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDialogButtonBox>
-#include <QDir>
 #include <QFileInfo>
+#include <QFont>
+#include <QGraphicsItem>
+#include <QGraphicsPathItem>
 #include <QGraphicsPolygonItem>
-#include <QGraphicsRectItem>
 #include <QGraphicsScene>
 #include <QGraphicsTextItem>
 #include <QGraphicsView>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QFont>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSet>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <utility>
 
 namespace {
 constexpr qreal NodeWidth = 178.0;
 constexpr qreal NodeHeight = 54.0;
-constexpr qreal ColumnSpacing = 230.0;
+constexpr qreal LevelSpacing = 210.0;
+constexpr qreal RoleSpacing = 230.0;
 constexpr qreal RowSpacing = 82.0;
 constexpr qreal BranchGapRows = 1.0;
 constexpr qreal LeftMargin = 36.0;
-constexpr qreal TopMargin = 88.0;
+constexpr qreal TopMargin = 116.0;
 constexpr qreal Pi = 3.14159265358979323846;
 
-QString normalizedPath(const QString &path)
+QGraphicsPolygonItem *addArrowHead(QGraphicsScene *scene,
+                                   const QPointF &tip,
+                                   qreal angle,
+                                   const QColor &color,
+                                   qreal zValue)
 {
-    if (path.trimmed().isEmpty())
-        return {};
-    QString normalized =
-        QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-#ifdef Q_OS_WIN
-    normalized = normalized.toCaseFolded();
-#endif
-    return QDir::fromNativeSeparators(normalized);
-}
-
-QString columnTitle(int column)
-{
-    switch (column) {
-    case 0:
-        return "Preprocessed";
-    case 1:
-        return "Points";
-    case 2:
-        return "Segmentation";
-    case 3:
-        return "Processed";
-    case 4:
-        return "Other";
-    default:
-        return {};
-    }
-}
-
-bool parentIsRequired(const QString &collectionClass)
-{
-    return collectionClass == "point_collection"
-        || collectionClass == "segmentation_collection";
-}
-
-QStringList compatibleParentClasses(const QString &collectionClass)
-{
-    if (collectionClass == "processed_image_collection"
-        || collectionClass == "point_collection"
-        || collectionClass == "segmentation_collection") {
-        return {"preprocessed_image_collection",
-                "processed_image_collection"};
-    }
-    return {};
-}
-
-void addArrowHead(QGraphicsScene *scene,
-                  const QPointF &tip,
-                  qreal angle,
-                  const QColor &color,
-                  qreal zValue)
-{
-    const qreal arrowSize = 10.0;
+    const qreal arrowSize = 9.0;
     const QPointF arrowP1 = tip - QPointF(
         std::cos(angle - Pi / 7.0) * arrowSize,
         std::sin(angle - Pi / 7.0) * arrowSize);
@@ -120,18 +67,23 @@ void addArrowHead(QGraphicsScene *scene,
     auto *head = scene->addPolygon(
         arrowHead, QPen(color), QBrush(color));
     head->setZValue(zValue);
+    return head;
 }
 
-void drawLegendArrow(QGraphicsScene *scene,
-                     const QPointF &start,
-                     const QPointF &end,
-                     const QColor &color,
-                     Qt::PenStyle style)
+QString roleTitle(int role)
 {
-    auto *line = scene->addLine(QLineF(start, end),
-                                QPen(color, 2.0, style));
-    line->setZValue(4);
-    addArrowHead(scene, end, 0.0, color, 5);
+    switch (role) {
+    case 1:
+        return "Points";
+    case 2:
+        return "Segmentation";
+    case 3:
+        return "Processed";
+    case 4:
+        return "Other";
+    default:
+        return {};
+    }
 }
 }
 
@@ -147,200 +99,168 @@ CollectionGraphDialog::CollectionGraphDialog(
                    | Qt::WindowMinMaxButtonsHint
                    | Qt::WindowCloseButtonHint);
     setSizeGripEnabled(true);
-    setMinimumSize(720, 480);
-    resize(1120, 720);
+    setMinimumSize(760, 500);
+    resize(1180, 760);
 
     auto *layout = new QVBoxLayout(this);
 
+    auto *summaryRow = new QHBoxLayout();
     m_summaryLabel = new QLabel(this);
     m_summaryLabel->setWordWrap(true);
-    layout->addWidget(m_summaryLabel);
+    summaryRow->addWidget(m_summaryLabel, 1);
+    auto *buildModeLabel = new QLabel("Build relations:", this);
+    summaryRow->addWidget(buildModeLabel);
+    m_buildModeCombo = new QComboBox(this);
+    m_buildModeCombo->addItem(
+        "Selected", static_cast<int>(BuildRelationMode::Selected));
+    m_buildModeCombo->addItem(
+        "All", static_cast<int>(BuildRelationMode::All));
+    m_buildModeCombo->addItem(
+        "Hidden", static_cast<int>(BuildRelationMode::Hidden));
+    m_buildModeCombo->setCurrentIndex(
+        m_buildModeCombo->findData(
+            static_cast<int>(BuildRelationMode::Selected)));
+    m_buildModeCombo->setToolTip(
+        "Controls the visibility of Built from provenance links.");
+    summaryRow->addWidget(m_buildModeCombo);
+    layout->addLayout(summaryRow);
 
-    m_relatedLabel = new QLabel(this);
-    m_relatedLabel->setWordWrap(true);
-    m_relatedLabel->setTextFormat(Qt::PlainText);
-    m_relatedLabel->setStyleSheet("color: #4b5563;");
-    layout->addWidget(m_relatedLabel);
-
-    m_brokenParentsLabel = new QLabel(this);
-    m_brokenParentsLabel->setWordWrap(true);
-    m_brokenParentsLabel->setTextFormat(Qt::PlainText);
-    m_brokenParentsLabel->setStyleSheet("color: #b3261e;");
-    layout->addWidget(m_brokenParentsLabel);
+    m_issueWidget = new QWidget(this);
+    auto *issueLayout = new QHBoxLayout(m_issueWidget);
+    issueLayout->setContentsMargins(0, 0, 0, 0);
+    auto *issueLabel = new QLabel(
+        "Some collection contracts need attention.",
+        m_issueWidget);
+    issueLabel->setStyleSheet("color: #9b1c1c;");
+    issueLayout->addWidget(issueLabel, 1);
+    m_checkCollectionsButton = new QPushButton(
+        "Check collections...", m_issueWidget);
+    issueLayout->addWidget(m_checkCollectionsButton);
+    layout->addWidget(m_issueWidget);
 
     m_scene = new QGraphicsScene(this);
     m_view = new QGraphicsView(m_scene, this);
     m_view->setRenderHint(QPainter::Antialiasing);
     m_view->setDragMode(QGraphicsView::ScrollHandDrag);
     m_view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    m_view->viewport()->installEventFilter(this);
     layout->addWidget(m_view, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     auto *refreshButton =
         buttons->addButton("Refresh", QDialogButtonBox::ActionRole);
     connect(refreshButton, &QPushButton::clicked,
-            this, &CollectionGraphDialog::rebuildGraph);
+            this, &CollectionGraphDialog::refreshGraph);
     connect(buttons, &QDialogButtonBox::rejected,
             this, &QDialog::close);
+    connect(m_checkCollectionsButton, &QPushButton::clicked,
+            this, &CollectionGraphDialog::checkCollectionsRequested);
+    connect(m_buildModeCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { refreshBuildEdges(); });
+    connect(m_scene, &QGraphicsScene::selectionChanged,
+            this, &CollectionGraphDialog::refreshBuildEdges);
     layout->addWidget(buttons);
 
-    rebuildGraph();
+    refreshGraph();
 }
 
-void CollectionGraphDialog::rebuildGraph()
+void CollectionGraphDialog::refreshGraph()
 {
-    m_collections = Project::discoverCollections(m_projectRootPath);
-    m_nodes.clear();
-    m_nodeIndexes.clear();
-    m_scene->clear();
-
-    std::sort(m_collections.begin(), m_collections.end(),
-              [](const Collection &left, const Collection &right) {
-                  return QString::compare(left.dirName, right.dirName,
-                                          Qt::CaseInsensitive) < 0;
-              });
-
-    for (const Collection &collection : std::as_const(m_collections))
-        addCollectionNode(collection);
-
-    QHash<QString, int> collectionIndexesById;
-    QHash<QString, QString> collectionNamesById;
-    for (int i = 0; i < m_collections.size(); ++i) {
-        const QString id = nodeIdForCollection(m_collections.at(i));
-        collectionIndexesById.insert(id, i);
-        collectionNamesById.insert(id, m_collections.at(i).dirName);
+    const bool preserveViewState = !m_nodes.isEmpty();
+    const QTransform previousTransform = m_view->transform();
+    const QPointF previousCenter = m_view->mapToScene(
+        m_view->viewport()->rect().center());
+    QSet<QString> selectedNodeIds;
+    if (preserveViewState) {
+        for (QGraphicsItem *item : m_scene->selectedItems()) {
+            const QString id = item->data(0).toString();
+            if (!id.isEmpty())
+                selectedNodeIds.insert(id);
+        }
     }
 
-    int parentEdges = 0;
-    QStringList parentIssueLines;
+    m_collections = Project::discoverCollections(m_projectRootPath);
+    std::sort(m_collections.begin(), m_collections.end(),
+              [](const Collection &left, const Collection &right) {
+                  return QString::compare(
+                      left.dirName, right.dirName,
+                      Qt::CaseInsensitive) < 0;
+              });
+
+    m_analysis = CollectionContract::analyze(
+        m_projectRootPath, m_collections);
+    m_nodes.clear();
+    m_nodeIndexes.clear();
+    m_buildEdgeItems.clear();
+    m_scene->clear();
+    m_maxPreprocessingLevel = 0;
+
     for (const Collection &collection : std::as_const(m_collections)) {
-        const QString collectionId = nodeIdForCollection(collection);
-        const QStringList allowedParents =
-            compatibleParentClasses(collection.collectionClass);
-        if (collection.parent.trimmed().isEmpty()) {
-            if (parentIsRequired(collection.collectionClass)) {
-                parentIssueLines.append(
-                    QStringLiteral("- %1: Parent is required but empty.")
-                        .arg(displayLabel(collection).replace('\n', " | ")));
-                if (m_nodeIndexes.contains(collectionId))
-                    m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
-            }
-            continue;
-        }
-
-        ++parentEdges;
-        if (allowedParents.isEmpty()) {
-            parentIssueLines.append(
-                QStringLiteral(
-                    "- %1: Parent is set, but this collection class does not use it.")
-                    .arg(displayLabel(collection).replace('\n', " | ")));
-            if (m_nodeIndexes.contains(collectionId))
-                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
-            continue;
-        }
-
-        const QString parentId = nodeIdForReference(collection.parent);
-        const int parentIndex = collectionIndexesById.value(parentId, -1);
-        if (parentIndex < 0) {
-            const QString targetName = QFileInfo(
-                Project::resolveReference(m_projectRootPath,
-                                          collection.parent)).fileName();
-            parentIssueLines.append(
-                QStringLiteral("- %1 -> %2: parent target is missing or not registered.")
-                    .arg(displayLabel(collection).replace('\n', " | "),
-                         targetName.isEmpty() ? collection.parent : targetName));
-            if (m_nodeIndexes.contains(collectionId))
-                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
-            continue;
-        }
-
-        const Collection &parentCollection =
-            m_collections.at(parentIndex);
-        if (parentId == collectionId) {
-            parentIssueLines.append(
-                QStringLiteral("- %1: Parent points to itself.")
-                    .arg(displayLabel(collection).replace('\n', " | ")));
-            if (m_nodeIndexes.contains(collectionId))
-                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
-            continue;
-        }
-
-        if (!allowedParents.contains(parentCollection.collectionClass,
-                                     Qt::CaseInsensitive)) {
-            parentIssueLines.append(
-                QStringLiteral("- %1 -> %2: expected parent class %3.")
-                    .arg(displayLabel(collection).replace('\n', " | "),
-                         displayLabel(parentCollection).replace('\n', " | "),
-                         allowedParents.join(", ")));
-            if (m_nodeIndexes.contains(collectionId))
-                m_nodes[m_nodeIndexes.value(collectionId)].parentIssue = true;
+        addCollectionNode(collection);
+        const CollectionGraphPlacement placement =
+            m_analysis.placements.value(nodeIdForCollection(collection));
+        if (collection.collectionClass == "preprocessed_image_collection"
+            && placement.resolved) {
+            m_maxPreprocessingLevel = qMax(
+                m_maxPreprocessingLevel,
+                placement.preprocessingLevel);
         }
     }
 
     layoutNodes();
-    drawEdges();
+    drawStructuralEdges();
     drawNodes();
     drawLegend();
-
-    m_summaryLabel->setText(
-        QStringLiteral(
-            "%1 collection(s). Declared parent links: %2. Parent issues: %3.")
-            .arg(m_collections.size())
-            .arg(parentEdges)
-            .arg(parentIssueLines.size()));
-
-    QStringList relatedLines;
-    for (const Collection &collection : std::as_const(m_collections)) {
-        if (collection.related.trimmed().isEmpty())
-            continue;
-
-        const QString relatedId = nodeIdForReference(collection.related);
-        QString targetName = collectionNamesById.value(relatedId);
-        if (targetName.isEmpty()) {
-            targetName = QFileInfo(
-                Project::resolveReference(m_projectRootPath,
-                                          collection.related)).fileName();
+    if (!selectedNodeIds.isEmpty()) {
+        const QSignalBlocker blocker(m_scene);
+        for (QGraphicsItem *item : m_scene->items()) {
+            if (selectedNodeIds.contains(item->data(0).toString()))
+                item->setSelected(true);
         }
-        if (targetName.isEmpty())
-            targetName = collection.related;
+    }
+    refreshBuildEdges();
 
-        relatedLines.append(
-            QStringLiteral("- %1 -> %2")
-                .arg(collection.dirName, targetName));
-    }
-    relatedLines.sort(Qt::CaseInsensitive);
-    m_relatedLabel->setVisible(!relatedLines.isEmpty());
-    if (!relatedLines.isEmpty()) {
-        m_relatedLabel->setText(
-            QStringLiteral("Related links (derivation):\n%1")
-                .arg(relatedLines.join('\n')));
-    } else {
-        m_relatedLabel->clear();
-    }
-
-    parentIssueLines.sort(Qt::CaseInsensitive);
-    m_brokenParentsLabel->setVisible(!parentIssueLines.isEmpty());
-    if (!parentIssueLines.isEmpty()) {
-        m_brokenParentsLabel->setText(
-            QStringLiteral("Parent issues:\n%1")
-                .arg(parentIssueLines.join('\n')));
-    } else {
-        m_brokenParentsLabel->clear();
-    }
+    const bool hasPreprocessed = std::any_of(
+        m_collections.cbegin(), m_collections.cend(),
+        [](const Collection &collection) {
+            return collection.collectionClass
+                == "preprocessed_image_collection";
+        });
+    m_summaryLabel->setText(
+        hasPreprocessed
+            ? QStringLiteral("%1 collection(s). Preprocessing levels: L0-L%2.")
+                  .arg(m_collections.size())
+                  .arg(m_maxPreprocessingLevel)
+            : QStringLiteral("%1 collection(s). No preprocessing levels to display.")
+                  .arg(m_collections.size()));
+    m_issueWidget->setVisible(m_analysis.hasIssues());
 
     m_scene->setSceneRect(
         m_scene->itemsBoundingRect().adjusted(-40, -30, 80, 60));
-    m_view->resetTransform();
-    m_view->horizontalScrollBar()->setValue(0);
-    m_view->verticalScrollBar()->setValue(0);
+    if (preserveViewState) {
+        m_view->setTransform(previousTransform);
+        m_view->centerOn(previousCenter);
+    } else {
+        m_view->resetTransform();
+        m_view->horizontalScrollBar()->setValue(0);
+        m_view->verticalScrollBar()->setValue(0);
+    }
 }
 
-void CollectionGraphDialog::addCollectionNode(const Collection &collection)
+void CollectionGraphDialog::addCollectionNode(
+    const Collection &collection)
 {
     NodeInfo node;
     node.id = nodeIdForCollection(collection);
+    node.directory = collection.dirPath;
     node.label = displayLabel(collection);
     node.collectionClass = collection.collectionClass;
+    node.issue = m_analysis.hasIssuesForCollection(node.id);
+    const CollectionGraphPlacement placement =
+        m_analysis.placements.value(node.id);
+    node.unresolved = collection.collectionClass != "other"
+        && !placement.resolved;
 
     m_nodeIndexes.insert(node.id, m_nodes.size());
     m_nodes.append(node);
@@ -349,13 +269,13 @@ void CollectionGraphDialog::addCollectionNode(const Collection &collection)
 QString CollectionGraphDialog::nodeIdForCollection(
     const Collection &collection) const
 {
-    return normalizedPath(collection.dirPath);
+    return CollectionContract::collectionId(collection.dirPath);
 }
 
 QString CollectionGraphDialog::nodeIdForReference(
     const QString &reference) const
 {
-    return normalizedPath(
+    return CollectionContract::collectionId(
         Project::resolveReference(m_projectRootPath, reference));
 }
 
@@ -364,36 +284,13 @@ QString CollectionGraphDialog::displayLabel(
 {
     if (collection.alias.isEmpty())
         return collection.dirName;
-    return QStringLiteral("%1\n%2").arg(collection.dirName, collection.alias);
+    return QStringLiteral("%1\n%2")
+        .arg(collection.dirName, collection.alias);
 }
 
-QColor CollectionGraphDialog::colorForClass(
-    const QString &collectionClass,
-    bool missing) const
+int CollectionGraphDialog::roleColumn(
+    const QString &collectionClass) const
 {
-    if (missing)
-        return QColor("#f4b6b6");
-    if (collectionClass == "preprocessed_image_collection")
-        return QColor("#d8ead3");
-    if (collectionClass == "processed_image_collection")
-        return QColor("#d8e9f8");
-    if (collectionClass == "segmentation_collection")
-        return QColor("#efe0f8");
-    if (collectionClass == "point_collection")
-        return QColor("#fff0c2");
-    if (collectionClass == "other")
-        return QColor("#f4c7c3");
-    return QColor("#e6e6e6");
-}
-
-int CollectionGraphDialog::columnForClass(
-    const QString &collectionClass,
-    bool missing) const
-{
-    if (missing)
-        return -1;
-    if (collectionClass == "preprocessed_image_collection")
-        return 0;
     if (collectionClass == "point_collection")
         return 1;
     if (collectionClass == "segmentation_collection")
@@ -402,168 +299,292 @@ int CollectionGraphDialog::columnForClass(
         return 3;
     if (collectionClass == "other")
         return 4;
-    return -1;
+    return 0;
+}
+
+qreal CollectionGraphDialog::xForRoleColumn(int role) const
+{
+    return LeftMargin
+        + (m_maxPreprocessingLevel + 1) * LevelSpacing
+        + 24.0
+        + (role - 1) * RoleSpacing;
 }
 
 void CollectionGraphDialog::layoutNodes()
 {
-    QHash<QString, int> collectionIndexes;
-    for (int i = 0; i < m_collections.size(); ++i)
-        collectionIndexes.insert(nodeIdForCollection(m_collections.at(i)), i);
-
-    std::function<QString(const Collection&, QSet<QString>*)> anchorFor;
-    anchorFor = [&](const Collection &collection,
-                    QSet<QString> *seen) -> QString {
-        const QString id = nodeIdForCollection(collection);
-        if (collection.collectionClass == "preprocessed_image_collection")
-            return id;
-        if (collection.parent.trimmed().isEmpty() || !seen)
-            return {};
-        if (seen->contains(id))
-            return {};
-        seen->insert(id);
-
-        const QString parentId = nodeIdForReference(collection.parent);
-        if (!collectionIndexes.contains(parentId))
-            return {};
-        const Collection &parent = m_collections.at(
-            collectionIndexes.value(parentId));
-        if (parent.collectionClass == "preprocessed_image_collection")
-            return parentId;
-        return anchorFor(parent, seen);
-    };
-
-    QHash<QString, QHash<int, QVector<int>>> branchColumns;
-    QStringList branchOrder;
+    QHash<QString, QVector<int>> attachedNodes;
+    QHash<QString, QVector<int>> branchFrames;
     QVector<int> otherNodes;
-
-    for (const Collection &collection : std::as_const(m_collections)) {
-        if (collection.collectionClass != "preprocessed_image_collection")
-            continue;
-        const QString id = nodeIdForCollection(collection);
-        branchOrder.append(id);
-    }
+    QVector<int> unresolvedNodes;
 
     for (int nodeIndex = 0; nodeIndex < m_nodes.size(); ++nodeIndex) {
-        const NodeInfo &node = m_nodes.at(nodeIndex);
+        NodeInfo &node = m_nodes[nodeIndex];
+        const CollectionGraphPlacement placement =
+            m_analysis.placements.value(node.id);
         if (node.collectionClass == "other") {
             otherNodes.append(nodeIndex);
-            continue;
+        } else if (!placement.resolved) {
+            node.unresolved = true;
+            unresolvedNodes.append(nodeIndex);
+        } else if (node.collectionClass
+                   == "preprocessed_image_collection") {
+            branchFrames[placement.branchRootId].append(nodeIndex);
+        } else {
+            attachedNodes[placement.frameId].append(nodeIndex);
         }
-
-        QString branchKey = node.id;
-        if (collectionIndexes.contains(node.id)) {
-            QSet<QString> seen;
-            const QString anchor =
-                anchorFor(m_collections.at(collectionIndexes.value(node.id)),
-                          &seen);
-            if (!anchor.isEmpty())
-                branchKey = anchor;
-        }
-        if (!branchOrder.contains(branchKey))
-            branchOrder.append(branchKey);
-        branchColumns[branchKey][columnForClass(
-            node.collectionClass, node.missing)].append(nodeIndex);
     }
 
-    std::sort(branchOrder.begin(), branchOrder.end(),
+    QStringList branchRoots = branchFrames.keys();
+    std::sort(branchRoots.begin(), branchRoots.end(),
               [this](const QString &left, const QString &right) {
                   const int leftIndex = m_nodeIndexes.value(left, -1);
                   const int rightIndex = m_nodeIndexes.value(right, -1);
-                  const QString leftLabel =
-                      leftIndex >= 0 ? m_nodes.at(leftIndex).label : left;
-                  const QString rightLabel =
-                      rightIndex >= 0 ? m_nodes.at(rightIndex).label : right;
+                  const QString leftLabel = leftIndex >= 0
+                      ? m_nodes.at(leftIndex).label : left;
+                  const QString rightLabel = rightIndex >= 0
+                      ? m_nodes.at(rightIndex).label : right;
                   return QString::compare(
-                      leftLabel, rightLabel, Qt::CaseInsensitive) < 0;
+                      leftLabel, rightLabel,
+                      Qt::CaseInsensitive) < 0;
               });
 
     qreal rowCursor = 0.0;
-    for (const QString &branchKey : std::as_const(branchOrder)) {
-        QHash<int, QVector<int>> columns = branchColumns.value(branchKey);
-        int branchHeight = 1;
-        for (int column = 0; column <= 3; ++column) {
-            QVector<int> indexes = columns.value(column);
-            std::sort(indexes.begin(), indexes.end(),
+    for (const QString &rootId : std::as_const(branchRoots)) {
+        QVector<int> frames = branchFrames.value(rootId);
+        std::sort(frames.begin(), frames.end(),
+                  [this](int left, int right) {
+                      const CollectionGraphPlacement leftPlacement =
+                          m_analysis.placements.value(m_nodes.at(left).id);
+                      const CollectionGraphPlacement rightPlacement =
+                          m_analysis.placements.value(m_nodes.at(right).id);
+                      if (leftPlacement.preprocessingLevel
+                          != rightPlacement.preprocessingLevel) {
+                          return leftPlacement.preprocessingLevel
+                              < rightPlacement.preprocessingLevel;
+                      }
+                      return QString::compare(
+                          m_nodes.at(left).label,
+                          m_nodes.at(right).label,
+                          Qt::CaseInsensitive) < 0;
+                  });
+
+        for (const int frameNodeIndex : std::as_const(frames)) {
+            const QString frameId = m_nodes.at(frameNodeIndex).id;
+            QHash<int, QVector<int>> nodesByRole;
+            for (const int attachedIndex : attachedNodes.value(frameId)) {
+                nodesByRole[roleColumn(
+                    m_nodes.at(attachedIndex).collectionClass)]
+                    .append(attachedIndex);
+            }
+            int frameHeight = 1;
+            for (int role = 1; role <= 3; ++role) {
+                QVector<int> indexes = nodesByRole.value(role);
+                std::sort(indexes.begin(), indexes.end(),
+                          [this](int left, int right) {
+                              return QString::compare(
+                                  m_nodes.at(left).label,
+                                  m_nodes.at(right).label,
+                                  Qt::CaseInsensitive) < 0;
+                          });
+                nodesByRole[role] = indexes;
+                frameHeight = qMax(frameHeight, indexes.size());
+            }
+
+            const CollectionGraphPlacement framePlacement =
+                m_analysis.placements.value(frameId);
+            NodeInfo &frameNode = m_nodes[frameNodeIndex];
+            frameNode.rect = QRectF(
+                LeftMargin
+                    + framePlacement.preprocessingLevel * LevelSpacing,
+                TopMargin
+                    + (rowCursor + (frameHeight - 1) / 2.0) * RowSpacing,
+                NodeWidth,
+                NodeHeight);
+
+            for (int role = 1; role <= 3; ++role) {
+                const QVector<int> indexes = nodesByRole.value(role);
+                for (int row = 0; row < indexes.size(); ++row) {
+                    NodeInfo &node = m_nodes[indexes.at(row)];
+                    node.rect = QRectF(
+                        xForRoleColumn(role),
+                        TopMargin + (rowCursor + row) * RowSpacing,
+                        NodeWidth,
+                        NodeHeight);
+                }
+            }
+            rowCursor += frameHeight;
+        }
+        rowCursor += BranchGapRows;
+    }
+
+    if (!unresolvedNodes.isEmpty()) {
+        auto *title = m_scene->addText("Unresolved");
+        QFont font = title->font();
+        font.setBold(true);
+        title->setFont(font);
+        title->setDefaultTextColor(QColor("#9b1c1c"));
+        title->setPos(LeftMargin,
+                      TopMargin + rowCursor * RowSpacing - 26.0);
+
+        QHash<int, QVector<int>> nodesByRole;
+        for (const int nodeIndex : std::as_const(unresolvedNodes))
+            nodesByRole[roleColumn(m_nodes.at(nodeIndex).collectionClass)]
+                .append(nodeIndex);
+        int unresolvedHeight = 1;
+        for (auto it = nodesByRole.begin(); it != nodesByRole.end(); ++it) {
+            std::sort(it.value().begin(), it.value().end(),
                       [this](int left, int right) {
                           return QString::compare(
                               m_nodes.at(left).label,
                               m_nodes.at(right).label,
                               Qt::CaseInsensitive) < 0;
                       });
-            columns[column] = indexes;
-        }
-
-        QHash<int, qreal> nodeRows;
-        qreal branchRow = 0.0;
-        const QVector<int> preprocessed = columns.value(0);
-        for (int column : {1, 2, 3}) {
-            const QVector<int> indexes = columns.value(column);
-            for (const int nodeIndex : indexes) {
-                nodeRows.insert(nodeIndex, branchRow);
-                branchRow += 1.0;
+            unresolvedHeight = qMax(unresolvedHeight, it.value().size());
+            for (int row = 0; row < it.value().size(); ++row) {
+                NodeInfo &node = m_nodes[it.value().at(row)];
+                const qreal x = it.key() == 0
+                    ? LeftMargin : xForRoleColumn(it.key());
+                node.rect = QRectF(
+                    x,
+                    TopMargin + (rowCursor + row) * RowSpacing,
+                    NodeWidth,
+                    NodeHeight);
             }
         }
-        branchHeight = qMax(1, qCeil(branchRow));
-
-        if (!preprocessed.isEmpty()) {
-            const qreal parentRow = branchRow > 0.0
-                ? (branchRow - 1.0) / 2.0
-                : 0.0;
-            for (const int nodeIndex : preprocessed)
-                nodeRows.insert(nodeIndex, parentRow);
-        }
-
-        for (auto it = nodeRows.cbegin(); it != nodeRows.cend(); ++it) {
-            NodeInfo &node = m_nodes[it.key()];
-            const int column = columnForClass(
-                node.collectionClass, node.missing);
-            node.rect = QRectF(
-                LeftMargin + column * ColumnSpacing,
-                TopMargin + (rowCursor + it.value()) * RowSpacing,
-                NodeWidth,
-                NodeHeight);
-        }
-        rowCursor += branchHeight + BranchGapRows;
+        rowCursor += unresolvedHeight + BranchGapRows;
     }
 
     std::sort(otherNodes.begin(), otherNodes.end(),
               [this](int left, int right) {
-                  return QString::compare(m_nodes.at(left).label,
-                                          m_nodes.at(right).label,
-                                          Qt::CaseInsensitive) < 0;
+                  return QString::compare(
+                      m_nodes.at(left).label,
+                      m_nodes.at(right).label,
+                      Qt::CaseInsensitive) < 0;
               });
     for (int row = 0; row < otherNodes.size(); ++row) {
         NodeInfo &node = m_nodes[otherNodes.at(row)];
         node.rect = QRectF(
-            LeftMargin + columnForClass(node.collectionClass) * ColumnSpacing,
+            xForRoleColumn(4),
             TopMargin + row * RowSpacing,
             NodeWidth,
             NodeHeight);
     }
-
 }
 
-void CollectionGraphDialog::drawEdges()
+void CollectionGraphDialog::drawStructuralEdges()
 {
     for (const Collection &collection : std::as_const(m_collections)) {
         const QString collectionId = nodeIdForCollection(collection);
         if (!m_nodeIndexes.contains(collectionId))
             continue;
+        const NodeInfo &node = m_nodes.at(m_nodeIndexes.value(collectionId));
+        const CollectionGraphPlacement placement =
+            m_analysis.placements.value(collectionId);
 
-        const NodeInfo &child = m_nodes.at(m_nodeIndexes.value(collectionId));
-        if (!collection.parent.trimmed().isEmpty()) {
-            const QString parentId = nodeIdForReference(collection.parent);
-            if (m_nodeIndexes.contains(parentId)) {
-                const NodeInfo &parentNode =
-                    m_nodes.at(m_nodeIndexes.value(parentId));
-                drawParentArrow(child.rect, parentNode.rect,
-                                parentNode.missing ? QColor("#b3261e")
-                                                   : QColor("#4b5563"),
-                                parentNode.missing);
+        if (collection.collectionClass == "preprocessed_image_collection"
+            && placement.resolved
+            && !collection.previousLevel.trimmed().isEmpty()) {
+            const QString previousId =
+                nodeIdForReference(collection.previousLevel);
+            if (m_nodeIndexes.contains(previousId)) {
+                const NodeInfo &previousNode =
+                    m_nodes.at(m_nodeIndexes.value(previousId));
+                const CollectionGraphPlacement previousPlacement =
+                    m_analysis.placements.value(previousId);
+                if (previousNode.collectionClass
+                        != "preprocessed_image_collection"
+                    || !previousPlacement.resolved
+                    || placement.branchRootId
+                        != previousPlacement.branchRootId
+                    || placement.preprocessingLevel
+                        != previousPlacement.preprocessingLevel + 1) {
+                    continue;
+                }
+                drawRelationArrow(
+                    node.rect,
+                    previousNode.rect,
+                    QColor("#00aa00"), Qt::SolidLine, 2.2, 0.2);
+            }
+        }
+        if (roleColumn(collection.collectionClass) >= 1
+            && roleColumn(collection.collectionClass) <= 3
+            && placement.resolved
+            && !collection.imageFrame.trimmed().isEmpty()) {
+            const QString frameId = nodeIdForReference(collection.imageFrame);
+            if (m_nodeIndexes.contains(frameId)
+                && placement.frameId == frameId) {
+                const NodeInfo &frameNode =
+                    m_nodes.at(m_nodeIndexes.value(frameId));
+                if (frameNode.collectionClass
+                    != "preprocessed_image_collection") {
+                    continue;
+                }
+                drawRelationArrow(
+                    node.rect,
+                    frameNode.rect,
+                    QColor("#000000"), Qt::SolidLine, 1.8, 0.1);
             }
         }
     }
+}
+
+void CollectionGraphDialog::refreshBuildEdges()
+{
+    for (QGraphicsItem *item : std::as_const(m_buildEdgeItems)) {
+        if (item && item->scene() == m_scene)
+            m_scene->removeItem(item);
+        delete item;
+    }
+    m_buildEdgeItems.clear();
+
+    const BuildRelationMode mode = buildRelationMode();
+    if (mode == BuildRelationMode::Hidden)
+        return;
+
+    QSet<QString> selectedIds;
+    if (mode == BuildRelationMode::Selected) {
+        for (QGraphicsItem *item : m_scene->selectedItems()) {
+            const QString id = item->data(0).toString();
+            if (!id.isEmpty())
+                selectedIds.insert(id);
+        }
+        if (selectedIds.isEmpty())
+            return;
+    }
+
+    for (const Collection &collection : std::as_const(m_collections)) {
+        const QString resultId = nodeIdForCollection(collection);
+        if (!m_nodeIndexes.contains(resultId)
+            || collection.collectionClass == "other") {
+            continue;
+        }
+        QSet<QString> drawnSources;
+        for (const QString &reference : collection.builtFrom) {
+            const QString sourceId = nodeIdForReference(reference);
+            if (!m_nodeIndexes.contains(sourceId)
+                || sourceId == resultId
+                || drawnSources.contains(sourceId)
+                || m_nodes.at(m_nodeIndexes.value(sourceId)).collectionClass
+                    == "other") {
+                continue;
+            }
+            drawnSources.insert(sourceId);
+            if (mode == BuildRelationMode::Selected
+                && !selectedIds.contains(resultId)
+                && !selectedIds.contains(sourceId)) {
+                continue;
+            }
+
+            const QVector<QGraphicsItem*> items = drawRelationArrow(
+                m_nodes.at(m_nodeIndexes.value(resultId)).rect,
+                m_nodes.at(m_nodeIndexes.value(sourceId)).rect,
+                QColor("#ff5500"), Qt::DashLine, 1.8, 0.7);
+            m_buildEdgeItems.append(items);
+        }
+    }
+
+    m_scene->setSceneRect(
+        m_scene->itemsBoundingRect().adjusted(-40, -30, 80, 60));
 }
 
 void CollectionGraphDialog::drawNodes()
@@ -571,17 +592,20 @@ void CollectionGraphDialog::drawNodes()
     for (const NodeInfo &node : std::as_const(m_nodes)) {
         QPainterPath path;
         path.addRoundedRect(node.rect, 8, 8);
-        const bool hasIssue = node.missing || node.parentIssue;
         auto *rect = m_scene->addPath(
             path,
-            QPen(hasIssue ? QColor("#b3261e") : QColor("#6b7280"),
-                 hasIssue ? 2.0 : 1.2),
-            QBrush(colorForClass(node.collectionClass, node.missing)));
+            QPen(node.issue ? QColor("#b3261e") : QColor("#6b7280"),
+                 node.issue ? 2.0 : 1.2),
+            QBrush(CollectionAppearance::surfaceColor(node.collectionClass)));
         rect->setZValue(2);
+        rect->setFlag(QGraphicsItem::ItemIsSelectable, true);
+        rect->setData(0, node.id);
+        rect->setToolTip(node.label);
 
         auto *text = m_scene->addText(QString());
+        text->setAcceptedMouseButtons(Qt::NoButton);
         text->setDefaultTextColor(
-            hasIssue ? QColor("#7f1d1d") : QColor("#111827"));
+            node.issue ? QColor("#7f1d1d") : QColor("#111827"));
         const QStringList labelLines = node.label.split('\n');
         QString html = QStringLiteral(
             "<div style=\"font-size:9pt; font-weight:600;\">%1</div>")
@@ -604,70 +628,202 @@ void CollectionGraphDialog::drawLegend()
     QFont headerFont;
     headerFont.setPointSize(11);
     headerFont.setBold(true);
-    for (int column = 0; column <= 4; ++column) {
-        auto *title = m_scene->addText(columnTitle(column));
+
+    const qreal preprocessedWidth =
+        m_maxPreprocessingLevel * LevelSpacing + NodeWidth;
+    auto *preprocessedTitle = m_scene->addText("Preprocessed");
+    preprocessedTitle->setFont(headerFont);
+    preprocessedTitle->setDefaultTextColor(QColor("#374151"));
+    preprocessedTitle->setPos(
+        LeftMargin + (preprocessedWidth
+                      - preprocessedTitle->boundingRect().width()) / 2.0,
+        TopMargin - 78.0);
+
+    QFont levelFont;
+    levelFont.setPointSize(9);
+    levelFont.setBold(true);
+    for (int level = 0; level <= m_maxPreprocessingLevel; ++level) {
+        auto *title = m_scene->addText(
+            QStringLiteral("L%1").arg(level));
+        title->setFont(levelFont);
+        title->setDefaultTextColor(QColor("#4b5563"));
+        title->setPos(
+            LeftMargin + level * LevelSpacing
+                + (NodeWidth - title->boundingRect().width()) / 2.0,
+            TopMargin - 46.0);
+    }
+
+    for (int role = 1; role <= 4; ++role) {
+        auto *title = m_scene->addText(roleTitle(role));
         title->setFont(headerFont);
         title->setDefaultTextColor(QColor("#374151"));
-        title->setPos(LeftMargin + column * ColumnSpacing,
-                      TopMargin - 42);
+        title->setPos(xForRoleColumn(role), TopMargin - 62.0);
     }
 
     qreal legendY = TopMargin + 40.0;
     for (const NodeInfo &node : std::as_const(m_nodes))
         legendY = qMax(legendY, node.rect.bottom() + 56.0);
 
-    drawLegendArrow(
-        m_scene,
-        QPointF(LeftMargin, legendY),
-        QPointF(LeftMargin + 64, legendY),
-        QColor("#4b5563"),
-        Qt::SolidLine);
-    auto *parentText = m_scene->addText("child -> parent");
-    parentText->setDefaultTextColor(QColor("#374151"));
-    parentText->setPos(LeftMargin + 76, legendY - 13);
+    auto addLegend = [&](qreal x, const QString &text,
+                         const QColor &color, Qt::PenStyle style) {
+        const QVector<QGraphicsItem*> items = drawRelationArrow(
+            QRectF(x, legendY - 14, 1, 28),
+            QRectF(x + 64, legendY - 14, 1, 28),
+            color, style, 2.0, 4.0);
+        Q_UNUSED(items);
+        auto *label = m_scene->addText(text);
+        label->setDefaultTextColor(QColor("#374151"));
+        label->setPos(x + 76, legendY - 13);
+    };
+    addLegend(LeftMargin, "uses image frame",
+              QColor("#000000"), Qt::SolidLine);
+    addLegend(LeftMargin + 250, "previous level",
+              QColor("#00aa00"), Qt::SolidLine);
+    addLegend(LeftMargin + 480, "built from",
+              QColor("#ff5500"), Qt::DashLine);
 
     auto *note = m_scene->addText(
-        "Some collection classes can declare a parent. "
-        "Collections do not declare their children.");
+        "Arrows point to the declared reference. Build relations do not "
+        "control placement or autoload.");
     QFont noteFont = note->font();
     noteFont.setPointSize(8);
     note->setFont(noteFont);
     note->setDefaultTextColor(QColor("#6b7280"));
-    note->setTextWidth(520);
-    note->setPos(LeftMargin, legendY + 20);
+    note->setTextWidth(620);
+    note->setPos(LeftMargin, legendY + 22.0);
 }
 
-void CollectionGraphDialog::drawParentArrow(const QRectF &sourceRect,
-                                            const QRectF &targetRect,
-                                            const QColor &color,
-                                            bool missing)
+QVector<QGraphicsItem*> CollectionGraphDialog::drawRelationArrow(
+    const QRectF &sourceRect,
+    const QRectF &targetRect,
+    const QColor &color,
+    Qt::PenStyle style,
+    qreal width,
+    qreal zValue)
 {
+    QVector<QGraphicsItem*> items;
     const QPointF sourceCenter = sourceRect.center();
     const QPointF targetCenter = targetRect.center();
     if (QLineF(sourceCenter, targetCenter).length() < 1.0)
-        return;
+        return items;
 
-    const bool leftToRight = targetCenter.x() >= sourceCenter.x();
-    QPointF source = leftToRight
-        ? QPointF(sourceRect.right(), sourceCenter.y())
-        : QPointF(sourceRect.left(), sourceCenter.y());
-    QPointF target = leftToRight
-        ? QPointF(targetRect.left(), targetCenter.y())
-        : QPointF(targetRect.right(), targetCenter.y());
-
+    QPointF source;
+    QPointF target;
+    qreal arrowAngle = 0.0;
     QPainterPath path;
-    path.moveTo(source);
-    qreal arrowAngle = leftToRight ? 0.0 : Pi;
-    const qreal direction = leftToRight ? 1.0 : -1.0;
-    const qreal trunkX = source.x() + direction * 22.0;
-    path.lineTo(QPointF(trunkX, source.y()));
-    path.lineTo(QPointF(trunkX, target.y()));
-    path.lineTo(target);
 
-    auto *line = m_scene->addPath(
-        path,
-        QPen(color, missing ? 2.4 : 1.8, Qt::SolidLine));
-    line->setZValue(0);
+    if (std::abs(sourceCenter.x() - targetCenter.x()) < 4.0) {
+        const bool targetBelow = targetCenter.y() > sourceCenter.y();
+        source = targetBelow
+            ? QPointF(sourceCenter.x(), sourceRect.bottom())
+            : QPointF(sourceCenter.x(), sourceRect.top());
+        target = targetBelow
+            ? QPointF(targetCenter.x(), targetRect.top())
+            : QPointF(targetCenter.x(), targetRect.bottom());
+        arrowAngle = targetBelow ? Pi / 2.0 : -Pi / 2.0;
+        path.moveTo(source);
+        path.lineTo(target);
+    } else {
+        const bool targetRight = targetCenter.x() > sourceCenter.x();
+        source = targetRight
+            ? QPointF(sourceRect.right(), sourceCenter.y())
+            : QPointF(sourceRect.left(), sourceCenter.y());
+        target = targetRight
+            ? QPointF(targetRect.left(), targetCenter.y())
+            : QPointF(targetRect.right(), targetCenter.y());
+        const qreal middleX = (source.x() + target.x()) / 2.0;
+        path.moveTo(source);
+        path.lineTo(QPointF(middleX, source.y()));
+        path.lineTo(QPointF(middleX, target.y()));
+        path.lineTo(target);
+        arrowAngle = targetRight ? 0.0 : Pi;
+    }
 
-    addArrowHead(m_scene, target, arrowAngle, color, 1);
+    auto *line = m_scene->addPath(path, QPen(color, width, style));
+    line->setZValue(zValue);
+    items.append(line);
+    items.append(addArrowHead(
+        m_scene, target, arrowAngle, color, zValue + 0.1));
+    return items;
+}
+
+CollectionGraphDialog::BuildRelationMode
+CollectionGraphDialog::buildRelationMode() const
+{
+    if (!m_buildModeCombo)
+        return BuildRelationMode::Selected;
+    return static_cast<BuildRelationMode>(
+        m_buildModeCombo->currentData(Qt::UserRole).toInt());
+}
+
+int CollectionGraphDialog::nodeIndexAt(
+    const QPoint &viewportPosition,
+    QGraphicsItem **nodeItem) const
+{
+    if (nodeItem)
+        *nodeItem = nullptr;
+
+    const QPointF scenePosition = m_view->mapToScene(viewportPosition);
+    for (QGraphicsItem *item : m_scene->items(scenePosition)) {
+        const QString nodeId = item->data(0).toString();
+        if (nodeId.isEmpty())
+            continue;
+
+        const int nodeIndex = m_nodeIndexes.value(nodeId, -1);
+        if (nodeIndex < 0)
+            continue;
+        if (nodeItem)
+            *nodeItem = item;
+        return nodeIndex;
+    }
+    return -1;
+}
+
+bool CollectionGraphDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != m_view->viewport())
+        return QDialog::eventFilter(watched, event);
+
+    if (event->type() == QEvent::ContextMenu) {
+        auto *contextEvent = static_cast<QContextMenuEvent*>(event);
+        QGraphicsItem *nodeItem = nullptr;
+        const int nodeIndex = nodeIndexAt(
+            contextEvent->pos(), &nodeItem);
+        if (nodeIndex < 0 || !nodeItem)
+            return QDialog::eventFilter(watched, event);
+
+        m_scene->clearSelection();
+        nodeItem->setSelected(true);
+
+        QMenu menu(this);
+        QAction *editAction = menu.addAction("Edit collection...");
+        QAction *unregisterAction =
+            menu.addAction("Unregister collection...");
+        QAction *selectedAction = menu.exec(contextEvent->globalPos());
+        if (selectedAction == editAction) {
+            emit editCollectionRequested(
+                m_nodes.at(nodeIndex).directory);
+        } else if (selectedAction == unregisterAction) {
+            emit unregisterCollectionRequested(
+                m_nodes.at(nodeIndex).directory);
+        }
+        return true;
+    }
+
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        auto *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            QGraphicsItem *nodeItem = nullptr;
+            const int nodeIndex = nodeIndexAt(
+                mouseEvent->position().toPoint(), &nodeItem);
+            if (nodeIndex >= 0 && nodeItem) {
+                m_scene->clearSelection();
+                nodeItem->setSelected(true);
+                emit editCollectionRequested(
+                    m_nodes.at(nodeIndex).directory);
+                return true;
+            }
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }

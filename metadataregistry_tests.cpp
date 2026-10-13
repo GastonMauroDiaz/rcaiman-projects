@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "metadataregistry.h"
+#include "collectioncontract.h"
 #include "collectionvalidation.h"
 #include "acquisitionmetadata.h"
 #include "collectionstylefile.h"
@@ -36,6 +37,8 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+
+#include <algorithm>
 
 int main(int argc, char *argv[])
 {
@@ -257,13 +260,13 @@ int main(int argc, char *argv[])
     QFile importedPoints(
         QDir(importedHsp.rootPath()).filePath("sky_points_Group_A/test.csv"));
     if (!importedPoints.open(QIODevice::ReadOnly | QIODevice::Text)
-        || !importedPoints.readAll().contains("20,10,3")) {
+        || !importedPoints.readAll().contains("10,20,3")) {
         return 72;
     }
     QFile importedSun(
         QDir(importedHsp.rootPath()).filePath("sun_marks_Group_A/test.csv"));
     if (!importedSun.open(QIODevice::ReadOnly | QIODevice::Text)
-        || !importedSun.readAll().contains("60,50")) {
+        || !importedSun.readAll().contains("50,60")) {
         return 73;
     }
     QFile importedNote(
@@ -630,7 +633,7 @@ int main(int argc, char *argv[])
     scriptFile.close();
     if (!collectionFile.open(QIODevice::WriteOnly | QIODevice::Text)
         || collectionFile.write(
-            "schema_version: 1\n"
+            "schema_version: 2\n"
             "class: preprocessed_image_collection\n"
             "registry: registry_drafts/reviewed.yaml\n"
             "script: scripts/01_preprocessing_foo.R\n") < 0) {
@@ -950,5 +953,130 @@ int main(int argc, char *argv[])
         || !QFileInfo::exists(cleanupRoot.filePath("README.md"))) {
         return 101;
     }
+
+    const QString cleanCollectionPath =
+        cleanupRoot.filePath("legacy_preprocessed");
+    if (!cleanupRoot.mkpath("legacy_preprocessed")
+        || !Project::registerCollection(
+            cleanupProjectRoot, cleanCollectionPath,
+            "preprocessed_image_collection", {}, {}, {}, {}, {}, {},
+            &error)) {
+        return 109;
+    }
+    QFile importedImage(
+        QDir(cleanCollectionPath).filePath("legacy_image.tif"));
+    QFile importDocumentation(
+        QDir(cleanCollectionPath).filePath("legacy_jpeg_import.md"));
+    QFile collectionReadme(
+        QDir(cleanCollectionPath).filePath("README.md"));
+    if (!importedImage.open(QIODevice::WriteOnly)
+        || importedImage.write("image") < 0
+        || !importDocumentation.open(
+            QIODevice::WriteOnly | QIODevice::Text)
+        || importDocumentation.write("# Generated import record\n") < 0
+        || !collectionReadme.open(
+            QIODevice::WriteOnly | QIODevice::Text)
+        || collectionReadme.write("# Keep me too\n") < 0) {
+        return 110;
+    }
+    importedImage.close();
+    importDocumentation.close();
+    collectionReadme.close();
+
+    ProjectContentCleanPlan contentCleanPlan =
+        cleanupProject.buildContentCleanPlan();
+    auto cleanCollectionItem = std::find_if(
+        contentCleanPlan.items.begin(), contentCleanPlan.items.end(),
+        [](const ProjectContentCleanItem &item) {
+            return item.label == "legacy_preprocessed";
+        });
+    if (cleanCollectionItem == contentCleanPlan.items.end()
+        || !cleanCollectionItem->relativeFiles.contains(
+            "legacy_preprocessed/legacy_image.tif")
+        || !cleanCollectionItem->relativeFiles.contains(
+            "legacy_preprocessed/legacy_jpeg_import.md")
+        || cleanCollectionItem->relativeFiles.contains(
+            "legacy_preprocessed/README.md")) {
+        return 111;
+    }
+    cleanCollectionItem->selected = true;
+    if (!cleanupProject.applyContentCleanPlan(contentCleanPlan, &error)
+        || QFileInfo::exists(importedImage.fileName())
+        || QFileInfo::exists(importDocumentation.fileName())
+        || !QFileInfo::exists(collectionReadme.fileName())) {
+        return 112;
+    }
+
+    const QString contractProjectRoot =
+        QDir(directory.path()).filePath("collection_contract_project");
+    const Project contractProject = Project::create(
+        contractProjectRoot, "collection_contract_project",
+        "Collection contract test", &error);
+    if (!contractProject.isValid())
+        return 102;
+    QDir contractRoot(contractProjectRoot);
+    if (!contractRoot.mkpath("blue_l0")
+        || !contractRoot.mkpath("blue_l1")
+        || !contractRoot.mkpath("points_l1")) {
+        return 103;
+    }
+    const QString blueL0 = contractRoot.filePath("blue_l0");
+    const QString blueL1 = contractRoot.filePath("blue_l1");
+    const QString pointsL1 = contractRoot.filePath("points_l1");
+    if (!Project::registerCollection(
+            contractProjectRoot, blueL0,
+            "preprocessed_image_collection", {}, {}, {}, {}, {}, {},
+            &error)
+        || !Project::registerCollection(
+            contractProjectRoot, blueL1,
+            "preprocessed_image_collection", blueL0, {},
+            QStringList{blueL0}, {}, {}, {}, &error)
+        || !Project::registerCollection(
+            contractProjectRoot, pointsL1,
+            "point_collection", {}, blueL1,
+            QStringList{blueL0, blueL1}, {}, {}, {}, &error)) {
+        return 104;
+    }
+
+    QVector<Collection> contractCollections =
+        Project::discoverCollections(contractProjectRoot);
+    auto collectionNamed = [&contractCollections](const QString &name) {
+        return std::find_if(
+            contractCollections.cbegin(), contractCollections.cend(),
+            [&name](const Collection &collection) {
+                return collection.dirName == name;
+            });
+    };
+    auto pointsIt = collectionNamed("points_l1");
+    auto blueL1It = collectionNamed("blue_l1");
+    if (contractCollections.size() != 3
+        || pointsIt == contractCollections.cend()
+        || blueL1It == contractCollections.cend()
+        || pointsIt->schemaVersion != CollectionContract::SchemaVersion
+        || pointsIt->imageFrame != "blue_l1"
+        || pointsIt->builtFrom != QStringList{"blue_l0", "blue_l1"}
+        || blueL1It->previousLevel != "blue_l0") {
+        return 105;
+    }
+
+    if (!Project::updateCollectionMetadata(
+            contractProjectRoot, pointsL1, "points for L1", {}, blueL1,
+            QStringList{blueL1}, {}, {}, &error)) {
+        return 106;
+    }
+    contractCollections = Project::discoverCollections(contractProjectRoot);
+    pointsIt = collectionNamed("points_l1");
+    if (pointsIt == contractCollections.cend()
+        || pointsIt->alias != "points for L1"
+        || pointsIt->imageFrame != "blue_l1"
+        || pointsIt->builtFrom != QStringList{"blue_l1"}) {
+        return 107;
+    }
+
+    const CollectionContractAnalysis contractAnalysis =
+        CollectionContract::analyze(
+            contractProjectRoot, contractCollections);
+    if (contractAnalysis.hasIssues())
+        return 108;
     return 0;
 }

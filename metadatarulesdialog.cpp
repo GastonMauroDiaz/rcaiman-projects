@@ -60,8 +60,11 @@ MetadataRulesDialog::MetadataRulesDialog(
     toolsLayout->addWidget(m_filterCountLabel);
     auto *moveTopButton = new QPushButton("Move to Top", this);
     auto *moveBottomButton = new QPushButton("Move to Bottom", this);
+    auto *moveCheckedTopButton =
+        new QPushButton("Move all checked to top", this);
     toolsLayout->addWidget(moveTopButton);
     toolsLayout->addWidget(moveBottomButton);
+    toolsLayout->addWidget(moveCheckedTopButton);
     layout->addLayout(toolsLayout);
 
     m_table = new QTableWidget(analysis.size(), 9, this);
@@ -107,6 +110,8 @@ MetadataRulesDialog::MetadataRulesDialog(
             this, &MetadataRulesDialog::moveSelectedRowsToTop);
     connect(moveBottomButton, &QPushButton::clicked,
             this, &MetadataRulesDialog::moveSelectedRowsToBottom);
+    connect(moveCheckedTopButton, &QPushButton::clicked,
+            this, &MetadataRulesDialog::moveCheckedRowsToTop);
     updateFilterCount();
 
     auto *buttons = new QDialogButtonBox(
@@ -234,6 +239,18 @@ QList<int> MetadataRulesDialog::selectedTableRows() const
     return rows;
 }
 
+QList<int> MetadataRulesDialog::checkedTableRows() const
+{
+    QList<int> rows;
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        const auto *use =
+            qobject_cast<QCheckBox *>(m_table->cellWidget(row, 0));
+        if (use && use->isChecked())
+            rows.append(row);
+    }
+    return rows;
+}
+
 void MetadataRulesDialog::moveSelectedRows(bool toTop)
 {
     const QList<int> rows = selectedTableRows();
@@ -271,6 +288,39 @@ void MetadataRulesDialog::moveSelectedRows(bool toTop)
     const int firstMovedRow = toTop ? 0 : remainingRows.size();
     for (int offset = 0; offset < movedRows.size(); ++offset)
         m_table->selectRow(firstMovedRow + offset);
+    applyFilter();
+    m_table->verticalScrollBar()->setValue(verticalScroll);
+    m_table->horizontalScrollBar()->setValue(horizontalScroll);
+}
+
+void MetadataRulesDialog::moveCheckedRowsToTop()
+{
+    const QList<int> rows = checkedTableRows();
+    if (rows.isEmpty())
+        return;
+
+    const int verticalScroll = m_table->verticalScrollBar()->value();
+    const int horizontalScroll = m_table->horizontalScrollBar()->value();
+
+    QList<RowData> movedRows;
+    for (int row : rows)
+        movedRows.append(rowData(row));
+
+    QList<RowData> remainingRows;
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        if (!rows.contains(row))
+            remainingRows.append(rowData(row));
+    }
+
+    QList<RowData> reorderedRows = movedRows;
+    reorderedRows.append(remainingRows);
+
+    m_table->clearContents();
+    m_table->setRowCount(reorderedRows.size());
+    for (int row = 0; row < reorderedRows.size(); ++row)
+        setRowData(row, reorderedRows[row]);
+
+    m_table->clearSelection();
     applyFilter();
     m_table->verticalScrollBar()->setValue(verticalScroll);
     m_table->horizontalScrollBar()->setValue(horizontalScroll);

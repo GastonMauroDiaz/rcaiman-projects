@@ -2,34 +2,27 @@
 //
 // Copyright (C) 2026 GASTON MAURO DIAZ
 //
-// This file is part of rcaiman-projects.
-//
-// rcaiman-projects is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// rcaiman-projects is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with rcaiman-projects. If not, see <https://www.gnu.org/licenses/>.
-//
 // Part of the rcaiman suite.
 
 #ifndef COLLECTIONGRAPHDIALOG_H
 #define COLLECTIONGRAPHDIALOG_H
 
+#include "collectioncontract.h"
 #include "project.h"
 
+#include <QColor>
 #include <QDialog>
 #include <QHash>
+#include <QRectF>
+#include <QVector>
 
+class QComboBox;
+class QGraphicsItem;
 class QGraphicsScene;
 class QGraphicsView;
 class QLabel;
+class QPushButton;
+class QWidget;
 
 class CollectionGraphDialog : public QDialog
 {
@@ -40,43 +33,67 @@ public:
         const QString &projectRootPath,
         QWidget *parent = nullptr);
 
+public slots:
+    void refreshGraph();
+
+signals:
+    void checkCollectionsRequested();
+    void editCollectionRequested(const QString &collectionDirectory);
+    void unregisterCollectionRequested(const QString &collectionDirectory);
+
 private:
+    enum class BuildRelationMode {
+        Selected,
+        All,
+        Hidden
+    };
+
     struct NodeInfo {
         QString id;
+        QString directory;
         QString label;
         QString collectionClass;
         QRectF rect;
-        bool missing = false;
-        bool parentIssue = false;
+        bool issue = false;
+        bool unresolved = false;
     };
 
-    void rebuildGraph();
     void addCollectionNode(const Collection &collection);
     QString nodeIdForCollection(const Collection &collection) const;
     QString nodeIdForReference(const QString &reference) const;
     QString displayLabel(const Collection &collection) const;
-    QColor colorForClass(const QString &collectionClass,
-                         bool missing = false) const;
-    int columnForClass(const QString &collectionClass,
-                       bool missing = false) const;
+    int roleColumn(const QString &collectionClass) const;
+    qreal xForRoleColumn(int roleColumn) const;
     void layoutNodes();
-    void drawEdges();
+    void drawStructuralEdges();
+    void refreshBuildEdges();
     void drawNodes();
     void drawLegend();
-    void drawParentArrow(const QRectF &sourceRect,
-                         const QRectF &targetRect,
-                         const QColor &color,
-                         bool missing);
+    QVector<QGraphicsItem*> drawRelationArrow(
+        const QRectF &sourceRect,
+        const QRectF &targetRect,
+        const QColor &color,
+        Qt::PenStyle style,
+        qreal width,
+        qreal zValue);
+    BuildRelationMode buildRelationMode() const;
+    int nodeIndexAt(const QPoint &viewportPosition,
+                    QGraphicsItem **nodeItem = nullptr) const;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
     QString m_projectRootPath;
     QVector<Collection> m_collections;
     QVector<NodeInfo> m_nodes;
     QHash<QString, int> m_nodeIndexes;
+    CollectionContractAnalysis m_analysis;
+    QVector<QGraphicsItem*> m_buildEdgeItems;
+    int m_maxPreprocessingLevel = 0;
     QGraphicsScene *m_scene = nullptr;
     QGraphicsView *m_view = nullptr;
     QLabel *m_summaryLabel = nullptr;
-    QLabel *m_relatedLabel = nullptr;
-    QLabel *m_brokenParentsLabel = nullptr;
+    QWidget *m_issueWidget = nullptr;
+    QComboBox *m_buildModeCombo = nullptr;
+    QPushButton *m_checkCollectionsButton = nullptr;
 };
 
 #endif // COLLECTIONGRAPHDIALOG_H

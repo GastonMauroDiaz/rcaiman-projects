@@ -27,6 +27,8 @@
 #include <QStringList>
 #include <QDebug>
 
+#include <cmath>
+
 static QVariant convertValue(const QString &raw, QMetaType::Type type)
 {
     const QString trimmed = raw.trimmed();
@@ -134,11 +136,12 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
 
     // Parse header
     const QStringList colNames = parseCsvLine(header);
-    if (colNames.size() < 2 ||
-        colNames[0].compare("row", Qt::CaseInsensitive) != 0 ||
-        colNames[1].compare("col", Qt::CaseInsensitive) != 0) {
+    if (colNames.size() < 2
+        || colNames[0] != QStringLiteral("x")
+        || colNames[1] != QStringLiteral("y_down")) {
         if (errorMessage)
-            *errorMessage = QStringLiteral("Invalid header. Expected: row,col");
+            *errorMessage = QStringLiteral(
+                "Invalid header. Expected: x,y_down");
         return collection;
     }
 
@@ -164,8 +167,15 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
             continue;
 
         const QStringList parts = parseCsvLine(line);
-        if (parts.size() < 2)
-            continue;
+        if (parts.size() < 2) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral(
+                    "Invalid point row. Expected x,y_down values: %1")
+                        .arg(line);
+            }
+            collection.m_columnMeta.clear();
+            return collection;
+        }
 
         RawRow row;
         row.values = parts;
@@ -197,20 +207,23 @@ PointCollection PointCollection::load(const QString &filePath, QString *errorMes
     // Convert rows to PointRecords
     for (int r = 0; r < rawRows.size(); ++r) {
         const QStringList &vals = rawRows[r].values;
-        bool okR = false, okC = false;
-        const double row = vals[0].toDouble(&okR);
-        const double col = vals[1].toDouble(&okC);
-        if (!okR || !okC) {
+        bool xOk = false;
+        bool yDownOk = false;
+        const double x = vals[0].toDouble(&xOk);
+        const double yDown = vals[1].toDouble(&yDownOk);
+        if (!xOk || !yDownOk
+            || !std::isfinite(x) || !std::isfinite(yDown)) {
             if (errorMessage)
                 *errorMessage = QStringLiteral("Invalid coordinates at row %1: %2")
-                    .arg(r + 1).arg(vals.join(","));
+                    .arg(r + 2).arg(vals.join(","));
             collection.m_points.clear();
+            collection.m_columnMeta.clear();
             return collection;
         }
 
         PointRecord rec;
-        rec.row = row;
-        rec.col = col;
+        rec.x = x;
+        rec.yDown = yDown;
 
         for (int c = 2; c < vals.size() && (c - 2) < extraCount; ++c) {
             const QMetaType::Type t = collection.m_columnMeta[c].type;
@@ -263,11 +276,19 @@ PointCollection PointCollection::loadFromDirectory(const QString &dirPath, QStri
 PointCollection PointCollection::createEmpty(const QStringList &columnNames)
 {
     PointCollection collection;
+    if (columnNames.size() < 2
+        || columnNames.at(0) != QStringLiteral("x")
+        || columnNames.at(1) != QStringLiteral("y_down")) {
+        return collection;
+    }
+
     for (const QString &name : columnNames) {
         ColumnMeta meta;
         meta.name = name;
-        if (name.compare("row", Qt::CaseInsensitive) == 0 || name.compare("col", Qt::CaseInsensitive) == 0)
+        if (name == QStringLiteral("x")
+            || name == QStringLiteral("y_down")) {
             meta.type = QMetaType::Double;
+        }
         collection.m_columnMeta.append(meta);
     }
     return collection;
@@ -275,7 +296,9 @@ PointCollection PointCollection::createEmpty(const QStringList &columnNames)
 
 bool PointCollection::isValid() const
 {
-    return !m_columnMeta.isEmpty();
+    return m_columnMeta.size() >= 2
+        && m_columnMeta.at(0).name == QStringLiteral("x")
+        && m_columnMeta.at(1).name == QStringLiteral("y_down");
 }
 
 const QVector<PointRecord> &PointCollection::points() const
@@ -292,11 +315,11 @@ QStringList PointCollection::columnNames() const
     return names;
 }
 
-void PointCollection::addPoint(double row, double col)
+void PointCollection::addPoint(double x, double yDown)
 {
     PointRecord rec;
-    rec.row = row;
-    rec.col = col;
+    rec.x = x;
+    rec.yDown = yDown;
     // Pad attributes with null QVariants for extra columns
     const int extraCount = qMax(0, m_columnMeta.size() - 2);
     rec.attributes.resize(extraCount);
@@ -310,16 +333,23 @@ void PointCollection::removePoint(int index)
     m_points.removeAt(index);
 }
 
-void PointCollection::movePoint(int index, double row, double col)
+void PointCollection::movePoint(int index, double x, double yDown)
 {
     if (index < 0 || index >= m_points.size())
         return;
-    m_points[index].row = row;
-    m_points[index].col = col;
+    m_points[index].x = x;
+    m_points[index].yDown = yDown;
 }
 
 bool PointCollection::save(const QString &filePath, QString *errorMessage) const
 {
+    if (!isValid()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral(
+                "Invalid point collection. Expected columns: x,y_down");
+        return false;
+    }
+
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
         if (errorMessage)
@@ -328,6 +358,8 @@ bool PointCollection::save(const QString &filePath, QString *errorMessage) const
     }
 
     QTextStream stream(&file);
+    stream.setRealNumberNotation(QTextStream::SmartNotation);
+    stream.setRealNumberPrecision(15);
 
     // Write header with all column names
     QStringList headerParts;
@@ -338,7 +370,7 @@ bool PointCollection::save(const QString &filePath, QString *errorMessage) const
     // Write data rows
     const int extraCount = qMax(0, m_columnMeta.size() - 2);
     for (const PointRecord &rec : m_points) {
-        stream << rec.row << ',' << rec.col;
+        stream << rec.x << ',' << rec.yDown;
         for (int i = 0; i < extraCount; ++i) {
             stream << ',';
             if (i < rec.attributes.size() && rec.attributes[i].isValid()) {

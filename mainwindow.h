@@ -35,6 +35,7 @@
 #include <QList>
 #include <QSet>
 #include <QByteArray>
+#include <QVector>
 
 class QCloseEvent;
 class QCheckBox;
@@ -64,8 +65,10 @@ class QSpinBox;
 class PointLayer;
 class PointAttributeTableWindow;
 class PreviewDock;
+class QTimer;
 
 struct PixelInfo;
+struct CursorCoordinateInfo;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -171,14 +174,20 @@ private:
     void updateProjectActions();
     ImageViewer *currentImageViewer() const;
     QString selectedProjectPath() const;
+    void updateCoordinateStatus(const CursorCoordinateInfo &info);
+    void updateCoordinateReferenceControl(ImageViewer *viewer);
     void updatePropertiesTable(const PixelInfo &info);
     void updatePropertiesForPointLayer(PointLayer *layer);
     void clearPropertiesTable();
     void configureDockSizing();
     void configureViewer(ImageViewer *viewer);
+    void updateActiveViewerIndicators();
+    void updateSyncControls(ImageViewer *viewer);
     void closeOtherWorkspaceTabs(int preservedIndex);
     void closeAllWorkspaceTabs();
     void createProjectFolder();
+    bool editCollectionAtPath(const QString &collectionDirectory);
+    bool unregisterCollectionAtPath(const QString &collectionDirectory);
     void openAttributeTable(PointLayer *layer);
     void closeAttributeTables();
     ImageViewer *viewerForLayer(PointLayer *layer) const;
@@ -195,6 +204,9 @@ private:
     void refreshReloadableArtifactWatchers();
     void scheduleArtifactReload(const QString &path, int delayMs = 500);
     void reloadArtifactFromDisk(const QString &path);
+    void refreshProjectExplorerCountWatchers();
+    void scheduleProjectExplorerCountRefresh(const QString &path);
+    void flushProjectExplorerCountRefreshes();
     void reloadViewerLayers(ImageViewer *viewer);
     QList<Layer*> reloadableLayersForPath(const QString &path) const;
     void setHistogramLayer(Layer *layer);
@@ -221,6 +233,8 @@ private:
     ProjectFileSystemModel *m_projectFileSystemModel = nullptr;
     QAbstractProxyModel *m_projectSortProxy = nullptr;
     QFileSystemWatcher *m_artifactWatcher = nullptr;
+    QFileSystemWatcher *m_projectExplorerCountWatcher = nullptr;
+    QTimer *m_projectExplorerCountRefreshTimer = nullptr;
     Project m_project;
     QMap<QString, QWidget *> m_openImageTabs;
     LayersDock *m_layersDock = nullptr;
@@ -237,6 +251,7 @@ private:
     QLabel *m_projectPathLabel = nullptr;
     QComboBox *m_projectSortCombo = nullptr;
     QDoubleSpinBox *m_zoomPercentSpin = nullptr;
+    QCheckBox *m_syncZoomCheck = nullptr;
     QSlider *m_maskBrushSlider = nullptr;
     QSpinBox *m_maskBrushSpin = nullptr;
     QWidget *m_viewerEmptyState = nullptr;
@@ -245,6 +260,9 @@ private:
     QFrame *m_viewerQuickRule = nullptr;
     QLabel *m_viewerQuickTitle = nullptr;
     QLabel *m_viewerQuickBody = nullptr;
+    QLabel *m_coordinateReferenceLabel = nullptr;
+    QComboBox *m_coordinateReferenceCombo = nullptr;
+    QLabel *m_coordinateStatusLabel = nullptr;
     QProgressBar *m_statusProgressBar = nullptr;
     QStringList m_recentProjects;
     QPointer<PointLayer> m_currentPointLayer;
@@ -260,6 +278,8 @@ private:
     bool m_resetLayoutPending = false;
     QHash<QString, int> m_pendingReloadAttempts;
     QSet<QString> m_scheduledArtifactReloads;
+    QSet<QString> m_pendingProjectExplorerCountRefreshes;
+    QVector<QPointer<ImageLayer>> m_coordinateReferenceImages;
     CollectionStyleData m_copiedCollectionStyle;
     QString m_copiedCollectionStyleKind;
     QString m_copiedCollectionStyleSource;

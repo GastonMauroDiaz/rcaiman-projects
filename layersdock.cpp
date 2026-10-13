@@ -62,9 +62,9 @@ QString pointCsvContractMessage(const QString &errorMessage)
         "This file is not a valid point CSV for rcaiman-projects.\n\n"
         "Point CSV contract:\n"
         "- The file must be a .csv file.\n"
-        "- The first two columns must be row,col.\n"
-        "- Quoted headers such as \"row\",\"col\" are accepted.\n"
-        "- row and col values must be numeric.\n"
+        "- The first two columns must be x,y_down.\n"
+        "- Quoted headers such as \"x\",\"y_down\" are accepted.\n"
+        "- x and y_down values must be numeric.\n"
         "- Extra columns are allowed and are loaded as attributes.\n"
         "- Empty CSV files are allowed if they contain a valid header.\n\n"
         "Parser error:\n%1").arg(errorMessage);

@@ -20,10 +20,12 @@
 // Part of the rcaiman suite.
 
 #include "projectcleandialog.h"
+#include "collectionappearance.h"
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QDialogButtonBox>
+#include <QFontMetrics>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
@@ -64,12 +66,25 @@ ProjectCleanDialog::ProjectCleanDialog(
         {"Clean", "Folder", "Kind", "Files"});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setIconSize(QSize(14, 14));
     m_table->verticalHeader()->hide();
     m_table->horizontalHeader()->setStretchLastSection(false);
     m_table->horizontalHeader()->setSectionResizeMode(
         QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(
-        1, QHeaderView::Stretch);
+        2, QHeaderView::Fixed);
+    m_table->horizontalHeader()->setSectionResizeMode(
+        3, QHeaderView::Stretch);
+
+    QStringList knownKinds = CollectionAppearance::classNames();
+    knownKinds.append({"RAW files", "Sensor data", "Kind"});
+    const QFontMetrics metrics(m_table->font());
+    int kindTextWidth = 0;
+    for (const QString &kind : knownKinds)
+        kindTextWidth = qMax(kindTextWidth, metrics.horizontalAdvance(kind));
+    const int markerAndMargins = m_table->iconSize().width() + 30;
+    m_table->horizontalHeader()->resizeSection(
+        2, kindTextWidth + markerAndMargins);
 
     for (int row = 0; row < m_plan.items.size(); ++row) {
         const ProjectContentCleanItem &item = m_plan.items[row];
@@ -85,6 +100,7 @@ ProjectCleanDialog::ProjectCleanDialog(
 
         auto *folderItem = new QTableWidgetItem(item.label);
         auto *kindItem = new QTableWidgetItem(item.kind);
+        kindItem->setIcon(CollectionAppearance::markerIcon(item.kind));
         auto *filesItem =
             new QTableWidgetItem(fileCountText(item.relativeFiles.size()));
         if (!hasFiles) {

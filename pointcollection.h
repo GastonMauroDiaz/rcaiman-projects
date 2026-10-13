@@ -35,9 +35,9 @@ struct ColumnMeta {
 };
 
 struct PointRecord {
-    double row;
-    double col;
-    QVector<QVariant> attributes;  // columnas extra (después de row,col)
+    double x = 0.0;
+    double yDown = 0.0;
+    QVector<QVariant> attributes;
 };
 
 class PointCollection
@@ -47,14 +47,15 @@ public:
 
     static PointCollection load(const QString &filePath, QString *errorMessage = nullptr);
     static PointCollection loadFromDirectory(const QString &dirPath, QString *errorMessage = nullptr);
-    static PointCollection createEmpty(const QStringList &columnNames = {"row", "col"});
+    static PointCollection createEmpty(
+        const QStringList &columnNames = {"x", "y_down"});
 
     bool isValid() const;
     const QVector<PointRecord> &points() const;
 
-    void addPoint(double row, double col);
+    void addPoint(double x, double yDown);
     void removePoint(int index);
-    void movePoint(int index, double row, double col);
+    void movePoint(int index, double x, double yDown);
     bool save(const QString &filePath, QString *errorMessage = nullptr) const;
 
     QStringList columnNames() const;

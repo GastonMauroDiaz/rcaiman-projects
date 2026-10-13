@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "projectfilesystemmodel.h"
+#include "collectionappearance.h"
 #include "project.h"
 #include "tiffreader.h"
 
@@ -28,8 +29,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIcon>
 #include <QStringList>
 #include <QTextStream>
+
+#include <cmath>
 
 namespace {
 QString valueAfterColon(const QString &line)
@@ -98,20 +102,6 @@ QStringList parseCsvLine(const QString &line)
     return result;
 }
 
-QColor explorerColorForCollectionClass(const QString &collectionClass)
-{
-    if (collectionClass == "preprocessed_image_collection")
-        return QColor("#2f6f3e");
-    if (collectionClass == "point_collection")
-        return QColor("#8a6200");
-    if (collectionClass == "segmentation_collection")
-        return QColor("#6d3f8c");
-    if (collectionClass == "processed_image_collection")
-        return QColor("#1f5f86");
-    if (collectionClass == "other")
-        return QColor("#9f2f2a");
-    return {};
-}
 }
 
 ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
@@ -120,7 +110,8 @@ ProjectFileSystemModel::ProjectFileSystemModel(QObject *parent)
     auto refreshParent = [this](const QModelIndex &parent) {
         clearAllDirectoryCaches();
         if (parent.isValid())
-            emit dataChanged(parent, parent, {Qt::DisplayRole});
+            emit dataChanged(
+                parent, parent, {Qt::DisplayRole, Qt::DecorationRole});
     };
 
     connect(this, &QAbstractItemModel::rowsInserted,
@@ -169,11 +160,18 @@ QVariant ProjectFileSystemModel::data(const QModelIndex &index, int role) const
     if (role == Qt::ForegroundRole && reserved)
         return QBrush(QColor(35, 105, 190));
 
-    if (role == Qt::ForegroundRole) {
-        const QColor collectionColor =
-            explorerColorForCollectionClass(className);
-        if (collectionColor.isValid())
-            return QBrush(collectionColor);
+    if (role == Qt::DecorationRole && reserved) {
+        return CollectionAppearance::reservedFolderIcon(
+            directFileCount(info) > 0);
+    }
+
+    if (role == Qt::DecorationRole
+        && !reserved
+        && !className.isEmpty()) {
+        const QIcon collectionIcon = CollectionAppearance::folderIcon(
+            className, collectionHasContent(info, className));
+        if (!collectionIcon.isNull())
+            return collectionIcon;
     }
 
     if (role == Qt::ToolTipRole
@@ -271,7 +269,27 @@ void ProjectFileSystemModel::refreshDirectory(const QString &path)
                           ProjectFileDirectlyMarkedRole,
                           ProjectFileImageDimensionsRole,
                           ProjectFilePointCountRole,
-                          Qt::ForegroundRole, Qt::ToolTipRole});
+                          Qt::ForegroundRole, Qt::DecorationRole,
+                          Qt::ToolTipRole});
+}
+
+void ProjectFileSystemModel::refreshDirectoryCount(const QString &path)
+{
+    const QString key = cachePath(path);
+    m_directFileCountCache.remove(key);
+
+    const QString prefix = key + QLatin1Char('|');
+    const QStringList relevantKeys = m_relevantFileCountCache.keys();
+    for (const QString &relevantKey : relevantKeys) {
+        if (relevantKey.startsWith(prefix))
+            m_relevantFileCountCache.remove(relevantKey);
+    }
+
+    const QModelIndex directoryIndex = index(path);
+    if (directoryIndex.isValid())
+        emit dataChanged(
+            directoryIndex, directoryIndex,
+            {Qt::DisplayRole, Qt::DecorationRole});
 }
 
 bool ProjectFileSystemModel::isDirectProjectChild(const QFileInfo &info) const
@@ -370,8 +388,8 @@ QString ProjectFileSystemModel::pointCount(const QFileInfo &info) const
         const QString header = stream.readLine();
         const QStringList columns = parseCsvLine(header);
         const bool validHeader = columns.size() >= 2
-            && columns.at(0).compare("row", Qt::CaseInsensitive) == 0
-            && columns.at(1).compare("col", Qt::CaseInsensitive) == 0;
+            && columns.at(0) == QStringLiteral("x")
+            && columns.at(1) == QStringLiteral("y_down");
         bool validRows = validHeader;
         int count = 0;
         while (validRows && !stream.atEnd()) {
@@ -385,11 +403,12 @@ QString ProjectFileSystemModel::pointCount(const QFileInfo &info) const
                 break;
             }
 
-            bool rowOk = false;
-            bool colOk = false;
-            values.at(0).toDouble(&rowOk);
-            values.at(1).toDouble(&colOk);
-            if (!rowOk || !colOk) {
+            bool xOk = false;
+            bool yDownOk = false;
+            const double x = values.at(0).toDouble(&xOk);
+            const double yDown = values.at(1).toDouble(&yDownOk);
+            if (!xOk || !yDownOk
+                || !std::isfinite(x) || !std::isfinite(yDown)) {
                 validRows = false;
                 break;
             }
@@ -526,6 +545,22 @@ bool ProjectFileSystemModel::reservedDirectoryShowsEmptyLabel(
         || name.compare("registry_reviews", Qt::CaseInsensitive) == 0
         || name.compare("registry_validations", Qt::CaseInsensitive) == 0
         || name.compare("scripts", Qt::CaseInsensitive) == 0;
+}
+
+bool ProjectFileSystemModel::collectionHasContent(
+    const QFileInfo &info,
+    const QString &collectionClass) const
+{
+    if (collectionClass != "other")
+        return relevantFileCount(info, collectionClass) > 0;
+
+    int contentFiles = directFileCount(info);
+    const QDir directory(info.absoluteFilePath());
+    if (QFileInfo::exists(directory.filePath("collection.yaml")))
+        --contentFiles;
+    if (QFileInfo::exists(directory.filePath("style.yaml")))
+        --contentFiles;
+    return contentFiles > 0;
 }
 
 int ProjectFileSystemModel::directFileCount(const QFileInfo &info) const

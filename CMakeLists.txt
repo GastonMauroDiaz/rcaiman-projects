@@ -84,6 +84,8 @@ qt_add_executable(rcaiman_projects
     rawreader.h rawreader.cpp
     collectiondialog.h collectiondialog.cpp
     collectioneditdialog.h collectioneditdialog.cpp
+    collectionappearance.h collectionappearance.cpp
+    collectioncontract.h collectioncontract.cpp
     collectiongraphdialog.h collectiongraphdialog.cpp
     collectionautoload.h collectionautoload.cpp
     collectionstylefile.h collectionstylefile.cpp
@@ -197,6 +199,7 @@ if(BUILD_TESTING)
         metadataregistry_tests.cpp
         metadataregistry.h metadataregistry.cpp
         collectionvalidation.h collectionvalidation.cpp
+        collectioncontract.h collectioncontract.cpp
         project.h project.cpp
         acquisitionmetadata.h acquisitionmetadata.cpp
         collectionstylefile.h collectionstylefile.cpp
@@ -223,10 +226,57 @@ if(BUILD_TESTING)
             "$<TARGET_FILE_DIR:metadataregistry_tests>/tools/exiftool"
     )
     add_test(NAME metadataregistry_tests COMMAND metadataregistry_tests)
+
+    add_executable(pointcollection_tests
+        pointcollection_tests.cpp
+        pointcollection.h pointcollection.cpp
+    )
+    target_link_libraries(pointcollection_tests PRIVATE Qt::Core)
+    add_test(NAME pointcollection_tests COMMAND pointcollection_tests)
+
+    add_executable(pointcollection_fixture_tests
+        tests/pointcollection_fixture_tests.cpp
+        pointcollection.h pointcollection.cpp
+    )
+    target_include_directories(pointcollection_fixture_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(pointcollection_fixture_tests PRIVATE Qt::Core)
+    target_compile_definitions(pointcollection_fixture_tests PRIVATE
+        POINT_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/points_v3_numeric.csv"
+    )
+    add_test(NAME pointcollection_fixture_tests COMMAND pointcollection_fixture_tests)
+
+    add_executable(collectioncontract_tests
+        collectioncontract_tests.cpp
+        collectioncontract.h collectioncontract.cpp
+    )
+    target_link_libraries(collectioncontract_tests PRIVATE Qt::Core)
+    add_test(NAME collectioncontract_tests COMMAND collectioncontract_tests)
+
+    set(POINT_TESTS
+        pointcollection_tests
+        pointcollection_fixture_tests
+        collectioncontract_tests
+    )
+    find_program(RSCRIPT_EXECUTABLE NAMES Rscript Rscript.exe)
+    if(RSCRIPT_EXECUTABLE)
+        add_test(NAME pointcollection_r_roundtrip_tests
+            COMMAND "${RSCRIPT_EXECUTABLE}" --vanilla
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/pointcollection_fixture_roundtrip.R"
+                "$<TARGET_FILE:pointcollection_fixture_tests>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/points_v3_numeric.csv"
+        )
+        list(APPEND POINT_TESTS pointcollection_r_roundtrip_tests)
+    endif()
     if(WIN32)
         set_tests_properties(metadataregistry_tests PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin;PATH=path_list_prepend:C:/msys64/mingw64/bin"
+        )
+        set_tests_properties(${POINT_TESTS} PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin"
         )
     endif()
 endif()

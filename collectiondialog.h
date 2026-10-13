@@ -31,6 +31,7 @@
 #include "project.h"
 
 class QLabel;
+class QListWidget;
 
 class CollectionDialog : public QDialog
 {
@@ -44,8 +45,9 @@ public:
 
     QString selectedDirectory() const;
     QString collectionClass() const;
-    QString parent() const;
-    QString related() const;
+    QString previousLevel() const;
+    QString imageFrame() const;
+    QStringList builtFrom() const;
     QString registry() const;
     QString script() const;
     QString alias() const;
@@ -60,23 +62,25 @@ private:
     void setupUI();
     void updateFieldVisibility();
     void updateContractText();
-    void populateParentCombo();
-    void populateRelatedCombo();
-    QStringList compatibleClasses(const QString &targetClass, bool asParent) const;
+    void populatePreviousLevelCombo();
+    void populateImageFrameCombo();
+    void populateBuiltFromList();
     bool hasCompatibleCollection(const QStringList &classes) const;
 
     QString m_projectRootPath;
     QVector<Collection> m_existingCollections;
 
     QComboBox *m_typeCombo = nullptr;
-    QComboBox *m_parentCombo = nullptr;
-    QComboBox *m_relatedCombo = nullptr;
+    QComboBox *m_previousLevelCombo = nullptr;
+    QComboBox *m_imageFrameCombo = nullptr;
+    QListWidget *m_builtFromList = nullptr;
     QLineEdit *m_registryEdit = nullptr;
     QLineEdit *m_scriptEdit = nullptr;
     QLineEdit *m_aliasEdit = nullptr;
     QLineEdit *m_directoryEdit = nullptr;
-    QWidget *m_parentWidget = nullptr;
-    QWidget *m_relatedWidget = nullptr;
+    QWidget *m_previousLevelWidget = nullptr;
+    QWidget *m_imageFrameWidget = nullptr;
+    QWidget *m_builtFromWidget = nullptr;
     QWidget *m_registryWidget = nullptr;
     QWidget *m_scriptWidget = nullptr;
     QLabel *m_contractLabel = nullptr;

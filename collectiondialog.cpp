@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "collectiondialog.h"
+#include "collectionappearance.h"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -29,8 +30,11 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QVBoxLayout>
+
+#include <utility>
 
 CollectionDialog::CollectionDialog(const QString &projectRootPath,
                                    const QVector<Collection> &existingCollections,
@@ -61,7 +65,11 @@ CollectionDialog::CollectionDialog(const QString &projectRootPath,
         Q_UNUSED(this);
         onClassChanged(m_typeCombo->currentIndex());
     });
-    connect(m_parentCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(m_previousLevelCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &CollectionDialog::updateOkButton);
+    connect(m_imageFrameCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &CollectionDialog::updateOkButton);
 
     updateFieldVisibility();
@@ -78,18 +86,41 @@ QString CollectionDialog::collectionClass() const
     return m_typeCombo->currentText();
 }
 
-QString CollectionDialog::parent() const
+QString CollectionDialog::previousLevel() const
 {
-    if (m_parentCombo)
-        return m_parentCombo->currentData(Qt::UserRole).toString();
+    if (m_typeCombo
+        && m_typeCombo->currentText()
+            == "preprocessed_image_collection") {
+        return m_previousLevelCombo->currentData(Qt::UserRole).toString();
+    }
     return {};
 }
 
-QString CollectionDialog::related() const
+QString CollectionDialog::imageFrame() const
 {
-    if (m_relatedCombo)
-        return m_relatedCombo->currentData(Qt::UserRole).toString();
+    if (!m_typeCombo)
+        return {};
+
+    const QString collectionClass = m_typeCombo->currentText();
+    if (collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection") {
+        return m_imageFrameCombo->currentData(Qt::UserRole).toString();
+    }
     return {};
+}
+
+QStringList CollectionDialog::builtFrom() const
+{
+    QStringList references;
+    if (!m_typeCombo || m_typeCombo->currentText() == "other")
+        return references;
+    for (int row = 0; row < m_builtFromList->count(); ++row) {
+        const QListWidgetItem *item = m_builtFromList->item(row);
+        if (item->checkState() == Qt::Checked)
+            references.append(item->data(Qt::UserRole).toString());
+    }
+    return references;
 }
 
 QString CollectionDialog::registry() const
@@ -139,13 +170,12 @@ void CollectionDialog::setupUI()
     auto *formLayout = new QFormLayout(formGroup);
 
     m_typeCombo = new QComboBox(this);
-    m_typeCombo->addItems({
-        "preprocessed_image_collection",
-        "processed_image_collection",
-        "point_collection",
-        "segmentation_collection",
-        "other"
-    });
+    m_typeCombo->setIconSize(QSize(14, 14));
+    for (const QString &collectionClass : CollectionAppearance::classNames()) {
+        m_typeCombo->addItem(
+            CollectionAppearance::markerIcon(collectionClass),
+            collectionClass);
+    }
     formLayout->addRow("Collection class:", m_typeCombo);
 
     m_aliasEdit = new QLineEdit(this);
@@ -156,21 +186,32 @@ void CollectionDialog::setupUI()
         "sorting, scripts, or collection links.");
     formLayout->addRow("Alias:", m_aliasEdit);
 
-    m_parentWidget = new QWidget(this);
-    m_parentCombo = new QComboBox(m_parentWidget);
-    auto *parentLayout = new QHBoxLayout(m_parentWidget);
-    parentLayout->setContentsMargins(0, 0, 0, 0);
-    parentLayout->addWidget(m_parentCombo);
-    m_parentWidget->setLayout(parentLayout);
-    formLayout->addRow("Parent:", m_parentWidget);
+    m_previousLevelWidget = new QWidget(this);
+    m_previousLevelCombo = new QComboBox(m_previousLevelWidget);
+    m_previousLevelCombo->setIconSize(QSize(14, 14));
+    auto *previousLevelLayout = new QHBoxLayout(m_previousLevelWidget);
+    previousLevelLayout->setContentsMargins(0, 0, 0, 0);
+    previousLevelLayout->addWidget(m_previousLevelCombo);
+    formLayout->addRow("Previous level:", m_previousLevelWidget);
 
-    m_relatedWidget = new QWidget(this);
-    m_relatedCombo = new QComboBox(m_relatedWidget);
-    auto *relatedLayout = new QHBoxLayout(m_relatedWidget);
-    relatedLayout->setContentsMargins(0, 0, 0, 0);
-    relatedLayout->addWidget(m_relatedCombo);
-    m_relatedWidget->setLayout(relatedLayout);
-    formLayout->addRow("Related:", m_relatedWidget);
+    m_imageFrameWidget = new QWidget(this);
+    m_imageFrameCombo = new QComboBox(m_imageFrameWidget);
+    m_imageFrameCombo->setIconSize(QSize(14, 14));
+    auto *imageFrameLayout = new QHBoxLayout(m_imageFrameWidget);
+    imageFrameLayout->setContentsMargins(0, 0, 0, 0);
+    imageFrameLayout->addWidget(m_imageFrameCombo);
+    formLayout->addRow("Image frame:", m_imageFrameWidget);
+
+    m_builtFromWidget = new QWidget(this);
+    auto *builtFromLayout = new QVBoxLayout(m_builtFromWidget);
+    builtFromLayout->setContentsMargins(0, 0, 0, 0);
+    m_builtFromList = new QListWidget(m_builtFromWidget);
+    m_builtFromList->setIconSize(QSize(14, 14));
+    m_builtFromList->setMinimumHeight(92);
+    m_builtFromList->setToolTip(
+        "Optional source collections used to construct this collection.");
+    builtFromLayout->addWidget(m_builtFromList);
+    formLayout->addRow("Built from:", m_builtFromWidget);
 
     m_registryWidget = new QWidget(this);
     auto *regLayout = new QHBoxLayout(m_registryWidget);
@@ -225,6 +266,8 @@ void CollectionDialog::setupUI()
     connect(scrBtn, &QPushButton::clicked, this, &CollectionDialog::browseScript);
     connect(m_aliasEdit, &QLineEdit::textChanged,
             this, &CollectionDialog::updateOkButton);
+    connect(m_builtFromList, &QListWidget::itemChanged,
+            this, &CollectionDialog::updateOkButton);
 
     connect(m_buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -234,8 +277,9 @@ void CollectionDialog::onClassChanged(int index)
 {
     Q_UNUSED(index);
     updateFieldVisibility();
-    populateParentCombo();
-    populateRelatedCombo();
+    populatePreviousLevelCombo();
+    populateImageFrameCombo();
+    populateBuiltFromList();
     updateContractText();
     updateOkButton();
 }
@@ -243,97 +287,86 @@ void CollectionDialog::onClassChanged(int index)
 void CollectionDialog::updateFieldVisibility()
 {
     const QString collectionClass = m_typeCombo->currentText();
+    const bool isPreprocessed =
+        collectionClass == "preprocessed_image_collection";
+    const bool usesFrame =
+        collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection";
+    const bool isOther = collectionClass == "other";
 
-    if (collectionClass == "preprocessed_image_collection") {
-        m_parentWidget->setVisible(false);
-        m_relatedWidget->setVisible(false);
-        m_registryWidget->setVisible(true);
-        m_scriptWidget->setVisible(true);
-    } else if (collectionClass == "processed_image_collection") {
-        m_parentWidget->setVisible(true);
-        m_relatedWidget->setVisible(false);
-        m_registryWidget->setVisible(false);
-        m_scriptWidget->setVisible(true);
-    } else if (collectionClass == "point_collection") {
-        m_parentWidget->setVisible(true);
-        m_relatedWidget->setVisible(true);
-        m_registryWidget->setVisible(false);
-        m_scriptWidget->setVisible(true);
-    } else if (collectionClass == "segmentation_collection") {
-        m_parentWidget->setVisible(true);
-        m_relatedWidget->setVisible(false);
-        m_registryWidget->setVisible(false);
-        m_scriptWidget->setVisible(true);
-    } else {
-        m_parentWidget->setVisible(false);
-        m_relatedWidget->setVisible(false);
-        m_registryWidget->setVisible(true);
-        m_scriptWidget->setVisible(true);
-    }
+    m_previousLevelWidget->setVisible(isPreprocessed);
+    m_imageFrameWidget->setVisible(usesFrame);
+    m_builtFromWidget->setVisible(!isOther);
+    m_registryWidget->setVisible(isPreprocessed || isOther);
+    m_scriptWidget->setVisible(true);
 }
 
-void CollectionDialog::populateParentCombo()
+void CollectionDialog::populatePreviousLevelCombo()
 {
-    m_parentCombo->blockSignals(true);
-    m_parentCombo->clear();
-    const QString collectionClass = m_typeCombo->currentText();
-    const QStringList allowed = compatibleClasses(collectionClass, true);
-
-    bool hasValid = false;
-    for (const Collection &col : m_existingCollections) {
-        if (allowed.contains(col.collectionClass, Qt::CaseInsensitive)) {
-            m_parentCombo->addItem(col.dirName, col.dirPath);
-            hasValid = true;
+    m_previousLevelCombo->blockSignals(true);
+    m_previousLevelCombo->clear();
+    for (const Collection &collection : std::as_const(m_existingCollections)) {
+        if (collection.collectionClass == "preprocessed_image_collection") {
+            m_previousLevelCombo->addItem(
+                CollectionAppearance::markerIcon(collection.collectionClass),
+                collection.alias.isEmpty()
+                    ? collection.dirName
+                    : QStringLiteral("%1 | %2")
+                          .arg(collection.dirName, collection.alias),
+                collection.dirPath);
         }
     }
-    if (hasValid) {
-        m_parentCombo->insertSeparator(m_parentCombo->count());
-    }
-    m_parentCombo->addItem("(none)", QString());
-    m_parentCombo->blockSignals(false);
+    if (m_previousLevelCombo->count() > 0)
+        m_previousLevelCombo->insertSeparator(m_previousLevelCombo->count());
+    m_previousLevelCombo->addItem("(none - L0)", QString());
+    m_previousLevelCombo->setCurrentIndex(
+        m_previousLevelCombo->count() - 1);
+    m_previousLevelCombo->blockSignals(false);
 }
 
-void CollectionDialog::populateRelatedCombo()
+void CollectionDialog::populateImageFrameCombo()
 {
-    m_relatedCombo->blockSignals(true);
-    m_relatedCombo->clear();
-    const QString collectionClass = m_typeCombo->currentText();
-    const QStringList allowed = compatibleClasses(collectionClass, false);
-
-    bool hasValid = false;
-    for (const Collection &col : m_existingCollections) {
-        if (allowed.contains(col.collectionClass, Qt::CaseInsensitive)) {
-            m_relatedCombo->addItem(col.dirName, col.dirPath);
-            hasValid = true;
+    m_imageFrameCombo->blockSignals(true);
+    m_imageFrameCombo->clear();
+    for (const Collection &collection : std::as_const(m_existingCollections)) {
+        if (collection.collectionClass == "preprocessed_image_collection") {
+            m_imageFrameCombo->addItem(
+                CollectionAppearance::markerIcon(collection.collectionClass),
+                collection.alias.isEmpty()
+                    ? collection.dirName
+                    : QStringLiteral("%1 | %2")
+                          .arg(collection.dirName, collection.alias),
+                collection.dirPath);
         }
     }
-    if (hasValid) {
-        m_relatedCombo->insertSeparator(m_relatedCombo->count());
-    }
-    m_relatedCombo->addItem("(none)", QString());
-    m_relatedCombo->blockSignals(false);
+    if (m_imageFrameCombo->count() > 0)
+        m_imageFrameCombo->insertSeparator(m_imageFrameCombo->count());
+    m_imageFrameCombo->addItem("(none)", QString());
+    m_imageFrameCombo->setCurrentIndex(
+        m_imageFrameCombo->count() - 1);
+    m_imageFrameCombo->blockSignals(false);
 }
 
-QStringList CollectionDialog::compatibleClasses(const QString &targetClass, bool asParent) const
+void CollectionDialog::populateBuiltFromList()
 {
-    if (targetClass == "point_collection") {
-        if (asParent)
-            return {"preprocessed_image_collection", "processed_image_collection"};
-        else
-            return {"segmentation_collection"};
+    m_builtFromList->blockSignals(true);
+    m_builtFromList->clear();
+    for (const Collection &collection : std::as_const(m_existingCollections)) {
+        if (collection.collectionClass == "other")
+            continue;
+        auto *item = new QListWidgetItem(
+            CollectionAppearance::markerIcon(collection.collectionClass),
+            collection.alias.isEmpty()
+                ? collection.dirName
+                : QStringLiteral("%1 | %2")
+                      .arg(collection.dirName, collection.alias),
+            m_builtFromList);
+        item->setData(Qt::UserRole, collection.dirPath);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
     }
-    if (targetClass == "segmentation_collection") {
-        if (asParent)
-            return {"preprocessed_image_collection", "processed_image_collection"};
-    }
-    if (targetClass == "processed_image_collection") {
-        if (asParent)
-            return {"preprocessed_image_collection", "processed_image_collection"};
-    }
-    if (targetClass == "preprocessed_image_collection") {
-        Q_UNUSED(asParent);
-    }
-    return {};
+    m_builtFromList->blockSignals(false);
 }
 
 bool CollectionDialog::hasCompatibleCollection(const QStringList &classes) const
@@ -354,34 +387,32 @@ void CollectionDialog::updateContractText()
     QString text;
 
     if (collectionClass == "preprocessed_image_collection") {
-        text = "Primary TIFF collection for visualization and geometry. "
-               "No parent required. Registry is optional; if provided, this "
-               "collection can be validated against RAW files. Script is optional.";
+        text = "TIFF collection that defines an image frame. With no previous "
+               "level it is L0; otherwise its level follows the selected "
+               "preprocessed collection. Built from records additional provenance.";
     } else if (collectionClass == "processed_image_collection") {
-        text = "Derived TIFF collection. Parent is optional. Set a parent "
-               "preprocessed or processed image collection if this collection "
-               "should autoload with that image branch. Script is optional.";
+        text = "Processed TIFF collection. Image frame is required and controls "
+               "placement and autoload. Built from records the source collections.";
     } else if (collectionClass == "point_collection") {
-        text = "Point CSV collection. Parent is required and must be a "
-               "preprocessed_image_collection or processed_image_collection "
-               "because points need an image geometry. Related segmentation "
-               "is optional.";
+        text = "Point CSV collection. Image frame is required because it defines "
+               "how x and y_down are interpreted. Built from records provenance "
+               "such as crop, uncrop, or automatic extraction.";
     } else if (collectionClass == "segmentation_collection") {
-        text = "Segmentation TIFF collection. Parent is required and must be a "
-               "preprocessed_image_collection or processed_image_collection "
-               "because it refers to the segmentation of an image plane.";
+        text = "Segmentation TIFF collection. Image frame is required because "
+               "the mask refers to a specific image plane. Built from is optional.";
     } else {
         text = "General project collection for notes, documents, results, or auxiliary "
-               "files. No parent required.";
+               "files. Other collections are independent of the image-frame graph.";
     }
 
-    const QStringList parentClasses =
-        compatibleClasses(collectionClass, true);
-    if ((collectionClass == "point_collection"
-         || collectionClass == "segmentation_collection")
-        && !hasCompatibleCollection(parentClasses)) {
-        text += "\n\nNo compatible parent collection is registered yet. "
-                "Register a preprocessed or processed image collection first.";
+    const bool requiresFrame =
+        collectionClass == "processed_image_collection"
+        || collectionClass == "point_collection"
+        || collectionClass == "segmentation_collection";
+    if (requiresFrame
+        && !hasCompatibleCollection({"preprocessed_image_collection"})) {
+        text += "\n\nNo image frame is available yet. Register a preprocessed "
+                "image collection first.";
     }
 
     m_contractLabel->setText(text);
@@ -415,11 +446,12 @@ void CollectionDialog::updateOkButton()
         enableOk = hasDirectory;
     } else if (collectionClass == "other") {
         enableOk = hasDirectory;
-    } else if (collectionClass == "processed_image_collection") {
-        enableOk = hasDirectory;
-    } else if (collectionClass == "point_collection" || collectionClass == "segmentation_collection") {
+    } else if (collectionClass == "processed_image_collection"
+               || collectionClass == "point_collection"
+               || collectionClass == "segmentation_collection") {
         enableOk = hasDirectory
-            && !m_parentCombo->currentData(Qt::UserRole).toString().isEmpty();
+            && !m_imageFrameCombo->currentData(
+                    Qt::UserRole).toString().isEmpty();
     }
     enableOk = enableOk && aliasOk;
 

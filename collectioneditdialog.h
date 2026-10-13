@@ -31,6 +31,7 @@ class QComboBox;
 class QDialogButtonBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QWidget;
 
 class CollectionEditDialog : public QDialog
@@ -44,8 +45,9 @@ public:
                                   QWidget *parent = nullptr);
 
     QString alias() const;
-    QString parentReference() const;
-    QString relatedReference() const;
+    QString previousLevelReference() const;
+    QString imageFrameReference() const;
+    QStringList builtFromReferences() const;
     QString registry() const;
     QString script() const;
 
@@ -57,15 +59,16 @@ private slots:
 private:
     void setupUI();
     void updateFieldVisibility();
-    void populateParentCombo();
-    void populateRelatedCombo();
+    void populatePreviousLevelCombo();
+    void populateImageFrameCombo();
+    void populateBuiltFromList();
     void setComboToReference(QComboBox *combo,
                              const QString &reference);
-    bool hasParentField() const;
-    bool hasRelatedField() const;
+    bool hasPreviousLevelField() const;
+    bool hasImageFrameField() const;
+    bool hasBuiltFromField() const;
     bool hasRegistryField() const;
-    bool requiresParent() const;
-    QStringList compatibleClasses(bool asParent) const;
+    bool requiresImageFrame() const;
     QString collectionLabel(const Collection &collection) const;
     bool hasCompatibleCollection(const QStringList &classes) const;
 
@@ -74,12 +77,14 @@ private:
     QVector<Collection> m_collections;
 
     QLineEdit *m_aliasEdit = nullptr;
-    QComboBox *m_parentCombo = nullptr;
-    QComboBox *m_relatedCombo = nullptr;
+    QComboBox *m_previousLevelCombo = nullptr;
+    QComboBox *m_imageFrameCombo = nullptr;
+    QListWidget *m_builtFromList = nullptr;
     QLineEdit *m_registryEdit = nullptr;
     QLineEdit *m_scriptEdit = nullptr;
-    QWidget *m_parentWidget = nullptr;
-    QWidget *m_relatedWidget = nullptr;
+    QWidget *m_previousLevelWidget = nullptr;
+    QWidget *m_imageFrameWidget = nullptr;
+    QWidget *m_builtFromWidget = nullptr;
     QWidget *m_registryWidget = nullptr;
     QWidget *m_scriptWidget = nullptr;
     QLabel *m_contractLabel = nullptr;

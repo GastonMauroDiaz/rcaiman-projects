@@ -143,13 +143,9 @@ bool referencesCollection(const QString &projectRootPath,
                           const Collection &collection,
                           const QString &targetCollectionPath)
 {
-    const QString parentPath =
-        normalizedReference(projectRootPath, collection.parent);
-    const QString relatedPath =
-        normalizedReference(projectRootPath, collection.related);
-
-    return (!parentPath.isEmpty() && parentPath == targetCollectionPath)
-        || (!relatedPath.isEmpty() && relatedPath == targetCollectionPath);
+    const QString framePath =
+        normalizedReference(projectRootPath, collection.imageFrame);
+    return !framePath.isEmpty() && framePath == targetCollectionPath;
 }
 
 template<typename T>

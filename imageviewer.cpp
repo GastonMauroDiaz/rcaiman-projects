@@ -104,6 +104,39 @@ bool containsPointItem(const QList<QGraphicsItem*> &items)
     return false;
 }
 
+class ActivePanelIndicatorOverlay : public QWidget
+{
+public:
+    explicit ActivePanelIndicatorOverlay(QWidget *parent)
+        : QWidget(parent)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAutoFillBackground(false);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event);
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+
+        const QRect borderRect = rect().adjusted(2, 2, -3, -3);
+        QPen contrastPen(QColor(0, 0, 0, 150), 4.0);
+        contrastPen.setJoinStyle(Qt::MiterJoin);
+        painter.setPen(contrastPen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(borderRect);
+
+        QPen accentPen(palette().color(QPalette::Highlight), 2.0);
+        accentPen.setJoinStyle(Qt::MiterJoin);
+        painter.setPen(accentPen);
+        painter.drawRect(borderRect);
+    }
+};
+
 }
 
 ImageViewer::ImageViewer(QWidget *parent)
@@ -133,6 +166,17 @@ ImageViewer::ImageViewer(QWidget *parent)
                         Qt::UniqueConnection);
             }
         }
+        bool referenceChanged = false;
+        if (!m_coordinateReferenceInitialized && m_imageLayer) {
+            m_coordinateReferenceImage = m_imageLayer;
+            m_coordinateReferenceInitialized = true;
+            referenceChanged = true;
+        }
+        emit coordinateReferenceImagesChanged();
+        if (referenceChanged)
+            emit coordinateReferenceImageChanged();
+        if (m_cursorInside)
+            emitCursorCoordinateInfo(m_lastMousePos);
         setPointItemsInteractionBlocked(
             panInteractionActive() || zoomInteractionActive() || m_maskEditEnabled);
         updateAutoBackground();
@@ -141,11 +185,22 @@ ImageViewer::ImageViewer(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
+    m_activePanelIndicatorOverlay =
+        new ActivePanelIndicatorOverlay(this);
+    m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
+    m_activePanelIndicatorOverlay->hide();
+    connect(qApp, &QGuiApplication::applicationStateChanged,
+            this, [this](Qt::ApplicationState state) {
+                if (state != Qt::ApplicationActive)
+                    clearTemporaryInteractionState();
+            });
     updateAutoBackground();
 }
 
 void ImageViewer::setImage(const QString &fileName)
 {
+    m_coordinateReferenceImage.clear();
+    m_coordinateReferenceInitialized = false;
     m_layerManager->clearAll();
     m_primarySourcePath = QFileInfo(fileName).absoluteFilePath();
 
@@ -170,6 +225,65 @@ void ImageViewer::fitLoadedImage()
     m_lastPixelInfo = PixelInfo{};
     m_autoFitImage = true;
     fitImageToView();
+}
+
+QList<ImageLayer*> ImageViewer::imageLayers() const
+{
+    QList<ImageLayer*> result;
+    if (!m_layerManager)
+        return result;
+
+    for (int i = 0; i < m_layerManager->layerCount(); ++i) {
+        if (auto *layer = qobject_cast<ImageLayer*>(m_layerManager->layerAt(i)))
+            result.append(layer);
+    }
+    return result;
+}
+
+ImageLayer *ImageViewer::coordinateReferenceImage() const
+{
+    return m_coordinateReferenceImage.data();
+}
+
+void ImageViewer::setCoordinateReferenceImage(ImageLayer *layer)
+{
+    if (layer && !imageLayers().contains(layer))
+        return;
+    if (m_coordinateReferenceInitialized
+        && m_coordinateReferenceImage == layer) {
+        return;
+    }
+
+    m_coordinateReferenceImage = layer;
+    m_coordinateReferenceInitialized = true;
+    emit coordinateReferenceImageChanged();
+    if (m_cursorInside)
+        emitCursorCoordinateInfo(m_lastMousePos);
+}
+
+void ImageViewer::setPrimarySourcePath(const QString &path)
+{
+    if (path.isEmpty()) {
+        m_primarySourcePath.clear();
+        return;
+    }
+
+    m_primarySourcePath = QFileInfo(path).absoluteFilePath();
+
+    for (ImageLayer *layer : imageLayers()) {
+        const QString sourcePath =
+            QFileInfo(layer->sourcePath()).absoluteFilePath();
+#ifdef Q_OS_WIN
+        const bool matches = sourcePath.compare(
+            m_primarySourcePath, Qt::CaseInsensitive) == 0;
+#else
+        const bool matches = sourcePath == m_primarySourcePath;
+#endif
+        if (matches) {
+            setCoordinateReferenceImage(layer);
+            return;
+        }
+    }
 }
 
 QPointF ImageViewer::viewCenter() const
@@ -236,7 +350,8 @@ void ImageViewer::zoomToPointIndices(PointLayer *layer,
     positions.reserve(indices.size());
     for (int index : indices) {
         if (index >= 0 && index < points.size())
-            positions.append(QPointF(points[index].col, points[index].row));
+            positions.append(
+                QPointF(points[index].x, points[index].yDown));
     }
     if (positions.isEmpty())
         return;
@@ -264,6 +379,17 @@ void ImageViewer::zoomToPointIndices(PointLayer *layer,
     resetTransform();
     fitInView(bounds, Qt::KeepAspectRatio);
     emitZoomPercentChanged();
+}
+
+void ImageViewer::setActivePanelIndicator(bool active)
+{
+    if (!m_activePanelIndicatorOverlay)
+        return;
+
+    m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
+    m_activePanelIndicatorOverlay->setVisible(active);
+    if (active)
+        m_activePanelIndicatorOverlay->raise();
 }
 
 bool ImageViewer::panModeEnabled() const
@@ -457,6 +583,10 @@ void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 void ImageViewer::resizeEvent(QResizeEvent *event)
 {
     QGraphicsView::resizeEvent(event);
+    if (m_activePanelIndicatorOverlay) {
+        m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
+        m_activePanelIndicatorOverlay->raise();
+    }
     if (m_autoFitImage)
         fitImageToView();
 }
@@ -465,6 +595,8 @@ void ImageViewer::leaveEvent(QEvent *event)
 {
     m_maskBrushPreviewVisible = false;
     viewport()->update();
+    m_cursorInside = false;
+    emit cursorCoordinateInfoChanged(CursorCoordinateInfo{});
     QGraphicsView::leaveEvent(event);
 }
 
@@ -573,8 +705,7 @@ bool ImageViewer::handleSpacePanKeyEvent(QEvent *event)
     if (keyEvent->key() != Qt::Key_Space || keyEvent->isAutoRepeat())
         return false;
 
-    m_spacePanActive = (event->type() == QEvent::KeyPress);
-    updateDragMode();
+    setSplitSpacePanActive(event->type() == QEvent::KeyPress);
     keyEvent->accept();
     return true;
 }
@@ -588,12 +719,63 @@ bool ImageViewer::handleTemporaryZoomKeyEvent(QEvent *event)
     if (keyEvent->key() != Qt::Key_Z || keyEvent->isAutoRepeat())
         return false;
 
-    m_temporaryZoomActive = (event->type() == QEvent::KeyPress);
+    setSplitTemporaryZoomActive(event->type() == QEvent::KeyPress);
+    keyEvent->accept();
+    return true;
+}
+
+void ImageViewer::setSpacePanActive(bool active)
+{
+    if (m_spacePanActive == active)
+        return;
+
+    m_spacePanActive = active;
+    updateDragMode();
+}
+
+void ImageViewer::setSplitSpacePanActive(bool active)
+{
+    auto *splitter = qobject_cast<QSplitter*>(parentWidget());
+    if (!splitter) {
+        setSpacePanActive(active);
+        return;
+    }
+
+    for (int i = 0; i < splitter->count(); ++i) {
+        if (auto *viewer = qobject_cast<ImageViewer*>(splitter->widget(i)))
+            viewer->setSpacePanActive(active);
+    }
+}
+
+void ImageViewer::setTemporaryZoomActive(bool active)
+{
+    if (m_temporaryZoomActive == active)
+        return;
+
+    m_temporaryZoomActive = active;
     if (!zoomInteractionActive())
         m_zoomDragging = false;
     updateDragMode();
-    keyEvent->accept();
-    return true;
+}
+
+void ImageViewer::setSplitTemporaryZoomActive(bool active)
+{
+    auto *splitter = qobject_cast<QSplitter*>(parentWidget());
+    if (!splitter) {
+        setTemporaryZoomActive(active);
+        return;
+    }
+
+    for (int i = 0; i < splitter->count(); ++i) {
+        if (auto *viewer = qobject_cast<ImageViewer*>(splitter->widget(i)))
+            viewer->setTemporaryZoomActive(active);
+    }
+}
+
+void ImageViewer::clearTemporaryInteractionState()
+{
+    setSpacePanActive(false);
+    setTemporaryZoomActive(false);
 }
 
 bool ImageViewer::handleZoomShortcutKeyEvent(QEvent *event)
@@ -744,7 +926,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         const bool isPointItem = containsPointItem(items(event->pos()));
         if (!isPointItem) {
             if (m_editingPointLayer) {
-                m_editingPointLayer->addPoint(scenePos.y(), scenePos.x());
+                m_editingPointLayer->addPoint(scenePos.x(), scenePos.y());
                 event->accept();
                 return;
             }
@@ -926,9 +1108,47 @@ void ImageViewer::finishMaskStroke()
     }
 }
 
+void ImageViewer::emitCursorCoordinateInfo(const QPoint &viewportPos)
+{
+    CursorCoordinateInfo info;
+    if (!viewport() || !viewport()->rect().contains(viewportPos)) {
+        emit cursorCoordinateInfoChanged(info);
+        return;
+    }
+
+    const QPointF scenePos = mapToScene(viewportPos);
+    QPointF coordinatePos = scenePos;
+    ImageLayer *reference = m_coordinateReferenceImage.data();
+    if (reference && reference->pixmapItem()) {
+        const QRectF bounds = reference->pixmapItem()->boundingRect();
+        const QPointF imagePos =
+            reference->pixmapItem()->mapFromScene(scenePos);
+        coordinatePos = QPointF(
+            imagePos.x() - bounds.left(),
+            imagePos.y() - bounds.top());
+    }
+
+    info.valid = true;
+    info.x = coordinatePos.x();
+    info.yDown = coordinatePos.y();
+    if (info.x >= 0.0 && info.yDown >= 0.0) {
+        info.col = static_cast<int>(std::floor(info.x)) + 1;
+        info.row = static_cast<int>(std::floor(info.yDown)) + 1;
+    }
+
+    if (reference && reference->rasterData().height() > 0) {
+        info.yAvailable = true;
+        info.y = reference->rasterData().height() - info.yDown;
+    }
+
+    emit cursorCoordinateInfoChanged(info);
+}
+
 void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
+    m_cursorInside = true;
+    emitCursorCoordinateInfo(event->pos());
     const bool brushPreviewWasVisible = m_maskBrushPreviewVisible;
     m_maskBrushPreviewVisible =
         m_maskEditEnabled
@@ -1074,7 +1294,7 @@ void ImageViewer::finishPointBoxSelection(const QPoint &pos)
     QSet<int> selected;
     const QVector<PointRecord> &points = layer->collection().points();
     for (int i = 0; i < points.size(); ++i) {
-        const QPointF point(points[i].col, points[i].row);
+        const QPointF point(points[i].x, points[i].yDown);
         if (sceneRect.contains(point))
             selected.insert(i);
     }
@@ -1104,6 +1324,12 @@ void ImageViewer::setZoomCursorDirection(ZoomCursorDirection direction)
 bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == viewport()) {
+        if ((event->type() == QEvent::Resize
+             || event->type() == QEvent::Move)
+            && m_activePanelIndicatorOverlay) {
+            m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
+            m_activePanelIndicatorOverlay->raise();
+        }
         if (event->type() == QEvent::Enter) {
             setFocus(Qt::MouseFocusReason);
             viewport()->setFocus(Qt::MouseFocusReason);

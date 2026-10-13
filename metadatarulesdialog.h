@@ -54,7 +54,9 @@ private:
     RowData rowData(int row) const;
     void setRowData(int row, const RowData &data);
     QList<int> selectedTableRows() const;
+    QList<int> checkedTableRows() const;
     void moveSelectedRows(bool toTop);
+    void moveCheckedRowsToTop();
     void moveSelectedRowsToTop();
     void moveSelectedRowsToBottom();
     void applyFilter();

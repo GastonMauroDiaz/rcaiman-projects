@@ -27,14 +27,18 @@
 #include <QVector>
 
 struct Collection {
+    int schemaVersion = 0;
     QString dirPath;        // absolute path to the folder
     QString dirName;        // folder name (basename of dirPath)
     QString collectionClass;
     QString alias;
-    QString parent;
-    QString related;
+    QString previousLevel;
+    QString imageFrame;
+    QStringList builtFrom;
     QString registry;
     QString script;
+    QStringList unsupportedFields;
+    QString parseError;
 };
 
 enum class ProjectCleanupCategory {
@@ -92,8 +96,9 @@ public:
     static bool registerCollection(const QString &projectRootPath,
                                    const QString &dirPath,
                                    const QString &collectionClass,
-                                   const QString &parent,
-                                   const QString &related,
+                                   const QString &previousLevel,
+                                   const QString &imageFrame,
+                                   const QStringList &builtFrom,
                                    const QString &registry,
                                    const QString &script,
                                    const QString &alias = {},
@@ -114,8 +119,9 @@ public:
     static bool updateCollectionMetadata(const QString &projectRootPath,
                                          const QString &dirPath,
                                          const QString &alias,
-                                         const QString &parent,
-                                         const QString &related,
+                                         const QString &previousLevel,
+                                         const QString &imageFrame,
+                                         const QStringList &builtFrom,
                                          const QString &registry,
                                          const QString &script,
                                          QString *errorMessage = nullptr);

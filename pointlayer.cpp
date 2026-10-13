@@ -55,24 +55,24 @@ QRectF boundsForPoints(const QVector<PointRecord> &points)
     if (points.isEmpty())
         return QRectF(0.0, 0.0, 1.0, 1.0);
 
-    double minCol = std::numeric_limits<double>::max();
-    double minRow = std::numeric_limits<double>::max();
-    double maxCol = std::numeric_limits<double>::lowest();
-    double maxRow = std::numeric_limits<double>::lowest();
+    double minX = std::numeric_limits<double>::max();
+    double minYDown = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double maxYDown = std::numeric_limits<double>::lowest();
 
     for (const PointRecord &point : points) {
-        if (!std::isfinite(point.col) || !std::isfinite(point.row))
+        if (!std::isfinite(point.x) || !std::isfinite(point.yDown))
             continue;
-        minCol = qMin(minCol, point.col);
-        minRow = qMin(minRow, point.row);
-        maxCol = qMax(maxCol, point.col);
-        maxRow = qMax(maxRow, point.row);
+        minX = qMin(minX, point.x);
+        minYDown = qMin(minYDown, point.yDown);
+        maxX = qMax(maxX, point.x);
+        maxYDown = qMax(maxYDown, point.yDown);
     }
 
-    if (minCol > maxCol || minRow > maxRow)
+    if (minX > maxX || minYDown > maxYDown)
         return QRectF(0.0, 0.0, 1.0, 1.0);
 
-    return QRectF(QPointF(minCol, minRow), QPointF(maxCol, maxRow))
+    return QRectF(QPointF(minX, minYDown), QPointF(maxX, maxYDown))
         .normalized()
         .adjusted(-PointAggregateBoundsMargin,
                   -PointAggregateBoundsMargin,
@@ -140,7 +140,7 @@ public:
             painter->setPen(pointPen);
             for (int i = 0; i < total; i += step) {
                 const PointRecord &point = points[i];
-                const QPointF pos(point.col, point.row);
+                const QPointF pos(point.x, point.yDown);
                 if (exposed.contains(pos))
                     painter->drawPoint(pos);
             }
@@ -153,7 +153,7 @@ public:
             const double diameter = sceneRadius * 2.0;
             for (int i = 0; i < total; i += step) {
                 const PointRecord &point = points[i];
-                const QPointF pos(point.col, point.row);
+                const QPointF pos(point.x, point.yDown);
                 if (!exposed.contains(pos))
                     continue;
                 painter->drawEllipse(
@@ -174,7 +174,7 @@ public:
         const double arm = sceneRadius * 0.82;
         for (int i = 0; i < total; i += step) {
             const PointRecord &point = points[i];
-            const QPointF pos(point.col, point.row);
+            const QPointF pos(point.x, point.yDown);
             if (!exposed.contains(pos))
                 continue;
             painter->drawLine(QPointF(pos.x() - arm, pos.y()),
@@ -369,7 +369,7 @@ bool PointLayer::rebuildItems(QGraphicsScene *scene, bool allowCancel)
         pointItem->setRect(QRectF(offset.x(), offset.y(), width, height));
         pointItem->setPen(QPen(m_style.color));
         pointItem->setBrush(QBrush(m_style.color));
-        pointItem->setPos(rec.col, rec.row);
+        pointItem->setPos(rec.x, rec.yDown);
         pointItem->setZValue(zOrder());
         pointItem->setVisible(false);
         if (scene)
@@ -784,14 +784,14 @@ void PointLayer::onPointClicked(int index, Qt::KeyboardModifiers modifiers)
     }
 }
 
-void PointLayer::addPoint(double row, double col)
+void PointLayer::addPoint(double x, double yDown)
 {
     // Backup the collection and selection for potential revert
     const PointCollection backupCollection = m_collection;
     const QSet<int> backupSelection = m_selectedPointIndices;
     const int backupPrimary = m_primarySelectedPointIndex;
 
-    m_collection.addPoint(row, col);
+    m_collection.addPoint(x, yDown);
 
     QString errorMsg;
     if (!saveCsv(&errorMsg)) {
@@ -826,7 +826,7 @@ void PointLayer::onPointMoved(int index, QPointF pos)
     const QSet<int> backupSelection = m_selectedPointIndices;
     const int backupPrimary = m_primarySelectedPointIndex;
 
-    m_collection.movePoint(index, pos.y(), pos.x());  // row=y, col=x
+    m_collection.movePoint(index, pos.x(), pos.y());
 
     QString errorMsg;
     if (!saveCsv(&errorMsg)) {

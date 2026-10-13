@@ -218,10 +218,12 @@ bool writeImportDocumentation(const LegacyJpegImportOptions &options,
     out << "- No inverse gamma correction is applied.\n";
     out << "- No white-balance correction, radiometric calibration, or RAW "
            "recovery is applied.\n";
-    out << "- Each TIFF receives a TSV sidecar generated from the source JPEG "
-           "metadata when ExifTool can read it.\n\n";
+    out << "- Each source JPEG receives a TSV sidecar stored beside it in the "
+           "source `other` collection. The sidecar records the generated TIFF "
+           "path and the JPEG metadata when ExifTool can read it.\n\n";
     out << "## R usage\n\n";
-    out << "TSV sidecars can be read from R with `read.delim()`.\n\n";
+    out << "TSV sidecars are stored in the source collection and can be read "
+           "from R with `read.delim()`.\n\n";
     out << "## Versions\n\n";
     out << "- Metadata sidecar profile: `" << LegacyJpegSidecarProfile
         << "`\n";
@@ -276,7 +278,7 @@ QStringList LegacyJpegImporter::conflictingOutputs(
             QDir(options.destinationCollectionDir)
                 .filePath(baseName + ".tif");
         const QString sidecarPath =
-            QDir(options.destinationCollectionDir)
+            QDir(options.sourceCollectionDir)
                 .filePath(baseName + ".tsv");
         if (QFileInfo::exists(tiffPath))
             conflicts.append(tiffPath);
@@ -329,7 +331,7 @@ bool LegacyJpegImporter::importProject(
             QDir(options.destinationCollectionDir)
                 .filePath(baseName + ".tif");
         const QString sidecarPath =
-            QDir(options.destinationCollectionDir)
+            QDir(options.sourceCollectionDir)
                 .filePath(baseName + ".tsv");
 
         if (!options.replaceExisting

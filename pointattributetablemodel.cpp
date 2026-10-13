@@ -58,9 +58,9 @@ QVariant PointAttributeTableModel::data(const QModelIndex &index,
     if (index.column() == 0) {
         value = index.row() + 1;
     } else if (index.column() == 1) {
-        value = record.row;
+        value = record.x;
     } else if (index.column() == 2) {
-        value = record.col;
+        value = record.yDown;
     } else {
         const int attributeIndex = index.column() - 3;
         if (attributeIndex >= 0
