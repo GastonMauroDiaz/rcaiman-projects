@@ -32,6 +32,8 @@ qrc_*.cpp
 Thumbs.db
 *.res
 *.rc
+# Application source resource, not a generated resource.
+!/assets/branding/rcaiman-projects.rc
 /.qmake.cache
 /.qmake.stash
 **/.qmlls.ini

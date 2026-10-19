@@ -20,6 +20,7 @@
 // Part of the rcaiman suite.
 
 #include "mainwindow.h"
+#include "thirdpartylicensesdialog.h"
 #include "ui_mainwindow.h"
 #include "apppreferences.h"
 #include "imageviewer.h"
@@ -137,6 +138,56 @@ enum class ProjectExplorerSortMode {
     Name = 0,
     Type = 1
 };
+
+QIcon measurementIcon()
+{
+    QPixmap pixmap(48, 48);
+    pixmap.setDevicePixelRatio(2.0);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QPainterPath square;
+    square.moveTo(2, 2);
+    square.lineTo(2, 22);
+    square.lineTo(22, 22);
+    square.closeSubpath();
+    square.moveTo(7, 12);
+    square.lineTo(7, 17);
+    square.lineTo(12, 17);
+    square.closeSubpath();
+    painter.setPen(QPen(QColor("#4b5563"), 1.2));
+    painter.setBrush(QColor("#d7dce2"));
+    painter.drawPath(square);
+
+    painter.setPen(QPen(QColor("#4b5563"), 1.0));
+    for (int tick = 6; tick <= 18; tick += 4) {
+        painter.drawLine(QPointF(tick, 20), QPointF(tick, 22));
+        painter.drawLine(QPointF(2, tick), QPointF(4, tick));
+    }
+    return QIcon(pixmap);
+}
+
+QIcon measurementCircleIcon()
+{
+    QPixmap pixmap(48, 48);
+    pixmap.setDevicePixelRatio(2.0);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor("#4b5563"), 1.4));
+    painter.drawEllipse(QPointF(12, 12), 10, 10);
+    painter.setPen(QPen(QColor("#8a939f"), 1.0));
+    painter.drawLine(QPointF(12, 2), QPointF(3.34, 17));
+    painter.drawLine(QPointF(3.34, 17), QPointF(20.66, 17));
+    painter.drawLine(QPointF(20.66, 17), QPointF(12, 2));
+    painter.setPen(QPen(QColor("#4b5563"), 1.4));
+    painter.drawLine(QPointF(9, 12), QPointF(15, 12));
+    painter.drawLine(QPointF(12, 9), QPointF(12, 15));
+    return QIcon(pixmap);
+}
 
 class ElidedLabel : public QLabel
 {
@@ -1422,7 +1473,7 @@ public:
         if (!node || node->kind != ProxyNode::Kind::Source)
             return {};
 
-        const QModelIndex sourceIndex = node->sourceIndex;
+        const QModelIndex sourceIndex = sourceIndexForNode(node);
         return sourceIndex.isValid()
             ? sourceIndex.sibling(sourceIndex.row(), proxyIndex.column())
             : QModelIndex();
@@ -1478,6 +1529,8 @@ public:
         const QModelIndex sourceParent = parent.isValid()
             ? mapToSource(parent)
             : QModelIndex();
+        if (parent.isValid() && !sourceParent.isValid())
+            return {};
         if (sourceParent.isValid() && isProjectRootSource(sourceParent)) {
             const QVector<RootGroup> &groups = visibleRootGroups();
             if (row < groups.size())
@@ -1512,7 +1565,7 @@ public:
         if (node->kind == ProxyNode::Kind::Group)
             return projectRootProxyIndex();
 
-        const QModelIndex sourceIndex = node->sourceIndex;
+        const QModelIndex sourceIndex = sourceIndexForNode(node);
         if (!sourceIndex.isValid() || isProjectRootSource(sourceIndex))
             return {};
 
@@ -1543,6 +1596,8 @@ public:
         const QModelIndex sourceParent = parent.isValid()
             ? mapToSource(parent)
             : QModelIndex();
+        if (parent.isValid() && !sourceParent.isValid())
+            return 0;
         if (sourceParent.isValid() && isProjectRootSource(sourceParent)) {
             return visibleRootGroups().size() + directRootFiles().size();
         }
@@ -1562,6 +1617,8 @@ public:
         const QModelIndex sourceParent = parent.isValid()
             ? mapToSource(parent)
             : QModelIndex();
+        if (parent.isValid() && !sourceParent.isValid())
+            return 0;
         return sourceModel()->columnCount(sourceParent);
     }
 
@@ -1625,6 +1682,8 @@ public:
         const QModelIndex sourceParent = parent.isValid()
             ? mapToSource(parent)
             : QModelIndex();
+        if (parent.isValid() && !sourceParent.isValid())
+            return false;
         if (sourceParent.isValid() && isProjectRootSource(sourceParent))
             return rowCount(parent) > 0;
 
@@ -1640,7 +1699,10 @@ public:
         if (node && node->kind == ProxyNode::Kind::Group)
             return false;
 
-        return sourceModel()->canFetchMore(mapToSource(parent));
+        const QModelIndex sourceParent = mapToSource(parent);
+        if (parent.isValid() && !sourceParent.isValid())
+            return false;
+        return sourceModel()->canFetchMore(sourceParent);
     }
 
     void fetchMore(const QModelIndex &parent) override
@@ -1653,6 +1715,8 @@ public:
             return;
 
         const QModelIndex sourceParent = mapToSource(parent);
+        if (parent.isValid() && !sourceParent.isValid())
+            return;
         m_childrenCache.remove(childrenCacheKey(sourceParent));
         sourceModel()->fetchMore(sourceParent);
     }
@@ -1703,8 +1767,11 @@ public:
         if (node && node->kind == ProxyNode::Kind::Group)
             return false;
 
+        const QModelIndex sourceParent = mapToSource(parent);
+        if (parent.isValid() && !sourceParent.isValid())
+            return false;
         return sourceModel()->canDropMimeData(
-            data, action, row, column, mapToSource(parent));
+            data, action, row, column, sourceParent);
     }
 
     bool dropMimeData(const QMimeData *data,
@@ -1720,8 +1787,11 @@ public:
         if (node && node->kind == ProxyNode::Kind::Group)
             return false;
 
+        const QModelIndex sourceParent = mapToSource(parent);
+        if (parent.isValid() && !sourceParent.isValid())
+            return false;
         return sourceModel()->dropMimeData(
-            data, action, row, column, mapToSource(parent));
+            data, action, row, column, sourceParent);
     }
 
     Qt::DropActions supportedDragActions() const override
@@ -1764,6 +1834,7 @@ private:
 
         Kind kind = Kind::Source;
         QPersistentModelIndex sourceIndex;
+        QString sourcePath;
         RootGroup group = RootGroup::None;
     };
 
@@ -1803,16 +1874,73 @@ private:
         const QModelIndex rowSource =
             sourceIndex.sibling(sourceIndex.row(), 0);
         const QString key = sourceIndexKey(rowSource);
-        if (ProxyNode *node = m_sourceNodes.value(key, nullptr))
+        if (ProxyNode *node = m_sourceNodes.value(key, nullptr)) {
+            node->sourceIndex = rowSource;
+            node->sourcePath = sourcePathForIndex(rowSource);
             return node;
+        }
 
         auto node = std::make_unique<ProxyNode>();
         node->kind = ProxyNode::Kind::Source;
         node->sourceIndex = rowSource;
+        node->sourcePath = sourcePathForIndex(rowSource);
         ProxyNode *rawNode = node.get();
         m_nodes.push_back(std::move(node));
         m_sourceNodes.insert(key, rawNode);
         return rawNode;
+    }
+
+    QString sourcePathForIndex(const QModelIndex &sourceIndex) const
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        return model && sourceIndex.isValid()
+            ? model->filePath(sourceIndex)
+            : QString();
+    }
+
+    QModelIndex sourceIndexForNode(const ProxyNode *node) const
+    {
+        if (!node || node->kind != ProxyNode::Kind::Source)
+            return {};
+        if (node->sourceIndex.isValid())
+            return node->sourceIndex;
+        if (node->sourcePath.isEmpty())
+            return {};
+
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model)
+            return {};
+
+        const QModelIndex rebound = model->index(node->sourcePath);
+        if (!rebound.isValid())
+            return {};
+
+        auto *mutableNode = const_cast<ProxyNode*>(node);
+        mutableNode->sourceIndex = rebound.sibling(rebound.row(), 0);
+        return mutableNode->sourceIndex;
+    }
+
+    void rebindSourceNodes()
+    {
+        const auto *model =
+            qobject_cast<const ProjectFileSystemModel*>(sourceModel());
+        if (!model)
+            return;
+
+        for (const std::unique_ptr<ProxyNode> &node : m_nodes) {
+            if (!node || node->kind != ProxyNode::Kind::Source
+                || node->sourcePath.isEmpty()) {
+                continue;
+            }
+
+            const QModelIndex rebound = model->index(node->sourcePath);
+            node->sourceIndex = rebound.isValid()
+                ? QPersistentModelIndex(
+                      rebound.sibling(rebound.row(), 0))
+                : QPersistentModelIndex();
+        }
     }
 
     ProxyNode *nodeForGroup(RootGroup group) const
@@ -2033,6 +2161,7 @@ private:
     void refreshSourceLayout()
     {
         emit layoutAboutToBeChanged();
+        rebindSourceNodes();
         clearLayoutCaches();
         emit layoutChanged();
     }
@@ -2934,6 +3063,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->projectToolBar->addWidget(projectToolBarSpacer);
     ui->actionPan->setToolTip(ShortcutText::panTooltip());
     ui->actionZoom->setToolTip(ShortcutText::zoomTooltip());
+    ui->actionMeasureDistance->setIcon(measurementIcon());
+    ui->actionMeasurementCircle->setIcon(measurementCircleIcon());
     ui->actionEditPoints->setToolTip(ShortcutText::editPointsTooltip());
 
     connect(m_artifactWatcher, &QFileSystemWatcher::fileChanged,
@@ -3287,6 +3418,8 @@ MainWindow::MainWindow(QWidget *parent)
             [this](bool enabled) {
                 if (enabled && ui->actionZoom->isChecked())
                     ui->actionZoom->setChecked(false);
+                if (enabled && ui->actionMeasureDistance->isChecked())
+                    ui->actionMeasureDistance->setChecked(false);
                 ImageViewer *viewer = currentImageViewer();
                 if (viewer)
                     viewer->setPanModeEnabled(enabled);
@@ -3298,9 +3431,30 @@ MainWindow::MainWindow(QWidget *parent)
             [this](bool enabled) {
                 if (enabled && ui->actionPan->isChecked())
                     ui->actionPan->setChecked(false);
+                if (enabled && ui->actionMeasureDistance->isChecked())
+                    ui->actionMeasureDistance->setChecked(false);
                 ImageViewer *viewer = currentImageViewer();
                 if (viewer)
                     viewer->setZoomModeEnabled(enabled);
+            });
+
+    connect(ui->actionMeasureDistance,
+            &QAction::toggled,
+            this,
+            [this](bool enabled) {
+                if (enabled && ui->actionPan->isChecked())
+                    ui->actionPan->setChecked(false);
+                if (enabled && ui->actionZoom->isChecked())
+                    ui->actionZoom->setChecked(false);
+                ImageViewer *viewer = currentImageViewer();
+                if (viewer)
+                    viewer->setMeasureDistanceEnabled(enabled);
+                updateMeasurementCircleControl(viewer);
+            });
+    connect(ui->actionMeasurementCircle, &QAction::toggled,
+            this, [this](bool visible) {
+                if (ImageViewer *viewer = currentImageViewer())
+                    viewer->setMeasurementCircleVisible(visible);
             });
 
     m_zoomPercentSpin = new QDoubleSpinBox(this);
@@ -3672,6 +3826,35 @@ void MainWindow::createViewerEmptyState()
     m_viewerQuickBody->setAttribute(Qt::WA_TransparentForMouseEvents);
     contentLayout->addWidget(m_viewerQuickBody);
 
+    contentLayout->addSpacing(22);
+
+    m_viewerShortcutsTitle = new QLabel(m_viewerEmptyState);
+    m_viewerShortcutsTitle->setText("Interaction shortcuts");
+    m_viewerShortcutsTitle->setFont(titleFont);
+    m_viewerShortcutsTitle->setAlignment(Qt::AlignCenter);
+    m_viewerShortcutsTitle->setStyleSheet("color: #6f7782;");
+    m_viewerShortcutsTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerShortcutsTitle);
+
+    auto *shortcutsRule = new QFrame(m_viewerEmptyState);
+    shortcutsRule->setFrameShape(QFrame::HLine);
+    shortcutsRule->setFrameShadow(QFrame::Plain);
+    shortcutsRule->setFixedWidth(360);
+    shortcutsRule->setStyleSheet("color: #9aa0a6;");
+    shortcutsRule->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(shortcutsRule, 0, Qt::AlignCenter);
+
+    m_viewerShortcutsBody = new QLabel(m_viewerEmptyState);
+    m_viewerShortcutsBody->setText(
+        ShortcutText::interactionShortcutsSummaryHtml());
+    m_viewerShortcutsBody->setWordWrap(true);
+    m_viewerShortcutsBody->setTextFormat(Qt::RichText);
+    m_viewerShortcutsBody->setAlignment(Qt::AlignLeft);
+    m_viewerShortcutsBody->setMaximumWidth(520);
+    m_viewerShortcutsBody->setStyleSheet("color: #7b8490;");
+    m_viewerShortcutsBody->setAttribute(Qt::WA_TransparentForMouseEvents);
+    contentLayout->addWidget(m_viewerShortcutsBody);
+
     outerLayout->addLayout(contentLayout);
     outerLayout->addStretch(2);
 
@@ -3785,6 +3968,11 @@ void MainWindow::showAboutDialog()
 
     auto *buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok, &dialog);
+    auto *licenses = buttons->addButton("Third-party licenses...", QDialogButtonBox::ActionRole);
+    connect(licenses, &QPushButton::clicked, &dialog, [&dialog] {
+        ThirdPartyLicensesDialog licensesDialog(&dialog);
+        licensesDialog.exec();
+    });
     connect(buttons, &QDialogButtonBox::accepted,
             &dialog, &QDialog::accept);
     layout->addWidget(buttons);
@@ -5121,6 +5309,10 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     if (!decision.accepted)
                         return;
 
+                    ProjectExplorerViewState viewState =
+                        projectExplorerViewState();
+                    const QString currentPath = projectPathFromIndex(
+                        ui->projectTree->currentIndex());
                     const QString newDirectoryPath =
                         QDir(projectRoot).filePath(decision.newName);
                     const QVector<int> tabsToClose =
@@ -5202,6 +5394,20 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
 
                     if (m_previewDock)
                         m_previewDock->clear();
+
+                    const auto remapExplorerPath = [&](const QString &path) {
+                        return Project::resolveReference(
+                            projectRoot,
+                            remapReferenceInsideDirectory(
+                                projectRoot, path, oldDirectoryPath,
+                                newDirectoryPath));
+                    };
+                    for (QString &path : viewState.expandedPaths)
+                        path = remapExplorerPath(path);
+                    viewState.topPath = remapExplorerPath(viewState.topPath);
+                    const QString remappedCurrentPath =
+                        remapExplorerPath(currentPath);
+
                     updateProjectExplorer();
                     m_projectFileSystemModel->refreshDirectory(projectRoot);
                     m_projectFileSystemModel->refreshDirectory(
@@ -5212,6 +5418,18 @@ void MainWindow::onProjectTreeContextMenu(const QPoint &position)
                     saveProjectSession();
                     refreshReloadableArtifactWatchers();
                     updateProjectActions();
+                    QTimer::singleShot(
+                        0, this, [this, viewState, remappedCurrentPath]() {
+                            const QModelIndex currentIndex = projectProxyIndex(
+                                m_projectFileSystemModel->index(remappedCurrentPath));
+                            if (currentIndex.isValid()) {
+                                ui->projectTree->selectionModel()->setCurrentIndex(
+                                    currentIndex,
+                                    QItemSelectionModel::ClearAndSelect
+                                        | QItemSelectionModel::Rows);
+                            }
+                            restoreProjectExplorerViewState(viewState);
+                        });
 
                     statusBar()->showMessage(
                         QStringLiteral(
@@ -6003,6 +6221,8 @@ void MainWindow::onEditPointsToggled(bool enabled)
             ui->actionPan->setChecked(false);
         if (ui->actionZoom->isChecked())
             ui->actionZoom->setChecked(false);
+        if (ui->actionMeasureDistance->isChecked())
+            ui->actionMeasureDistance->setChecked(false);
     }
 
     viewer->setPointEditEnabled(enabled);
@@ -6084,6 +6304,8 @@ void MainWindow::onEditMaskToggled(bool enabled)
             ui->actionPan->setChecked(false);
         if (ui->actionZoom->isChecked())
             ui->actionZoom->setChecked(false);
+        if (ui->actionMeasureDistance->isChecked())
+            ui->actionMeasureDistance->setChecked(false);
         if (m_maskBrushSpin)
             viewer->setMaskBrushSize(m_maskBrushSpin->value());
     }
@@ -6201,16 +6423,21 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     updateSyncControls(viewer);
     updateCoordinateStatus(CursorCoordinateInfo{});
     updateCoordinateReferenceControl(viewer);
+    updateMeasurementCircleControl(viewer);
 
     if (!viewer) {
         {
             const QSignalBlocker panBlocker(ui->actionPan);
             const QSignalBlocker zoomBlocker(ui->actionZoom);
+            const QSignalBlocker measureBlocker(
+                ui->actionMeasureDistance);
             ui->actionPan->setChecked(false);
             ui->actionZoom->setChecked(false);
+            ui->actionMeasureDistance->setChecked(false);
         }
         ui->actionPan->setEnabled(false);
         ui->actionZoom->setEnabled(false);
+        ui->actionMeasureDistance->setEnabled(false);
         if (m_zoomPercentSpin) {
             const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
             m_zoomPercentSpin->setEnabled(false);
@@ -6230,11 +6457,17 @@ void MainWindow::onActiveViewerChanged(ImageViewer *viewer)
     {
         const QSignalBlocker panBlocker(ui->actionPan);
         const QSignalBlocker zoomBlocker(ui->actionZoom);
+        const QSignalBlocker measureBlocker(ui->actionMeasureDistance);
         ui->actionPan->setChecked(viewer->panModeEnabled());
         ui->actionZoom->setChecked(viewer->zoomModeEnabled());
+        ui->actionMeasureDistance->setChecked(
+            viewer->measureDistanceEnabled());
     }
     ui->actionPan->setEnabled(true);
     ui->actionZoom->setEnabled(true);
+    ui->actionMeasureDistance->setEnabled(
+        viewer->layerManager()
+        && viewer->layerManager()->layerCount() > 0);
     if (m_zoomPercentSpin) {
         const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
         m_zoomPercentSpin->setEnabled(true);
@@ -6571,6 +6804,11 @@ void MainWindow::configureViewer(ImageViewer *viewer)
                 if (viewer == currentImageViewer())
                     updateMaskBrushControls(viewer);
             });
+    connect(viewer, &ImageViewer::measurementChanged,
+            this, [this, viewer]() {
+                if (viewer == currentImageViewer())
+                    updateMeasurementCircleControl(viewer);
+            });
     connect(viewer, &ImageViewer::maskConnectedRegionInverted,
             this, [this](int pixelCount) {
                 statusBar()->showMessage(
@@ -6581,6 +6819,11 @@ void MainWindow::configureViewer(ImageViewer *viewer)
             });
     connect(viewer->layerManager(), &LayerManager::layersChanged,
             this, &MainWindow::refreshReloadableArtifactWatchers);
+    connect(viewer->layerManager(), &LayerManager::layersChanged,
+            this, [this, viewer]() {
+                if (viewer == currentImageViewer())
+                    updateProjectActions();
+            });
     connect(viewer, &ImageViewer::activatedByClick, this, [this, viewer]() {
         if (m_activeViewer == viewer)
             return;
@@ -7222,15 +7465,18 @@ void MainWindow::closeCurrentProject()
     {
         const QSignalBlocker panBlocker(ui->actionPan);
         const QSignalBlocker zoomBlocker(ui->actionZoom);
+        const QSignalBlocker measureBlocker(ui->actionMeasureDistance);
         const QSignalBlocker editBlocker(ui->actionEditPoints);
         const QSignalBlocker maskEditBlocker(ui->actionEditMask);
         ui->actionPan->setChecked(false);
         ui->actionZoom->setChecked(false);
+        ui->actionMeasureDistance->setChecked(false);
         ui->actionEditPoints->setChecked(false);
         ui->actionEditMask->setChecked(false);
     }
     ui->actionPan->setEnabled(false);
     ui->actionZoom->setEnabled(false);
+    ui->actionMeasureDistance->setEnabled(false);
     if (m_zoomPercentSpin) {
         const QSignalBlocker zoomSpinBlocker(m_zoomPercentSpin);
         m_zoomPercentSpin->setEnabled(false);
@@ -8281,6 +8527,14 @@ void MainWindow::updateMaskBrushControls(ImageViewer *viewer)
     }
 }
 
+void MainWindow::updateMeasurementCircleControl(ImageViewer *viewer)
+{
+    const QSignalBlocker blocker(ui->actionMeasurementCircle);
+    ui->actionMeasurementCircle->setChecked(viewer && viewer->measurementCircleVisible());
+    ui->actionMeasurementCircle->setEnabled(viewer && viewer->measureDistanceEnabled()
+                                           && viewer->measurementVisible());
+}
+
 void MainWindow::updateProjectActions()
 {
     const bool hasProject = m_project.isValid();
@@ -8292,6 +8546,16 @@ void MainWindow::updateProjectActions()
     ImageViewer *viewer = currentImageViewer();
     ui->actionPan->setEnabled(viewer != nullptr);
     ui->actionZoom->setEnabled(viewer != nullptr);
+    const bool canMeasure = viewer
+        && viewer->layerManager()
+        && viewer->layerManager()->layerCount() > 0;
+    {
+        const QSignalBlocker blocker(ui->actionMeasureDistance);
+        ui->actionMeasureDistance->setChecked(
+            canMeasure && viewer->measureDistanceEnabled());
+    }
+    ui->actionMeasureDistance->setEnabled(canMeasure);
+    updateMeasurementCircleControl(viewer);
     updateSyncControls(viewer);
     ui->actionImportRaw->setEnabled(hasProject);
     ui->actionImportLegacyJpegs->setEnabled(hasProject);
@@ -9474,6 +9738,8 @@ void MainWindow::createPointGrid()
             return;
     }
 
+    const ProjectExplorerViewState explorerViewState =
+        projectExplorerViewState();
     QString saveError;
     QSet<QString> refreshedDirectories;
     QSet<QString> openOutputPaths;
@@ -9490,6 +9756,16 @@ void MainWindow::createPointGrid()
             collection.addPoint(point.x() + 0.5, point.y() + 0.5);
 
         if (!collection.save(output.savePath, &saveError)) {
+            if (m_projectFileSystemModel) {
+                for (const QString &directory :
+                     std::as_const(refreshedDirectories)) {
+                    m_projectFileSystemModel->refreshDirectory(directory);
+                }
+            }
+            QTimer::singleShot(
+                0, this, [this, explorerViewState]() {
+                    restoreProjectExplorerViewState(explorerViewState);
+                });
             QMessageBox::warning(this, "Create grid", saveError);
             return;
         }
@@ -9513,6 +9789,9 @@ void MainWindow::createPointGrid()
         for (const QString &directory : std::as_const(refreshedDirectories))
             m_projectFileSystemModel->refreshDirectory(directory);
     }
+    QTimer::singleShot(0, this, [this, explorerViewState]() {
+        restoreProjectExplorerViewState(explorerViewState);
+    });
 
     ImageViewer *viewer = currentImageViewer();
     const bool singleOutputAlreadyOpen = outputs.size() == 1
@@ -9907,8 +10186,6 @@ void MainWindow::createMaskTiffInCollection(
         selectedCollection.dirName.toCaseFolded();
     const QString collectionBaseName =
         !usedBaseNames.contains(foldedCollectionBaseName)
-            && !parentTiffsByBaseName.value(
-                    foldedCollectionBaseName).isEmpty()
         ? selectedCollection.dirName
         : QString();
 

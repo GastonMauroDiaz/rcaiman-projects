@@ -75,6 +75,8 @@ private:
     QSpinBox *m_greenBand = nullptr;
     QSpinBox *m_blueBand = nullptr;
     QCheckBox *m_tailTrim = nullptr;
+    QCheckBox *m_trimLeft = nullptr;
+    QCheckBox *m_trimRight = nullptr;
     QDoubleSpinBox *m_trim = nullptr;
 };
 

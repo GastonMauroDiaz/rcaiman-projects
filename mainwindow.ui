@@ -88,6 +88,8 @@
     </property>
     <addaction name="actionPan"/>
     <addaction name="actionZoom"/>
+    <addaction name="actionMeasureDistance"/>
+    <addaction name="actionMeasurementCircle"/>
     <addaction name="separator"/>
     <addaction name="actionSplitViewer"/>
     <addaction name="actionSyncSplitViews"/>
@@ -159,6 +161,19 @@
    <addaction name="separator"/>
    <addaction name="actionEditMask"/>
    <addaction name="actionCancelMaskEdit"/>
+  </widget>
+  <widget class="QToolBar" name="measurementToolBar">
+   <property name="windowTitle">
+    <string>Measurement</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionMeasureDistance"/>
+   <addaction name="actionMeasurementCircle"/>
   </widget>
   <widget class="QDockWidget" name="dockProjectExplorer">
    <property name="windowTitle">
@@ -453,6 +468,41 @@ Hold Space for temporary pan from any interaction mode.</string>
    <property name="toolTip">
     <string>Zoom view
 Hold Z for temporary zoom from any interaction mode.</string>
+   </property>
+  </action>
+  <action name="actionMeasureDistance">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Measure triangle</string>
+   </property>
+   <property name="toolTip">
+    <string>Measure three sides in pixels and three angles.
+Use the padlocks to fix vertices. Unlock all vertices to move the whole triangle.
+Double-click a free vertex to edit coordinates; lock one endpoint to edit a side length.
+Press Esc to clear.</string>
+   </property>
+  </action>
+  <action name="actionMeasurementCircle">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Show circumcircle</string>
+   </property>
+   <property name="toolTip">
+    <string>Show the circle through the three vertices, its center O, and its radius in pixels.
+For a hemispherical image, place widely separated vertices on the circular image boundary.</string>
    </property>
   </action>
   <action name="actionCreatePoints">

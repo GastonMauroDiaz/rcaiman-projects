@@ -30,6 +30,7 @@
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
@@ -157,8 +158,17 @@ QWidget *CollectionStyleDialog::createImageEditor()
     form->addRow("Green:", m_greenBand);
     form->addRow("Blue:", m_blueBand);
 
-    m_tailTrim = new QCheckBox(widget);
-    form->addRow("Tail trim:", m_tailTrim);
+    auto *tailTrimWidget = new QWidget(widget);
+    auto *tailTrimLayout = new QHBoxLayout(tailTrimWidget);
+    tailTrimLayout->setContentsMargins(0, 0, 0, 0);
+    m_tailTrim = new QCheckBox(tailTrimWidget);
+    m_trimLeft = new QCheckBox("Left", tailTrimWidget);
+    m_trimRight = new QCheckBox("Right", tailTrimWidget);
+    tailTrimLayout->addWidget(m_tailTrim);
+    tailTrimLayout->addWidget(m_trimLeft);
+    tailTrimLayout->addWidget(m_trimRight);
+    tailTrimLayout->addStretch(1);
+    form->addRow("Tail trim:", tailTrimWidget);
     m_trim = new QDoubleSpinBox(widget);
     m_trim->setRange(0.0, 49.0);
     m_trim->setDecimals(2);
@@ -172,6 +182,10 @@ QWidget *CollectionStyleDialog::createImageEditor()
     connect(m_ramp, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &CollectionStyleDialog::updateImageVisibility);
     connect(m_tailTrim, &QCheckBox::toggled,
+            this, &CollectionStyleDialog::updateImageVisibility);
+    connect(m_trimLeft, &QCheckBox::toggled,
+            this, &CollectionStyleDialog::updateImageVisibility);
+    connect(m_trimRight, &QCheckBox::toggled,
             this, &CollectionStyleDialog::updateImageVisibility);
     return widget;
 }
@@ -229,6 +243,8 @@ void CollectionStyleDialog::loadInitialStyle()
     m_greenBand->setValue(style.render.greenBand + 1);
     m_blueBand->setValue(style.render.blueBand + 1);
     m_tailTrim->setChecked(style.render.tailTrim);
+    m_trimLeft->setChecked(style.render.trimLeftTail);
+    m_trimRight->setChecked(style.render.trimRightTail);
     m_trim->setValue(style.render.trimPercent);
     updateImageVisibility();
 }
@@ -263,6 +279,8 @@ CollectionStyleData CollectionStyleDialog::imageData() const
     render.greenBand = m_greenBand->value() - 1;
     render.blueBand = m_blueBand->value() - 1;
     render.tailTrim = m_tailTrim->isChecked();
+    render.trimLeftTail = m_trimLeft->isChecked();
+    render.trimRightTail = m_trimRight->isChecked();
     render.trimPercent = m_trim->value();
     return data;
 }
@@ -332,7 +350,11 @@ void CollectionStyleDialog::updateImageVisibility()
     m_stretch->setEnabled(!categorical);
     m_gamma->setEnabled(!categorical && gamma);
     m_tailTrim->setEnabled(!categorical);
-    m_trim->setEnabled(!categorical && m_tailTrim->isChecked());
+    const bool trimEnabled = !categorical && m_tailTrim->isChecked();
+    m_trimLeft->setEnabled(trimEnabled);
+    m_trimRight->setEnabled(trimEnabled);
+    m_trim->setEnabled(trimEnabled
+                       && (m_trimLeft->isChecked() || m_trimRight->isChecked()));
 }
 
 QStringList CollectionStyleDialog::pointLabelFields() const

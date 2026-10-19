@@ -31,6 +31,7 @@ QString alternateModifier();
 QString panTooltip();
 QString zoomTooltip();
 QString editPointsTooltip();
+QString interactionShortcutsSummaryHtml();
 QString interactionShortcutsMarkdown();
 
 }

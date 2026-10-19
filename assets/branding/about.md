@@ -27,3 +27,18 @@ Gastón Mauro Díaz (Patagonian Andean Forest Research and Extension Center, CIE
 Conceptual design and scientific advisor: 
 
 Mait Lang (Tartu Observatory, University of Tartu)
+
+Early testing and contributions:
+
+Shaohui Zhang (Luke, Finland)
+
+**AI-assisted development**
+
+Developed with assistance from Codex (OpenAI) in software design, implementation,
+testing, and documentation, under the direction and review of Gastón Mauro Díaz.
+
+**Third-party software**
+
+Built with Qt, LibRaw, libtiff, yaml-cpp, and ExifTool, together with their
+supporting libraries. Acknowledgments and license texts are available through
+**Third-party licenses...**.

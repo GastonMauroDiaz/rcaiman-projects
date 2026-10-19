@@ -1,0 +1,5 @@
+version: 1
+project_name: "calibration_with_the_simple_method"
+description: "Hemispherical system calibration with the simple method"
+created: 2026-10-19
+rcaiman_projects_version: 0.1

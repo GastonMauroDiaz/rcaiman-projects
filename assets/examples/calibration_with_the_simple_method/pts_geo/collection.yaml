@@ -1,0 +1,4 @@
+schema_version: 2
+class: point_collection
+image_frame: "img_geo"
+script: "scripts/01_geometric_calibration.R"

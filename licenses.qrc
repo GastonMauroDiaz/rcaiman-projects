@@ -1,0 +1,36 @@
+<RCC>
+    <qresource prefix="/third-party">
+        <file alias="notices.md">THIRD_PARTY_NOTICES.md</file>
+        <file alias="licenses/qt/LICENSE.txt">assets/licenses/qt/LICENSE.txt</file>
+        <file alias="licenses/libraw/LGPL-2.1.txt">assets/licenses/libraw/LGPL-2.1.txt</file>
+        <file alias="licenses/libraw/CDDL-1.0.txt">assets/licenses/libraw/CDDL-1.0.txt</file>
+        <file alias="licenses/libtiff/LICENSE.txt">assets/licenses/libtiff/LICENSE.txt</file>
+        <file alias="licenses/yaml-cpp/LICENSE.txt">assets/licenses/yaml-cpp/LICENSE.txt</file>
+        <file alias="licenses/exiftool/Artistic.txt">assets/licenses/exiftool/Artistic.txt</file>
+        <file alias="licenses/exiftool/Copying.txt">assets/licenses/exiftool/Copying.txt</file>
+        <file alias="licenses/exiftool/windows.txt">assets/licenses/exiftool/windows.txt</file>
+        <file alias="licenses/runtime/gcc-libs/COPYING.LIB">assets/licenses/runtime/gcc-libs/COPYING.LIB</file>
+        <file alias="licenses/runtime/gcc-libs/COPYING.RUNTIME">assets/licenses/runtime/gcc-libs/COPYING.RUNTIME</file>
+        <file alias="licenses/runtime/gcc-libs/COPYING3">assets/licenses/runtime/gcc-libs/COPYING3</file>
+        <file alias="licenses/runtime/gcc-libs/README">assets/licenses/runtime/gcc-libs/README</file>
+        <file alias="licenses/runtime/jbigkit/COPYING">assets/licenses/runtime/jbigkit/COPYING</file>
+        <file alias="licenses/runtime/lcms2/LICENSE">assets/licenses/runtime/lcms2/LICENSE</file>
+        <file alias="licenses/runtime/lcms2/LICENSE-fast_float">assets/licenses/runtime/lcms2/LICENSE-fast_float</file>
+        <file alias="licenses/runtime/lerc/LICENSE">assets/licenses/runtime/lerc/LICENSE</file>
+        <file alias="licenses/runtime/libdeflate/COPYING">assets/licenses/runtime/libdeflate/COPYING</file>
+        <file alias="licenses/runtime/libjpeg-turbo/LICENSE.md">assets/licenses/runtime/libjpeg-turbo/LICENSE.md</file>
+        <file alias="licenses/runtime/libjpeg-turbo/README.ijg">assets/licenses/runtime/libjpeg-turbo/README.ijg</file>
+        <file alias="licenses/runtime/libjpeg-turbo/README.md">assets/licenses/runtime/libjpeg-turbo/README.md</file>
+        <file alias="licenses/runtime/libjpeg-turbo/simd/jsimdext.inc">assets/licenses/runtime/libjpeg-turbo/simd/jsimdext.inc</file>
+        <file alias="licenses/runtime/libpng/LICENSE">assets/licenses/runtime/libpng/LICENSE</file>
+        <file alias="licenses/runtime/libwebp/COPYING">assets/licenses/runtime/libwebp/COPYING</file>
+        <file alias="licenses/runtime/libwinpthread/COPYING">assets/licenses/runtime/libwinpthread/COPYING</file>
+        <file alias="licenses/runtime/xz/COPYING">assets/licenses/runtime/xz/COPYING</file>
+        <file alias="licenses/runtime/xz/COPYING.0BSD">assets/licenses/runtime/xz/COPYING.0BSD</file>
+        <file alias="licenses/runtime/xz/COPYING.GPLv2">assets/licenses/runtime/xz/COPYING.GPLv2</file>
+        <file alias="licenses/runtime/xz/COPYING.GPLv3">assets/licenses/runtime/xz/COPYING.GPLv3</file>
+        <file alias="licenses/runtime/xz/COPYING.LGPLv2.1">assets/licenses/runtime/xz/COPYING.LGPLv2.1</file>
+        <file alias="licenses/runtime/zlib/LICENSE">assets/licenses/runtime/zlib/LICENSE</file>
+        <file alias="licenses/runtime/zstd/LICENSE">assets/licenses/runtime/zstd/LICENSE</file>
+    </qresource>
+</RCC>

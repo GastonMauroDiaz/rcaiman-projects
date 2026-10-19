@@ -1,0 +1,4 @@
+schema_version: 2
+class: preprocessed_image_collection
+alias: "All directions, board with pins"
+script: "scripts/01_geometric_calibration.R"

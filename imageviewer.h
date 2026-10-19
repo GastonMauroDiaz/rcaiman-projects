@@ -27,14 +27,18 @@
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QList>
+#include <QLineF>
 #include <QMutex>
 #include <QMouseEvent>
 #include <QPointF>
 #include <QPointer>
+#include <QPolygonF>
 #include <QRubberBand>
 #include <QResizeEvent>
 #include <QSet>
 #include <QWheelEvent>
+
+#include <array>
 
 class QGraphicsScene;
 class Layer;
@@ -42,6 +46,10 @@ class LayerManager;
 class ImageLayer;
 class PointLayer;
 class QPainter;
+class QDoubleSpinBox;
+class QLabel;
+class QHideEvent;
+class QFormLayout;
 
 enum class ZoomCursorDirection {
     In,
@@ -65,6 +73,13 @@ struct CursorCoordinateInfo {
     int col = -1;
 };
 
+struct MeasurementCircle {
+    bool valid = false;
+    bool unstable = false;
+    QPointF center;
+    double radius = 0;
+};
+
 class ImageViewer : public QGraphicsView
 {
     Q_OBJECT
@@ -82,6 +97,21 @@ public:
     bool panModeEnabled() const;
     void setZoomModeEnabled(bool enabled);
     bool zoomModeEnabled() const;
+    void setMeasureDistanceEnabled(bool enabled);
+    bool measureDistanceEnabled() const { return m_measureDistanceEnabled; }
+    bool measurementVisible() const { return m_measurementVisible; }
+    QPointF measurementVertex(int vertex) const;
+    void setMeasurementVertex(int vertex, const QPointF &position);
+    double measurementSideLength(int side) const;
+    double measurementAngleDegrees(int vertex) const;
+    bool measurementVertexLocked(int vertex) const;
+    void setMeasurementVertexLocked(int vertex, bool locked);
+    bool measurementTranslationAllowed() const;
+    bool canEditMeasurementSide(int side) const;
+    bool setMeasurementSideLength(int side, double length);
+    MeasurementCircle measurementCircumcircle() const;
+    bool measurementCircleVisible() const { return m_measurementCircleVisible; }
+    void setMeasurementCircleVisible(bool visible);
     double zoomPercent() const;
     void setZoomPercent(double percent);
     void setActivePanelIndicator(bool active);
@@ -118,11 +148,13 @@ signals:
     void zoomPercentChanged(double percent);
     void maskBrushSizeChanged(int size);
     void maskConnectedRegionInverted(int pixelCount);
+    void measurementChanged();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void drawForeground(QPainter *painter, const QRectF &rect) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -146,6 +178,21 @@ private slots:
     void onActiveLayerChanged(Layer *layer);
 
 private:
+    enum class MeasurementDragTarget {
+        None = -1,
+        VertexA = 0,
+        VertexB = 1,
+        VertexC = 2,
+        Triangle = 3
+    };
+
+    struct MeasurementLabel {
+        QString text;
+        QRectF rect;
+        int vertex = -1;
+        int side = -1;
+    };
+
     void fitImageToView();
     void updateDragMode();
     void syncToSiblings(int dx, int dy);
@@ -154,12 +201,34 @@ private:
     bool handleSpacePanKeyEvent(QEvent *event);
     bool handleTemporaryZoomKeyEvent(QEvent *event);
     bool handleZoomShortcutKeyEvent(QEvent *event);
+    bool handleMeasureDistanceKeyEvent(QKeyEvent *event);
     bool handleMaskBrushSizeKeyEvent(QKeyEvent *event);
     void setSpacePanActive(bool active);
     void setSplitSpacePanActive(bool active);
     void setTemporaryZoomActive(bool active);
     void setSplitTemporaryZoomActive(bool active);
     void clearTemporaryInteractionState();
+    void clearMeasurement();
+    void initializeMeasurement(const QPoint &viewportPos);
+    void translateMeasurement(const QPointF &delta);
+    void moveMeasurementHandle(const QPoint &viewportPos);
+    MeasurementDragTarget measurementEndpointAt(
+        const QPoint &viewportPos, bool includeLocked = false) const;
+    void updateMeasurementCursor(const QPoint &viewportPos);
+    QPolygonF measurementScreenPolygon() const;
+    QList<MeasurementLabel> measurementLabels() const;
+    int measurementLabelVertexAt(const QPoint &viewportPos) const;
+    int measurementLabelSideAt(const QPoint &viewportPos) const;
+    int measurementLockAt(const QPoint &viewportPos) const;
+    QRectF measurementLockRect(const MeasurementLabel &label) const;
+    QPointF measurementCoordinates(const QPointF &scenePosition) const;
+    QPointF measurementScenePosition(const QPointF &position) const;
+    void drawMeasurementCircumcircle(QPainter *painter) const;
+    void openMeasurementSideEditor(int side, const QPoint &viewportPos);
+    void positionMeasurementEditor(const QPoint &viewportPos);
+    void openMeasurementVertexEditor(int vertex, const QPoint &viewportPos);
+    void closeMeasurementEditor();
+    void commitMeasurementEditor();
     void setPointItemsInteractionBlocked(bool blocked);
     void applyDragZoom(const QPoint &pos);
     bool paintMaskAtViewportPos(const QPoint &pos, bool erase);
@@ -175,12 +244,18 @@ private:
     void finishPointBoxSelection(const QPoint &pos);
     void setZoomCursorDirection(ZoomCursorDirection direction);
     void updateAutoBackground();
+    void updateEmptyStateOverlay();
 
     bool m_panModeEnabled = false;
     bool m_spacePanActive = false;
     bool m_zoomModeEnabled = false;
     bool m_temporaryZoomActive = false;
     bool m_zoomDragging = false;
+    bool m_measureDistanceEnabled = false;
+    bool m_measureDragging = false;
+    bool m_measurementVisible = false;
+    MeasurementDragTarget m_measureDragTarget =
+        MeasurementDragTarget::None;
     bool m_pointBoxSelecting = false;
     bool m_autoFitImage = false;
     bool m_pointEditEnabled = false;
@@ -199,6 +274,7 @@ private:
     QPoint m_lastMousePos;
     QGraphicsScene *m_scene = nullptr;
     QWidget *m_activePanelIndicatorOverlay = nullptr;
+    QWidget *m_emptyStateOverlay = nullptr;
     LayerManager *m_layerManager = nullptr;
     ImageLayer *m_imageLayer = nullptr;
     QPointer<ImageLayer> m_coordinateReferenceImage;
@@ -208,6 +284,18 @@ private:
     QPointF m_lastMaskPaintScenePos;
     QPointF m_maskLineAnchorScenePos;
     QPoint m_zoomDragLastPos;
+    std::array<QPointF, 3> m_measurementVertices;
+    std::array<bool, 3> m_measurementLocks = {false, false, false};
+    bool m_measurementCircleVisible = true;
+    QPointF m_measureDragLastScenePos;
+    QWidget *m_measurementEditor = nullptr;
+    QFormLayout *m_measurementEditorForm = nullptr;
+    QLabel *m_measurementEditorTitle = nullptr;
+    QDoubleSpinBox *m_measurementXSpin = nullptr;
+    QDoubleSpinBox *m_measurementYDownSpin = nullptr;
+    QDoubleSpinBox *m_measurementLengthSpin = nullptr;
+    int m_editingMeasurementVertex = -1;
+    int m_editingMeasurementSide = -1;
     ZoomCursorDirection m_zoomCursorDirection = ZoomCursorDirection::In;
     QPoint m_pointBoxOrigin;
     QRect m_pointBoxRect;

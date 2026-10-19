@@ -223,6 +223,7 @@ private:
         bool expanded);
     void updateProjectExplorerStarredEmptyMessage();
     void updateMaskBrushControls(ImageViewer *viewer);
+    void updateMeasurementCircleControl(ImageViewer *viewer);
     void createMaskTiffInCollection(
         const Collection &initialCollection = {});
     QModelIndex projectSourceIndex(const QModelIndex &index) const;
@@ -260,6 +261,8 @@ private:
     QFrame *m_viewerQuickRule = nullptr;
     QLabel *m_viewerQuickTitle = nullptr;
     QLabel *m_viewerQuickBody = nullptr;
+    QLabel *m_viewerShortcutsTitle = nullptr;
+    QLabel *m_viewerShortcutsBody = nullptr;
     QLabel *m_coordinateReferenceLabel = nullptr;
     QComboBox *m_coordinateReferenceCombo = nullptr;
     QLabel *m_coordinateStatusLabel = nullptr;

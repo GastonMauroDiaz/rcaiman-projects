@@ -103,6 +103,8 @@ qt_add_executable(rcaiman_projects
     hspprojectimporter.h hspprojectimporter.cpp
     exampleprojectsdialog.h exampleprojectsdialog.cpp
     shortcuttext.h shortcuttext.cpp
+    thirdpartylicensesdialog.h thirdpartylicensesdialog.cpp
+    licenses.qrc
     resources.qrc
 )
 
@@ -196,6 +198,44 @@ if(WIN32)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(thirdpartylicenses_tests
+        tests/thirdpartylicenses_tests.cpp
+        thirdpartylicensesdialog.h thirdpartylicensesdialog.cpp
+        licenses.qrc
+    )
+    target_include_directories(thirdpartylicenses_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(thirdpartylicenses_tests PRIVATE Qt::Widgets)
+    add_test(NAME thirdpartylicenses_tests COMMAND thirdpartylicenses_tests)
+    set_tests_properties(thirdpartylicenses_tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 30
+    )
+
+    add_executable(imageviewer_measurement_tests
+        tests/imageviewer_measurement_tests.cpp
+        imageviewer.h imageviewer.cpp
+        imagelayer.h imagelayer.cpp
+        layer.h layer.cpp
+        layermanager.h layermanager.cpp
+        pointlayer.h pointlayer.cpp
+        pointitem.h pointitem.cpp
+        pointcollection.h pointcollection.cpp
+        apppreferences.h apppreferences.cpp
+        rasterdata.h rasterdata.cpp
+        rasterrenderer.h rasterrenderer.cpp
+        tiffreader.h tiffreader.cpp
+        tiffwriter.h tiffwriter.cpp
+    )
+    target_include_directories(imageviewer_measurement_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(imageviewer_measurement_tests PRIVATE Qt::Widgets TIFF)
+    add_test(NAME imageviewer_measurement_tests COMMAND imageviewer_measurement_tests)
+    set_tests_properties(imageviewer_measurement_tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 30
+    )
+
     add_executable(apptheme_tests
         apptheme_tests.cpp
         apptheme.h apptheme.cpp
@@ -278,6 +318,11 @@ if(BUILD_TESTING)
         list(APPEND POINT_TESTS pointcollection_r_roundtrip_tests)
     endif()
     if(WIN32)
+        set_tests_properties(imageviewer_measurement_tests thirdpartylicenses_tests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${Qt6_DIR}/../../../plugins/platforms"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin;PATH=path_list_prepend:C:/msys64/mingw64/bin"
+        )
         set_tests_properties(apptheme_tests PROPERTIES
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:${Qt6_DIR}/../../../bin;PATH=path_list_prepend:C:/Qt/Tools/mingw1310_64/bin"
@@ -311,6 +356,9 @@ install(DIRECTORY assets/examples
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(FILES THIRD_PARTY_NOTICES.md
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY assets/licenses
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 if(WIN32)

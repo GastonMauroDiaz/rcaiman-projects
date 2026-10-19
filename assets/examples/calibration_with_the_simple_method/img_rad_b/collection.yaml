@@ -1,0 +1,4 @@
+schema_version: 2
+class: preprocessed_image_collection
+alias: "3 o'clock"
+script: "scripts/02_radiometric_calibration.R"

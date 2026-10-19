@@ -1,0 +1,20 @@
+schema_version: 1
+layer: image
+opacity: 1
+blend_mode: maximum
+render:
+  mode: single_band
+  band: 3
+  red_band: 1
+  green_band: 2
+  blue_band: 3
+  ramp: gray
+  stretch: none
+  gamma: 2.2
+  tail_trim: false
+  trim_left_tail: true
+  trim_right_tail: true
+  trim_percent: 2
+  manual_range_enabled: false
+  manual_min: 0
+  manual_max: 1

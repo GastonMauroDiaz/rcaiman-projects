@@ -63,6 +63,16 @@ QString editPointsTooltip()
         .arg(alternateModifier());
 }
 
+QString interactionShortcutsSummaryHtml()
+{
+    return QStringLiteral(
+        "Go to <b>Help &gt; Interaction shortcuts...</b> to learn the "
+        "mouse and keyboard combinations that are easy to miss."
+        "<p>For example: hold <b>Space</b> to pan or <b>Z</b> and drag "
+        "to zoom; press <b>9</b> to fit the image and <b>0</b> for "
+        "100%.</p>");
+}
+
 QString interactionShortcutsMarkdown()
 {
     const QString primary = primaryModifier();

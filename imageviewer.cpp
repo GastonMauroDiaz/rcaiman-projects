@@ -32,24 +32,64 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
+#include <QFontMetrics>
+#include <QFormLayout>
+#include <QFrame>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
+#include <QHelpEvent>
+#include <QHideEvent>
+#include <QHBoxLayout>
 #include <QIcon>
+#include <QLabel>
+#include <QLineF>
+#include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMutexLocker>
 #include <QPainter>
+#include <QPainterPath>
+#include <QPushButton>
 #include <QRubberBand>
 #include <QScrollBar>
 #include <QSplitter>
+#include <QStyle>
+#include <QToolButton>
+#include <QToolTip>
 #include <QUrl>
+#include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
+void drawMeasurementLock(QPainter *painter, const QRectF &rect, bool locked)
+{
+    painter->save();
+    painter->translate(rect.topLeft());
+    painter->scale(rect.width() / 20, rect.height() / 20);
+    painter->setPen(QPen(QColor("#4b5563"), 1.5, Qt::SolidLine, Qt::RoundCap));
+    painter->setBrush(Qt::NoBrush);
+    QPainterPath shackle;
+    shackle.moveTo(locked ? 6 : 10, 10);
+    shackle.lineTo(locked ? 6 : 10, 6);
+    shackle.cubicTo(locked ? 6 : 10, 1, locked ? 14 : 18, 1, locked ? 14 : 18, 6);
+    if (locked)
+        shackle.lineTo(14, 10);
+    painter->drawPath(shackle);
+    painter->setBrush(locked ? QColor("#c9cfd6") : QColor(Qt::white));
+    painter->drawRoundedRect(QRectF(4, 10, 12, 8), 1.5, 1.5);
+    painter->setBrush(QColor("#4b5563"));
+    painter->drawEllipse(QPointF(10, 13), 0.7, 0.7);
+    painter->drawLine(QPointF(10, 13), QPointF(10, 15));
+    painter->restore();
+}
+
 QCursor editPointsCursor()
 {
     return QCursor(Qt::CrossCursor);
@@ -178,8 +218,14 @@ ImageViewer::ImageViewer(QWidget *parent)
         if (m_cursorInside)
             emitCursorCoordinateInfo(m_lastMousePos);
         setPointItemsInteractionBlocked(
-            panInteractionActive() || zoomInteractionActive() || m_maskEditEnabled);
+            panInteractionActive() || zoomInteractionActive()
+            || m_measureDistanceEnabled || m_maskEditEnabled);
+        if (m_layerManager->layerCount() == 0
+            && m_measureDistanceEnabled) {
+            setMeasureDistanceEnabled(false);
+        }
         updateAutoBackground();
+        updateEmptyStateOverlay();
     });
     setDragMode(QGraphicsView::NoDrag);
     setFocusPolicy(Qt::StrongFocus);
@@ -189,6 +235,34 @@ ImageViewer::ImageViewer(QWidget *parent)
         new ActivePanelIndicatorOverlay(this);
     m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
     m_activePanelIndicatorOverlay->hide();
+
+    m_emptyStateOverlay = new QWidget(viewport());
+    auto *emptyLayout = new QVBoxLayout(m_emptyStateOverlay);
+    emptyLayout->setContentsMargins(18, 14, 18, 14);
+    emptyLayout->setSpacing(8);
+
+    auto *emptyTitle = new QLabel("Empty viewer", m_emptyStateOverlay);
+    QFont emptyTitleFont = emptyTitle->font();
+    emptyTitleFont.setBold(true);
+    emptyTitle->setFont(emptyTitleFont);
+    emptyTitle->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(emptyTitle);
+
+    auto *emptyBody = new QLabel(
+        "Drop a TIFF here or close this panel.", m_emptyStateOverlay);
+    emptyBody->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(emptyBody);
+
+    auto *closePanelButton = new QPushButton(
+        QIcon::fromTheme(QIcon::ThemeIcon::WindowClose),
+        "Close panel",
+        m_emptyStateOverlay);
+    connect(closePanelButton, &QPushButton::clicked,
+            this, [this]() { emit closeRequested(); });
+    emptyLayout->addWidget(closePanelButton, 0, Qt::AlignCenter);
+
+    m_emptyStateOverlay->adjustSize();
+    updateEmptyStateOverlay();
     connect(qApp, &QGuiApplication::applicationStateChanged,
             this, [this](Qt::ApplicationState state) {
                 if (state != Qt::ApplicationActive)
@@ -254,6 +328,7 @@ void ImageViewer::setCoordinateReferenceImage(ImageLayer *layer)
         return;
     }
 
+    closeMeasurementEditor();
     m_coordinateReferenceImage = layer;
     m_coordinateReferenceInitialized = true;
     emit coordinateReferenceImageChanged();
@@ -416,6 +491,558 @@ void ImageViewer::setZoomModeEnabled(bool enabled)
     updateDragMode();
 }
 
+void ImageViewer::setMeasureDistanceEnabled(bool enabled)
+{
+    if (m_measureDistanceEnabled == enabled)
+        return;
+
+    m_measureDistanceEnabled = enabled;
+    if (enabled)
+        initializeMeasurement(viewport()->rect().center());
+    else
+        clearMeasurement();
+    updateDragMode();
+    viewport()->update();
+}
+
+QPointF ImageViewer::measurementVertex(int vertex) const
+{
+    if (vertex < 0 || vertex >= 3)
+        return {};
+    return measurementCoordinates(m_measurementVertices[vertex]);
+}
+
+QPointF ImageViewer::measurementCoordinates(const QPointF &point) const
+{
+    ImageLayer *reference = coordinateReferenceImage();
+    if (reference && reference->pixmapItem()) {
+        const auto *item = reference->pixmapItem();
+        return item->mapFromScene(point) - item->boundingRect().topLeft();
+    }
+    return point;
+}
+
+QPointF ImageViewer::measurementScenePosition(const QPointF &position) const
+{
+    ImageLayer *reference = coordinateReferenceImage();
+    if (reference && reference->pixmapItem()) {
+        const auto *item = reference->pixmapItem();
+        return item->mapToScene(position + item->boundingRect().topLeft());
+    }
+    return position;
+}
+
+double ImageViewer::measurementSideLength(int side) const
+{
+    if (!m_measurementVisible || side < 0 || side >= 3)
+        return qQNaN();
+    return QLineF(measurementVertex(side), measurementVertex((side + 1) % 3)).length();
+}
+
+double ImageViewer::measurementAngleDegrees(int vertex) const
+{
+    if (vertex < 0 || vertex >= 3)
+        return qQNaN();
+    const QPointF origin = measurementVertex(vertex);
+    const QLineF first(origin, measurementVertex((vertex + 1) % 3));
+    const QLineF second(origin, measurementVertex((vertex + 2) % 3));
+    if (!m_measurementVisible || first.length() <= 1e-9 || second.length() <= 1e-9)
+        return qQNaN();
+    const double angle = first.angleTo(second);
+    return qMin(angle, 360.0 - angle);
+}
+
+void ImageViewer::setMeasurementVertex(int vertex, const QPointF &position)
+{
+    if (!m_measurementVisible || vertex < 0 || vertex >= 3 || measurementVertexLocked(vertex)
+        || !std::isfinite(position.x()) || !std::isfinite(position.y())) {
+        return;
+    }
+
+    m_measurementVertices[vertex] = measurementScenePosition(position);
+    viewport()->update();
+    emit measurementChanged();
+}
+
+void ImageViewer::translateMeasurement(const QPointF &delta)
+{
+    if (!measurementTranslationAllowed())
+        return;
+    for (QPointF &point : m_measurementVertices)
+        point += delta;
+    viewport()->update();
+    emit measurementChanged();
+}
+
+bool ImageViewer::measurementVertexLocked(int vertex) const
+{
+    return vertex >= 0 && vertex < 3 && m_measurementLocks[vertex];
+}
+
+void ImageViewer::setMeasurementVertexLocked(int vertex, bool locked)
+{
+    if (vertex < 0 || vertex >= 3 || m_measurementLocks[vertex] == locked)
+        return;
+    closeMeasurementEditor();
+    m_measureDragging = false;
+    m_measureDragTarget = MeasurementDragTarget::None;
+    m_measurementLocks[vertex] = locked;
+    updateMeasurementCursor(m_lastMousePos);
+    viewport()->update();
+    emit measurementChanged();
+}
+
+bool ImageViewer::measurementTranslationAllowed() const
+{
+    return m_measurementVisible && !m_measurementLocks[0]
+        && !m_measurementLocks[1] && !m_measurementLocks[2];
+}
+
+bool ImageViewer::canEditMeasurementSide(int side) const
+{
+    return m_measurementVisible && side >= 0 && side < 3
+        && m_measurementLocks[side] != m_measurementLocks[(side + 1) % 3]
+        && measurementSideLength(side) > 1e-9;
+}
+
+bool ImageViewer::setMeasurementSideLength(int side, double length)
+{
+    if (!canEditMeasurementSide(side) || !std::isfinite(length) || length <= 0)
+        return false;
+    const int next = (side + 1) % 3;
+    const int fixed = m_measurementLocks[side] ? side : next;
+    const int moving = fixed == side ? next : side;
+    const QPointF direction = m_measurementVertices[moving] - m_measurementVertices[fixed];
+    const QPointF position = m_measurementVertices[fixed]
+        + direction * (length / measurementSideLength(side));
+    if (!std::isfinite(position.x()) || !std::isfinite(position.y()))
+        return false;
+    m_measurementVertices[moving] = position;
+    viewport()->update();
+    emit measurementChanged();
+    return true;
+}
+
+MeasurementCircle ImageViewer::measurementCircumcircle() const
+{
+    MeasurementCircle circle;
+    if (!m_measurementVisible)
+        return circle;
+    const QPointF a = measurementVertex(0);
+    QPointF u = measurementVertex(1) - a;
+    QPointF v = measurementVertex(2) - a;
+    const double scale = qMax(qMax(std::abs(u.x()), std::abs(u.y())),
+                              qMax(std::abs(v.x()), std::abs(v.y())));
+    if (!std::isfinite(scale) || scale == 0)
+        return circle;
+    // Translate and scale first to avoid squaring large absolute coordinates.
+    u /= scale;
+    v /= scale;
+    const double cross = u.x() * v.y() - u.y() * v.x();
+    const double u2 = QPointF::dotProduct(u, u);
+    const double v2 = QPointF::dotProduct(v, v);
+    const double longest2 = qMax(qMax(u2, v2), QPointF::dotProduct(u - v, u - v));
+    if (std::abs(cross) <= 64 * std::numeric_limits<double>::epsilon() * longest2)
+        return circle;
+    const QPointF offset((u2 * v.y() - v2 * u.y()) / (2 * cross),
+                         (u.x() * v2 - v.x() * u2) / (2 * cross));
+    circle.center = a + offset * scale;
+    circle.radius = std::hypot(offset.x(), offset.y()) * scale;
+    circle.valid = std::isfinite(circle.center.x()) && std::isfinite(circle.center.y())
+        && std::isfinite(circle.radius) && circle.radius > 0;
+    // Altitude / longest side below 1:1000 indicates strong geometric sensitivity.
+    circle.unstable = circle.valid && std::abs(cross) / longest2 < 1e-3;
+    return circle;
+}
+
+void ImageViewer::setMeasurementCircleVisible(bool visible)
+{
+    if (m_measurementCircleVisible == visible)
+        return;
+    closeMeasurementEditor();
+    m_measurementCircleVisible = visible;
+    viewport()->update();
+    emit measurementChanged();
+}
+
+QPolygonF ImageViewer::measurementScreenPolygon() const
+{
+    QPolygonF polygon;
+    for (const QPointF &point : m_measurementVertices)
+        polygon.append(viewportTransform().map(point));
+    return polygon;
+}
+
+QList<ImageViewer::MeasurementLabel> ImageViewer::measurementLabels() const
+{
+    QList<MeasurementLabel> labels;
+    if (!m_measurementVisible)
+        return labels;
+
+    const QPolygonF polygon = measurementScreenPolygon();
+    const QPointF center = (polygon[0] + polygon[1] + polygon[2]) / 3;
+    QList<QPointF> reservedPoints = polygon;
+    const MeasurementCircle circle = measurementCircumcircle();
+    if (m_measurementCircleVisible && circle.valid)
+        reservedPoints.append(viewportTransform().map(measurementScenePosition(circle.center)));
+    const QFontMetrics metrics(viewport()->font());
+    const QLocale locale;
+    const auto number = [&locale](double value) {
+        QString text = locale.toString(value, 'f', 3);
+        while (text.endsWith('0'))
+            text.chop(1);
+        if (text.endsWith(locale.decimalPoint()))
+            text.chop(locale.decimalPoint().size());
+        return text;
+    };
+    const auto vertexName = [](int index) { return QChar('A' + index); };
+    const auto place = [&](const QString &text, const QPointF &anchor,
+                           bool outside, int vertex, int side = -1) {
+        const QSize textSize = metrics.size(0, text);
+        const QSizeF size(qMin<double>(textSize.width() + 12 + (vertex >= 0 ? 24 : 0),
+                                       qMax(16, viewport()->width() - 8)),
+                          qMax(textSize.height() + 6, vertex >= 0 ? 24 : 0));
+        QPointF position = anchor;
+        if (outside) {
+            QPointF direction = anchor - center;
+            const double length = std::hypot(direction.x(), direction.y());
+            direction = length > 1e-6 ? direction / length : QPointF(-1, 1);
+            position += direction * 16;
+            if (direction.x() < 0)
+                position.rx() -= size.width();
+            if (direction.y() < 0)
+                position.ry() -= size.height();
+        } else {
+            position -= QPointF(size.width() / 2, size.height() / 2);
+        }
+
+        QRectF best;
+        double bestScore = std::numeric_limits<double>::max();
+        for (int y = -3; y <= 3; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                QRectF candidate(position + QPointF(x * 36, y * (size.height() + 4)), size);
+                candidate.moveLeft(qBound(4.0, candidate.left(),
+                    qMax(4.0, viewport()->width() - size.width() - 4)));
+                candidate.moveTop(qBound(4.0, candidate.top(),
+                    qMax(4.0, viewport()->height() - size.height() - 4)));
+                double score = QLineF(candidate.topLeft(), position).length();
+                for (const MeasurementLabel &placed : labels) {
+                    const QRectF overlap = candidate.intersected(
+                        placed.rect.adjusted(-3, -3, 3, 3));
+                    score += overlap.width() * overlap.height() * 100;
+                }
+                for (const QPointF &point : reservedPoints) {
+                    if (candidate.adjusted(-8, -8, 8, 8).contains(point))
+                        score += 100000;
+                }
+                if (outside && polygon.containsPoint(candidate.center(), Qt::OddEvenFill))
+                    score += 10000;
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
+        }
+        labels.append({text, best, vertex, side});
+    };
+
+    // Reserve the angle labels near their corners before placing longer text.
+    for (int vertex = 0; vertex < 3; ++vertex) {
+        const QLineF first(polygon[vertex], polygon[(vertex + 1) % 3]);
+        const QLineF second(polygon[vertex], polygon[(vertex + 2) % 3]);
+        const double angle = measurementAngleDegrees(vertex);
+        double span = first.angleTo(second);
+        if (span > 180)
+            span -= 360;
+        const double radius = qMin(30.0, qMin(first.length(), second.length()) * 0.2);
+        const QPointF anchor = polygon[vertex]
+            + QLineF::fromPolar(radius + 18, first.angle() + span / 2).p2();
+        place(std::isfinite(angle)
+                  ? QStringLiteral("%1%2").arg(angle, 0, 'f', 1).arg(QChar(0x00b0))
+                  : QStringLiteral("--"),
+              anchor, false, -1);
+    }
+    for (int vertex = 0; vertex < 3; ++vertex) {
+        const QPointF point = measurementVertex(vertex);
+        place(QStringLiteral("%1: x=%2, y_down=%3")
+                  .arg(vertexName(vertex)).arg(number(point.x()), number(point.y())),
+              polygon[vertex], true, vertex);
+    }
+    for (int side = 0; side < 3; ++side) {
+        const int next = (side + 1) % 3;
+        place(QStringLiteral("%1%2: %3 px")
+                  .arg(vertexName(side)).arg(vertexName(next))
+                  .arg(measurementSideLength(side), 0, 'f', 1),
+              (polygon[side] + polygon[next]) / 2, true, -1, side);
+    }
+    if (m_measurementCircleVisible) {
+        QString text = circle.valid
+            ? QStringLiteral("O: x=%1, y_down=%2\nr=%3 px")
+                  .arg(number(circle.center.x()), number(circle.center.y()))
+                  .arg(circle.radius, 0, 'f', 1)
+            : QStringLiteral("Circumcircle undefined:\naligned or coincident vertices");
+        if (circle.unstable)
+            text += QStringLiteral("\nNearly aligned vertices: center unstable");
+        const QSize textSize = metrics.size(0, text);
+        place(text, QPointF(textSize.width() / 2.0 + 14,
+                           viewport()->height() - textSize.height() / 2.0 - 14), false, -1);
+    }
+    return labels;
+}
+
+int ImageViewer::measurementLabelVertexAt(const QPoint &viewportPos) const
+{
+    for (const MeasurementLabel &label : measurementLabels()) {
+        if (label.vertex >= 0 && label.rect.contains(viewportPos))
+            return label.vertex;
+    }
+    return -1;
+}
+
+QRectF ImageViewer::measurementLockRect(const MeasurementLabel &label) const
+{
+    return label.vertex < 0 ? QRectF()
+        : QRectF(label.rect.right() - 23, label.rect.center().y() - 10, 20, 20);
+}
+
+int ImageViewer::measurementLockAt(const QPoint &viewportPos) const
+{
+    for (const MeasurementLabel &label : measurementLabels()) {
+        if (measurementLockRect(label).contains(viewportPos))
+            return label.vertex;
+    }
+    return -1;
+}
+
+int ImageViewer::measurementLabelSideAt(const QPoint &viewportPos) const
+{
+    for (const MeasurementLabel &label : measurementLabels()) {
+        if (label.side >= 0 && label.rect.contains(viewportPos))
+            return label.side;
+    }
+    return -1;
+}
+
+void ImageViewer::drawMeasurementCircumcircle(QPainter *painter) const
+{
+    if (!m_measurementCircleVisible)
+        return;
+    const MeasurementCircle circle = measurementCircumcircle();
+    if (!circle.valid)
+        return;
+    const auto screenPoint = [this](const QPointF &point) {
+        return viewportTransform().map(measurementScenePosition(point));
+    };
+    const QPointF center = screenPoint(circle.center);
+    const QPointF xAxis = screenPoint(circle.center + QPointF(circle.radius, 0)) - center;
+    const QPointF yAxis = screenPoint(circle.center + QPointF(0, circle.radius)) - center;
+    const double size = std::hypot(xAxis.x(), xAxis.y()) + std::hypot(yAxis.x(), yAxis.y());
+    if (!std::isfinite(size) || size <= 0)
+        return;
+    const QRectF clip = QRectF(viewport()->rect()).adjusted(-3, -3, 3, 3);
+    const double pi = std::acos(-1.0);
+    QList<double> angles{0, 2 * pi};
+    const auto intersections = [&](double a, double b, double value) {
+        const double amplitude = std::hypot(a, b);
+        if (amplitude == 0 || std::abs(value) > amplitude)
+            return;
+        const double phase = std::atan2(b, a);
+        const double offset = std::acos(qBound(-1.0, value / amplitude, 1.0));
+        for (double angle : {phase - offset, phase + offset}) {
+            angle = std::fmod(angle + 2 * pi, 2 * pi);
+            angles.append(angle);
+        }
+    };
+    intersections(xAxis.x(), yAxis.x(), clip.left() - center.x());
+    intersections(xAxis.x(), yAxis.x(), clip.right() - center.x());
+    intersections(xAxis.y(), yAxis.y(), clip.top() - center.y());
+    intersections(xAxis.y(), yAxis.y(), clip.bottom() - center.y());
+    std::sort(angles.begin(), angles.end());
+    const auto sample = [&](double angle) {
+        return center + xAxis * std::cos(angle) + yAxis * std::sin(angle);
+    };
+    const double step = qMin(0.2, std::sqrt(2.0 / size));
+    QPainterPath path;
+    // Sample only arcs inside the viewport, keeping even very large circles bounded.
+    for (int i = 1; i < angles.size(); ++i) {
+        const double start = angles[i - 1];
+        const double end = angles[i];
+        if (!clip.contains(sample((start + end) / 2)))
+            continue;
+        const int steps = static_cast<int>(qBound(1.0, std::ceil((end - start) / step), 2048.0));
+        for (int j = 0; j <= steps; ++j) {
+            QPointF point = sample(start + (end - start) * j / steps);
+            point.setX(qBound(clip.left(), point.x(), clip.right()));
+            point.setY(qBound(clip.top(), point.y(), clip.bottom()));
+            if (j == 0)
+                path.moveTo(point);
+            else
+                path.lineTo(point);
+        }
+    }
+    painter->setBrush(Qt::NoBrush);
+    painter->setPen(QPen(QColor(0, 0, 0, 170), 3.5));
+    painter->drawPath(path);
+    painter->setPen(QPen(QColor("#5ac8d8"), 1.5, Qt::DashLine));
+    painter->drawPath(path);
+    if (clip.contains(center)) {
+        QPainterPath target;
+        target.addEllipse(center, 5, 5);
+        target.moveTo(center + QPointF(-9, 0));
+        target.lineTo(center + QPointF(9, 0));
+        target.moveTo(center + QPointF(0, -9));
+        target.lineTo(center + QPointF(0, 9));
+        painter->setPen(QPen(QColor(0, 0, 0, 220), 4));
+        painter->drawPath(target);
+        painter->setPen(QPen(QColor("#5ac8d8"), 1.5));
+        painter->drawPath(target);
+        painter->setPen(Qt::black);
+        painter->drawText(center + QPointF(11, -7), "O");
+        painter->setPen(Qt::white);
+        painter->drawText(center + QPointF(10, -8), "O");
+    }
+}
+
+void ImageViewer::openMeasurementVertexEditor(int vertex, const QPoint &viewportPos)
+{
+    if (!m_measurementVisible || vertex < 0 || vertex >= 3 || measurementVertexLocked(vertex))
+        return;
+    if (!m_measurementEditor) {
+        auto *editor = new QFrame(viewport());
+        editor->setObjectName(QStringLiteral("measurementEditor"));
+        editor->setFrameShape(QFrame::StyledPanel);
+        editor->setAutoFillBackground(true);
+        auto *layout = new QVBoxLayout(editor);
+        layout->setContentsMargins(8, 6, 8, 6);
+        auto *header = new QHBoxLayout;
+        m_measurementEditorTitle = new QLabel(editor);
+        header->addWidget(m_measurementEditorTitle);
+        header->addStretch();
+        auto *apply = new QToolButton(editor);
+        apply->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+        apply->setToolTip("Apply measurement changes");
+        auto *cancel = new QToolButton(editor);
+        cancel->setIcon(style()->standardIcon(QStyle::SP_DialogCancelButton));
+        cancel->setToolTip("Cancel measurement changes");
+        header->addWidget(apply);
+        header->addWidget(cancel);
+        layout->addLayout(header);
+        auto *form = new QFormLayout;
+        m_measurementEditorForm = form;
+        const auto makeSpin = [editor](const QString &name) {
+            auto *spin = new QDoubleSpinBox(editor);
+            spin->setObjectName(name);
+            spin->setRange(-1e9, 1e9);
+            spin->setDecimals(3);
+            spin->setKeyboardTracking(false);
+            spin->setMinimumWidth(120);
+            return spin;
+        };
+        m_measurementXSpin = makeSpin(QStringLiteral("measurementVertexX"));
+        m_measurementYDownSpin = makeSpin(QStringLiteral("measurementVertexYDown"));
+        m_measurementLengthSpin = makeSpin(QStringLiteral("measurementSideLength"));
+        m_measurementLengthSpin->setRange(0.001, 1e9);
+        m_measurementLengthSpin->setSuffix(" px");
+        form->addRow("x:", m_measurementXSpin);
+        form->addRow("y_down:", m_measurementYDownSpin);
+        form->addRow("Length:", m_measurementLengthSpin);
+        layout->addLayout(form);
+        m_measurementEditor = editor;
+        editor->installEventFilter(this);
+        for (QWidget *child : editor->findChildren<QWidget*>())
+            child->installEventFilter(this);
+        connect(apply, &QToolButton::clicked, this, &ImageViewer::commitMeasurementEditor);
+        connect(cancel, &QToolButton::clicked, this, [this]() {
+            closeMeasurementEditor();
+            viewport()->setFocus();
+        });
+    }
+
+    m_editingMeasurementVertex = vertex;
+    m_editingMeasurementSide = -1;
+    m_measureDragging = false;
+    m_measureDragTarget = MeasurementDragTarget::None;
+    const QPointF point = measurementVertex(vertex);
+    m_measurementEditorTitle->setText(QStringLiteral("Vertex %1").arg(QChar('A' + vertex)));
+    m_measurementEditor->setAccessibleName(m_measurementEditorTitle->text());
+    m_measurementEditorForm->setRowVisible(m_measurementXSpin, true);
+    m_measurementEditorForm->setRowVisible(m_measurementYDownSpin, true);
+    m_measurementEditorForm->setRowVisible(m_measurementLengthSpin, false);
+    m_measurementXSpin->setValue(point.x());
+    m_measurementYDownSpin->setValue(point.y());
+    positionMeasurementEditor(viewportPos);
+    m_measurementXSpin->setFocus();
+    m_measurementXSpin->selectAll();
+}
+
+void ImageViewer::openMeasurementSideEditor(int side, const QPoint &viewportPos)
+{
+    if (!canEditMeasurementSide(side))
+        return;
+    const int next = (side + 1) % 3;
+    const int fixed = m_measurementLocks[side] ? side : next;
+    openMeasurementVertexEditor(fixed == side ? next : side, viewportPos);
+    m_editingMeasurementVertex = -1;
+    m_editingMeasurementSide = side;
+    m_measurementEditorTitle->setText(QStringLiteral("%1%2 (%3 fixed)")
+        .arg(QChar('A' + side)).arg(QChar('A' + next)).arg(QChar('A' + fixed)));
+    m_measurementEditor->setAccessibleName(m_measurementEditorTitle->text());
+    m_measurementEditorForm->setRowVisible(m_measurementXSpin, false);
+    m_measurementEditorForm->setRowVisible(m_measurementYDownSpin, false);
+    m_measurementEditorForm->setRowVisible(m_measurementLengthSpin, true);
+    m_measurementLengthSpin->setValue(measurementSideLength(side));
+    positionMeasurementEditor(viewportPos);
+    m_measurementLengthSpin->setFocus();
+    m_measurementLengthSpin->selectAll();
+}
+
+void ImageViewer::positionMeasurementEditor(const QPoint &viewportPos)
+{
+    m_measurementEditor->adjustSize();
+    m_measurementEditor->move(
+        qBound(4, viewportPos.x() + 10,
+               qMax(4, viewport()->width() - m_measurementEditor->width() - 4)),
+        qBound(4, viewportPos.y() + 10,
+               qMax(4, viewport()->height() - m_measurementEditor->height() - 4)));
+    m_measurementEditor->show();
+    m_measurementEditor->raise();
+}
+
+void ImageViewer::closeMeasurementEditor()
+{
+    m_editingMeasurementVertex = -1;
+    m_editingMeasurementSide = -1;
+    if (m_measurementEditor)
+        m_measurementEditor->hide();
+}
+
+void ImageViewer::commitMeasurementEditor()
+{
+    if (m_editingMeasurementSide >= 0) {
+        if (!m_measurementLengthSpin->hasAcceptableInput())
+            return;
+        m_measurementLengthSpin->interpretText();
+        if (setMeasurementSideLength(m_editingMeasurementSide, m_measurementLengthSpin->value())) {
+            closeMeasurementEditor();
+            viewport()->setFocus();
+        }
+        return;
+    }
+    const int vertex = m_editingMeasurementVertex;
+    if (vertex < 0)
+        return;
+    if (!m_measurementXSpin->hasAcceptableInput()
+        || !m_measurementYDownSpin->hasAcceptableInput()) {
+        return;
+    }
+    m_measurementXSpin->interpretText();
+    m_measurementYDownSpin->interpretText();
+    const QPointF position(m_measurementXSpin->value(), m_measurementYDownSpin->value());
+    closeMeasurementEditor();
+    setMeasurementVertex(vertex, position);
+    viewport()->setFocus();
+}
+
 void ImageViewer::setPointEditEnabled(bool enabled)
 {
     if (enabled && m_maskEditEnabled)
@@ -560,6 +1187,8 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
         return;
     if (handleTemporaryZoomKeyEvent(event))
         return;
+    if (handleMeasureDistanceKeyEvent(event))
+        return;
     if (handleZoomShortcutKeyEvent(event))
         return;
     if (handleMaskBrushSizeKeyEvent(event))
@@ -582,13 +1211,41 @@ void ImageViewer::keyReleaseEvent(QKeyEvent *event)
 
 void ImageViewer::resizeEvent(QResizeEvent *event)
 {
+    closeMeasurementEditor();
     QGraphicsView::resizeEvent(event);
     if (m_activePanelIndicatorOverlay) {
         m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
         m_activePanelIndicatorOverlay->raise();
     }
+    updateEmptyStateOverlay();
     if (m_autoFitImage)
         fitImageToView();
+}
+
+void ImageViewer::hideEvent(QHideEvent *event)
+{
+    closeMeasurementEditor();
+    clearTemporaryInteractionState();
+    QGraphicsView::hideEvent(event);
+}
+
+void ImageViewer::updateEmptyStateOverlay()
+{
+    if (!m_emptyStateOverlay || !m_layerManager)
+        return;
+
+    const bool empty = m_layerManager->layerCount() == 0;
+    m_emptyStateOverlay->setVisible(empty);
+    if (!empty)
+        return;
+
+    m_emptyStateOverlay->adjustSize();
+    const int x = qMax(0,
+        (viewport()->width() - m_emptyStateOverlay->width()) / 2);
+    const int y = qMax(0,
+        (viewport()->height() - m_emptyStateOverlay->height()) / 2);
+    m_emptyStateOverlay->move(x, y);
+    m_emptyStateOverlay->raise();
 }
 
 void ImageViewer::leaveEvent(QEvent *event)
@@ -604,9 +1261,81 @@ void ImageViewer::drawForeground(QPainter *painter, const QRectF &rect)
 {
     QGraphicsView::drawForeground(painter, rect);
 
+    if (m_measurementVisible) {
+        const QPolygonF polygon = measurementScreenPolygon();
+        painter->save();
+        painter->resetTransform();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setFont(viewport()->font());
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(255, 255, 255, 14));
+        painter->drawPolygon(polygon);
+        drawMeasurementCircumcircle(painter);
+
+        const auto drawOutlinedPath = [painter](const QPainterPath &path) {
+            QPen shadowPen(QColor(0, 0, 0, 190), 5.0);
+            shadowPen.setCapStyle(Qt::RoundCap);
+            painter->setPen(shadowPen);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawPath(path);
+            QPen linePen(QColor(255, 255, 255, 245), 2.0);
+            linePen.setCapStyle(Qt::RoundCap);
+            painter->setPen(linePen);
+            painter->drawPath(path);
+        };
+
+        QPainterPath outline;
+        outline.addPolygon(polygon);
+        outline.closeSubpath();
+        drawOutlinedPath(outline);
+
+        for (int vertex = 0; vertex < 3; ++vertex) {
+            if (!std::isfinite(measurementAngleDegrees(vertex)))
+                continue;
+            const QLineF first(polygon[vertex], polygon[(vertex + 1) % 3]);
+            const QLineF second(polygon[vertex], polygon[(vertex + 2) % 3]);
+            const double radius = qMin(30.0, qMin(first.length(), second.length()) * 0.2);
+            double span = first.angleTo(second);
+            if (span > 180)
+                span -= 360;
+            const QRectF arcRect(polygon[vertex] - QPointF(radius, radius),
+                                 QSizeF(radius * 2, radius * 2));
+            QPainterPath arc;
+            arc.arcMoveTo(arcRect, first.angle());
+            arc.arcTo(arcRect, first.angle(), span);
+            drawOutlinedPath(arc);
+        }
+
+        painter->setPen(QPen(QColor(0, 0, 0, 210), 2.0));
+        painter->setBrush(QColor(255, 255, 255, 245));
+        constexpr double endpointRadius = 4.5;
+        for (const QPointF &point : polygon)
+            painter->drawEllipse(point, endpointRadius, endpointRadius);
+
+        const QFontMetrics metrics(painter->font());
+        for (const MeasurementLabel &label : measurementLabels()) {
+            painter->setPen(QPen(QColor(0, 0, 0, 180), 1.0));
+            painter->setBrush(QColor(255, 255, 255, 235));
+            painter->drawRoundedRect(label.rect, 3.0, 3.0);
+            painter->setPen(QColor(25, 25, 25));
+            QRectF textRect = label.rect;
+            if (label.vertex >= 0)
+                textRect.adjust(0, 0, -24, 0);
+            QStringList lines = label.text.split('\n');
+            for (QString &line : lines)
+                line = metrics.elidedText(line, Qt::ElideMiddle,
+                    qMax(1, static_cast<int>(textRect.width()) - 12));
+            painter->drawText(textRect, Qt::AlignCenter, lines.join('\n'));
+            if (label.vertex >= 0)
+                drawMeasurementLock(painter, measurementLockRect(label), measurementVertexLocked(label.vertex));
+        }
+        painter->restore();
+    }
+
     if (!m_maskBrushPreviewVisible
         || !m_maskEditEnabled
         || !m_editingMaskLayer
+        || m_measureDistanceEnabled
         || panInteractionActive()
         || zoomInteractionActive()) {
         return;
@@ -668,11 +1397,14 @@ void ImageViewer::updateDragMode()
     const bool shouldPan = panInteractionActive();
     setDragMode(shouldPan ? QGraphicsView::ScrollHandDrag : QGraphicsView::NoDrag);
     setPointItemsInteractionBlocked(
-        shouldPan || zoomInteractionActive() || m_maskEditEnabled);
+        shouldPan || zoomInteractionActive()
+        || m_measureDistanceEnabled || m_maskEditEnabled);
     if (shouldPan) {
         viewport()->setCursor(Qt::OpenHandCursor);
     } else if (zoomInteractionActive()) {
         viewport()->setCursor(zoomCursor(m_zoomCursorDirection));
+    } else if (m_measureDistanceEnabled) {
+        viewport()->setCursor(Qt::CrossCursor);
     } else if (m_maskEditEnabled) {
         viewport()->setCursor(Qt::CrossCursor);
     } else if (m_pointEditEnabled) {
@@ -729,6 +1461,12 @@ void ImageViewer::setSpacePanActive(bool active)
     if (m_spacePanActive == active)
         return;
 
+    if (active)
+        closeMeasurementEditor();
+    if (active && m_measureDragging) {
+        m_measureDragging = false;
+        m_measureDragTarget = MeasurementDragTarget::None;
+    }
     m_spacePanActive = active;
     updateDragMode();
 }
@@ -752,6 +1490,12 @@ void ImageViewer::setTemporaryZoomActive(bool active)
     if (m_temporaryZoomActive == active)
         return;
 
+    if (active)
+        closeMeasurementEditor();
+    if (active && m_measureDragging) {
+        m_measureDragging = false;
+        m_measureDragTarget = MeasurementDragTarget::None;
+    }
     m_temporaryZoomActive = active;
     if (!zoomInteractionActive())
         m_zoomDragging = false;
@@ -774,8 +1518,129 @@ void ImageViewer::setSplitTemporaryZoomActive(bool active)
 
 void ImageViewer::clearTemporaryInteractionState()
 {
+    closeMeasurementEditor();
+    m_measureDragging = false;
+    m_measureDragTarget = MeasurementDragTarget::None;
     setSpacePanActive(false);
     setTemporaryZoomActive(false);
+}
+
+void ImageViewer::clearMeasurement()
+{
+    closeMeasurementEditor();
+    m_measureDragging = false;
+    m_measurementVisible = false;
+    m_measurementLocks.fill(false);
+    m_measureDragTarget = MeasurementDragTarget::None;
+    updateMeasurementCursor(m_lastMousePos);
+    viewport()->update();
+    emit measurementChanged();
+}
+
+void ImageViewer::initializeMeasurement(const QPoint &viewportPos)
+{
+    const double armSize = qBound(16.0,
+        qMin(viewport()->width(), viewport()->height()) * 0.32, 180.0);
+    const QPointF start = QPointF(viewportPos) + QPointF(-armSize / 3, armSize / 3);
+    const QTransform inverse = viewportTransform().inverted();
+    m_measurementVertices = {inverse.map(start),
+                            inverse.map(start + QPointF(armSize, 0)),
+                            inverse.map(start + QPointF(0, -armSize))};
+    m_measurementLocks.fill(false);
+    m_measurementVisible = true;
+    viewport()->update();
+    emit measurementChanged();
+}
+
+void ImageViewer::moveMeasurementHandle(const QPoint &viewportPos)
+{
+    const QPointF scenePos = mapToScene(viewportPos);
+    const QPointF delta = scenePos - m_measureDragLastScenePos;
+    m_measureDragLastScenePos = scenePos;
+    if (m_measureDragTarget == MeasurementDragTarget::Triangle) {
+        translateMeasurement(delta);
+    } else if (m_measureDragTarget >= MeasurementDragTarget::VertexA
+               && m_measureDragTarget <= MeasurementDragTarget::VertexC) {
+        const int vertex = static_cast<int>(m_measureDragTarget);
+        if (measurementVertexLocked(vertex))
+            return;
+        m_measurementVertices[vertex] += delta;
+        viewport()->update();
+        emit measurementChanged();
+    }
+}
+
+ImageViewer::MeasurementDragTarget ImageViewer::measurementEndpointAt(
+    const QPoint &viewportPos, bool includeLocked) const
+{
+    if (!m_measurementVisible)
+        return MeasurementDragTarget::None;
+
+    constexpr double HitRadius = 10.0;
+    const QPointF cursorPos(viewportPos);
+    MeasurementDragTarget closest = MeasurementDragTarget::None;
+    double closestDistance = HitRadius;
+    const auto consider = [&](const QPointF &point, MeasurementDragTarget target) {
+        if (!includeLocked && measurementVertexLocked(static_cast<int>(target)))
+            return;
+        const double distance = QLineF(cursorPos, viewportTransform().map(point)).length();
+        if (distance <= HitRadius
+            && (closest == MeasurementDragTarget::None || distance < closestDistance)) {
+            closestDistance = distance;
+            closest = target;
+        }
+    };
+    consider(m_measurementVertices[1], MeasurementDragTarget::VertexB);
+    consider(m_measurementVertices[2], MeasurementDragTarget::VertexC);
+    consider(m_measurementVertices[0], MeasurementDragTarget::VertexA);
+    return closest;
+}
+
+void ImageViewer::updateMeasurementCursor(const QPoint &viewportPos)
+{
+    if (!m_measureDistanceEnabled
+        || panInteractionActive()
+        || zoomInteractionActive()) {
+        return;
+    }
+
+    Qt::CursorShape cursor = Qt::CrossCursor;
+    if (m_measureDragging) {
+        cursor = m_measureDragTarget == MeasurementDragTarget::Triangle
+            ? Qt::ClosedHandCursor : Qt::SizeAllCursor;
+    } else if (measurementLockAt(viewportPos) >= 0) {
+        cursor = Qt::PointingHandCursor;
+    } else if (measurementEndpointAt(viewportPos, true) != MeasurementDragTarget::None) {
+        cursor = measurementVertexLocked(static_cast<int>(measurementEndpointAt(viewportPos, true)))
+            ? Qt::ForbiddenCursor : Qt::SizeAllCursor;
+    } else if (m_measurementVisible) {
+        bool onLabel = false;
+        for (const MeasurementLabel &label : measurementLabels()) {
+            if (label.rect.contains(viewportPos)) {
+                const bool editable = (label.vertex >= 0 && !measurementVertexLocked(label.vertex))
+                    || (label.side >= 0 && canEditMeasurementSide(label.side));
+                cursor = editable ? Qt::IBeamCursor : Qt::ArrowCursor;
+                onLabel = true;
+                break;
+            }
+        }
+        if (!onLabel && measurementScreenPolygon().containsPoint(viewportPos, Qt::OddEvenFill))
+            cursor = measurementTranslationAllowed() ? Qt::OpenHandCursor : Qt::ForbiddenCursor;
+    }
+    viewport()->setCursor(cursor);
+}
+
+bool ImageViewer::handleMeasureDistanceKeyEvent(QKeyEvent *event)
+{
+    if (!m_measureDistanceEnabled
+        || event->key() != Qt::Key_Escape
+        || event->isAutoRepeat()) {
+        return false;
+    }
+
+    clearMeasurement();
+    event->accept();
+    return true;
 }
 
 bool ImageViewer::handleZoomShortcutKeyEvent(QEvent *event)
@@ -883,6 +1748,35 @@ void ImageViewer::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    if (m_measureDistanceEnabled
+        && !panInteractionActive()
+        && !zoomInteractionActive()
+        && event->button() == Qt::LeftButton) {
+        closeMeasurementEditor();
+        if (!m_measurementVisible)
+            initializeMeasurement(event->pos());
+        const int lock = measurementLockAt(event->pos());
+        if (lock >= 0) {
+            setMeasurementVertexLocked(lock, !measurementVertexLocked(lock));
+            event->accept();
+            return;
+        }
+        m_measureDragTarget = measurementEndpointAt(event->pos());
+        if (m_measureDragTarget == MeasurementDragTarget::None) {
+            bool onLabel = false;
+            for (const MeasurementLabel &label : measurementLabels())
+                onLabel |= label.rect.contains(event->pos());
+            if (!onLabel && measurementTranslationAllowed()
+                && measurementScreenPolygon().containsPoint(event->pos(), Qt::OddEvenFill))
+                m_measureDragTarget = MeasurementDragTarget::Triangle;
+        }
+        m_measureDragging = m_measureDragTarget != MeasurementDragTarget::None;
+        m_measureDragLastScenePos = mapToScene(event->pos());
+        updateMeasurementCursor(event->pos());
+        event->accept();
+        return;
+    }
+
     if (m_maskEditEnabled
         && !panInteractionActive()
         && !zoomInteractionActive()
@@ -940,6 +1834,34 @@ void ImageViewer::mouseDoubleClickEvent(QMouseEvent *event)
 {
     emit activatedByClick();
     m_lastMousePos = event->pos();
+
+    if (m_measureDistanceEnabled
+        && !panInteractionActive()
+        && !zoomInteractionActive()
+        && event->button() == Qt::LeftButton) {
+        if (measurementLockAt(event->pos()) >= 0) {
+            event->accept();
+            return;
+        }
+        const int side = measurementLabelSideAt(event->pos());
+        if (side >= 0) {
+            openMeasurementSideEditor(side, event->pos());
+            event->accept();
+            return;
+        }
+        int vertex = measurementLabelVertexAt(event->pos());
+        if (vertex < 0) {
+            const MeasurementDragTarget handle = measurementEndpointAt(event->pos());
+            if (handle >= MeasurementDragTarget::VertexA
+                && handle <= MeasurementDragTarget::VertexC) {
+                vertex = static_cast<int>(handle);
+            }
+        }
+        if (vertex >= 0)
+            openMeasurementVertexEditor(vertex, event->pos());
+        event->accept();
+        return;
+    }
 
     if (m_maskEditEnabled
         && m_editingMaskLayer
@@ -1019,6 +1941,7 @@ void ImageViewer::syncTransformToSiblings()
 
 void ImageViewer::emitZoomPercentChanged()
 {
+    closeMeasurementEditor();
     emit zoomPercentChanged(zoomPercent());
 }
 
@@ -1176,6 +2099,21 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
         return;
     }
 
+    if (m_measureDragging
+        && event->buttons().testFlag(Qt::LeftButton)
+        && !panInteractionActive()
+        && !zoomInteractionActive()) {
+        moveMeasurementHandle(event->pos());
+        event->accept();
+        return;
+    }
+
+    if (m_measureDistanceEnabled
+        && !panInteractionActive()
+        && !zoomInteractionActive()) {
+        updateMeasurementCursor(event->pos());
+    }
+
     PixelInfo info;
     info.row = -1;
     info.col = -1;
@@ -1214,6 +2152,17 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event)
 
 void ImageViewer::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_measureDragging && event->button() == Qt::LeftButton) {
+        if (!panInteractionActive() && !zoomInteractionActive())
+            moveMeasurementHandle(event->pos());
+        m_measureDragging = false;
+        m_measureDragTarget = MeasurementDragTarget::None;
+        updateMeasurementCursor(event->pos());
+        viewport()->update();
+        event->accept();
+        return;
+    }
+
     if (m_maskPainting && event->button() == Qt::LeftButton) {
         if (!panInteractionActive() && !zoomInteractionActive())
             paintMaskStrokeToViewportPos(event->pos(), m_maskPaintingErase);
@@ -1323,14 +2272,71 @@ void ImageViewer::setZoomCursorDirection(ZoomCursorDirection direction)
 
 bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
 {
+    auto *widget = qobject_cast<QWidget*>(obj);
+    if (m_measurementEditor && m_measurementEditor->isVisible() && widget
+        && (widget == m_measurementEditor || m_measurementEditor->isAncestorOf(widget))) {
+        if (event->type() == QEvent::MouseButtonPress)
+            emit activatedByClick();
+        if (event->type() == QEvent::KeyPress) {
+            const int key = static_cast<QKeyEvent*>(event)->key();
+            if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                commitMeasurementEditor();
+                return true;
+            }
+            if (key == Qt::Key_Escape) {
+                closeMeasurementEditor();
+                viewport()->setFocus();
+                return true;
+            }
+        }
+    }
     if (obj == viewport()) {
+        if (event->type() == QEvent::ToolTip && m_measurementVisible
+            && !panInteractionActive() && !zoomInteractionActive()) {
+            auto *help = static_cast<QHelpEvent*>(event);
+            QString text;
+            const int lock = measurementLockAt(help->pos());
+            int vertex = measurementLabelVertexAt(help->pos());
+            if (vertex < 0)
+                vertex = static_cast<int>(measurementEndpointAt(help->pos(), true));
+            const int side = measurementLabelSideAt(help->pos());
+            if (lock >= 0) {
+                text = QStringLiteral("%1 vertex %2")
+                    .arg(measurementVertexLocked(lock) ? "Unlock" : "Lock").arg(QChar('A' + lock));
+            } else if (vertex >= 0) {
+                text = measurementVertexLocked(vertex)
+                    ? QStringLiteral("Vertex %1 is locked. Unlock it to move or edit it.").arg(QChar('A' + vertex))
+                    : QStringLiteral("Drag to move this vertex. Double-click to edit x and y_down.");
+            } else if (side >= 0) {
+                text = canEditMeasurementSide(side)
+                    ? QStringLiteral("Double-click to edit this length. The locked endpoint stays fixed.")
+                    : measurementSideLength(side) <= 1e-9
+                        ? QStringLiteral("Separate the coincident vertices to define a direction.")
+                        : QStringLiteral("Lock exactly one endpoint to edit this length.");
+            } else {
+                for (const MeasurementLabel &label : measurementLabels()) {
+                    if (label.rect.contains(help->pos()))
+                        text = label.text;
+                }
+                if (text.isEmpty() && measurementScreenPolygon().containsPoint(help->pos(), Qt::OddEvenFill))
+                    text = measurementTranslationAllowed()
+                        ? "Drag inside the triangle to move it."
+                        : "Unlock all three vertices to move the whole triangle.";
+            }
+            if (text.isEmpty())
+                QToolTip::hideText();
+            else
+                QToolTip::showText(help->globalPos(), text, viewport());
+            return true;
+        }
         if ((event->type() == QEvent::Resize
              || event->type() == QEvent::Move)
             && m_activePanelIndicatorOverlay) {
             m_activePanelIndicatorOverlay->setGeometry(viewport()->geometry());
             m_activePanelIndicatorOverlay->raise();
         }
-        if (event->type() == QEvent::Enter) {
+        if (event->type() == QEvent::Enter
+            && (!m_measurementEditor || !m_measurementEditor->isVisible())) {
             setFocus(Qt::MouseFocusReason);
             viewport()->setFocus(Qt::MouseFocusReason);
         }
@@ -1338,6 +2344,11 @@ bool ImageViewer::eventFilter(QObject *obj, QEvent *event)
             return true;
         if (handleTemporaryZoomKeyEvent(event))
             return true;
+        if ((event->type() == QEvent::KeyPress)
+            && handleMeasureDistanceKeyEvent(
+                static_cast<QKeyEvent*>(event))) {
+            return true;
+        }
         if (handleZoomShortcutKeyEvent(event))
             return true;
         if (event->type() == QEvent::DragEnter) {
@@ -1405,14 +2416,14 @@ bool ImageViewer::syncZoomEnabled()
 
 void ImageViewer::scrollContentsBy(int dx, int dy)
 {
-    if (m_syncingScroll) {
-        QGraphicsView::scrollContentsBy(dx, dy);
-        return;
-    }
-
+    closeMeasurementEditor();
     QGraphicsView::scrollContentsBy(dx, dy);
 
-    if (!ms_syncEnabled)
+    // Viewport-positioned labels cannot reuse the pixels copied by scrolling.
+    if (m_measurementVisible)
+        viewport()->update();
+
+    if (m_syncingScroll || !ms_syncEnabled)
         return;
 
     syncToSiblings(dx, dy);
