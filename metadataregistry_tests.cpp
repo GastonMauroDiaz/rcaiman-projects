@@ -902,6 +902,13 @@ int main(int argc, char *argv[])
     if (!quotedProject.isValid()) {
         return 61;
     }
+    QFile bundledReadme(":/templates/README.md");
+    QFile createdReadme(QDir(quotedProjectRoot).filePath("README.md"));
+    if (!bundledReadme.open(QIODevice::ReadOnly)
+        || !createdReadme.open(QIODevice::ReadOnly)
+        || bundledReadme.readAll() != createdReadme.readAll()) {
+        return 134;
+    }
     const Project reopenedQuotedProject =
         Project::open(quotedProjectRoot, &error);
     if (!reopenedQuotedProject.isValid()

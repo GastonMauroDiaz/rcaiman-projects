@@ -105,6 +105,7 @@ qt_add_executable(rcaiman_projects
     shortcuttext.h shortcuttext.cpp
     thirdpartylicensesdialog.h thirdpartylicensesdialog.cpp
     licenses.qrc
+    templates.qrc
     resources.qrc
 )
 
@@ -124,7 +125,6 @@ target_include_directories(rcaiman_projects
 )
 
 target_compile_definitions(rcaiman_projects PRIVATE
-    TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
     EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/examples"
 )
 
@@ -180,10 +180,12 @@ if(WIN32)
         libLerc.dll
         liblzma-5.dll
         libwebp-7.dll
+        libsharpyuv-0.dll
         zlib1.dll
         libzstd.dll
         libgomp-1.dll
         liblcms2-2.dll
+        libwinpthread-1.dll
     )
     set(MSYS2_RUNTIME_DLLS)
     foreach(DLL_NAME IN LISTS MSYS2_RUNTIME_DLL_NAMES)
@@ -257,6 +259,7 @@ if(BUILD_TESTING)
         rawreader.h rawreader.cpp
         tiffreader.h tiffreader.cpp
         tiffwriter.h tiffwriter.cpp
+        templates.qrc
     )
     target_link_libraries(metadataregistry_tests PRIVATE
         Qt::Core
@@ -264,9 +267,6 @@ if(BUILD_TESTING)
         TIFF
         LibRaw
         yaml-cpp
-    )
-    target_compile_definitions(metadataregistry_tests PRIVATE
-        TEMPLATES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates"
     )
     add_custom_command(TARGET metadataregistry_tests POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -355,7 +355,7 @@ endif()
 install(DIRECTORY assets/examples
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES THIRD_PARTY_NOTICES.md
+install(FILES THIRD_PARTY_NOTICES.md COPYING
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(DIRECTORY assets/licenses
@@ -365,6 +365,32 @@ if(WIN32)
     install(FILES ${MSYS2_RUNTIME_DLLS}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
+endif()
+
+# Some Qt installations have an empty unversioned tool alias. Use the real
+# versioned executable from the same kit without changing the Qt installation.
+if(WIN32 AND TARGET Qt6::windeployqt)
+    get_target_property(DEPLOY_TOOL_CONFIGS Qt6::windeployqt IMPORTED_CONFIGURATIONS)
+    foreach(TOOL_CONFIG IN LISTS DEPLOY_TOOL_CONFIGS)
+        get_target_property(DEPLOY_TOOL Qt6::windeployqt IMPORTED_LOCATION_${TOOL_CONFIG})
+        if(EXISTS "${DEPLOY_TOOL}")
+            file(SIZE "${DEPLOY_TOOL}" DEPLOY_TOOL_SIZE)
+            if(DEPLOY_TOOL_SIZE EQUAL 0)
+                get_filename_component(DEPLOY_TOOL_DIRECTORY "${DEPLOY_TOOL}" DIRECTORY)
+                set(VERSIONED_DEPLOY_TOOL "${DEPLOY_TOOL_DIRECTORY}/windeployqt6.exe")
+                if(NOT EXISTS "${VERSIONED_DEPLOY_TOOL}")
+                    message(FATAL_ERROR "Repair the Qt deployment tools: ${DEPLOY_TOOL} is empty")
+                endif()
+                file(SIZE "${VERSIONED_DEPLOY_TOOL}" VERSIONED_DEPLOY_TOOL_SIZE)
+                if(VERSIONED_DEPLOY_TOOL_SIZE EQUAL 0)
+                    message(FATAL_ERROR "Repair the Qt deployment tools: both executable aliases are empty")
+                endif()
+                set_property(TARGET Qt6::windeployqt PROPERTY
+                    IMPORTED_LOCATION_${TOOL_CONFIG} "${VERSIONED_DEPLOY_TOOL}")
+                message(STATUS "Using Qt deployment tool: ${VERSIONED_DEPLOY_TOOL}")
+            endif()
+        endif()
+    endforeach()
 endif()
 
 qt_generate_deploy_app_script(

@@ -1690,11 +1690,14 @@ bool Project::createDirectoryStructure(const QString &rootPath, QString *errorMe
         }
     }
 
-    // Copy README.md template if available
-    const QString readmeSrc = QStringLiteral(TEMPLATES_DIR) + "/README.md";
+    // The template is bundled so installed applications do not need the source tree.
+    const QString readmeSrc = QStringLiteral(":/templates/README.md");
     const QString readmeDst = root.filePath("README.md");
     if (QFile::exists(readmeSrc) && !QFile::exists(readmeDst)) {
-        QFile::copy(readmeSrc, readmeDst);
+        if (QFile::copy(readmeSrc, readmeDst)) {
+            QFile::setPermissions(readmeDst, QFile::permissions(readmeDst)
+                                  | QFile::WriteOwner | QFile::WriteUser);
+        }
     }
 
     return true;
